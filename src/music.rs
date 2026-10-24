@@ -6,7 +6,7 @@ use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use windows::core::HSTRING;
+use windows::core::{w, HSTRING};
 use windows::Data::Json::{JsonArray, JsonObject, JsonValueType};
 use windows::Foundation::Uri;
 use windows::Media::Control::*;
@@ -14,7 +14,7 @@ use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 use windows::Web::Http::HttpClient;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
+use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow, PostMessageW, WM_APP};
 
 /// Posted when the snapshot changed (new track, play/pause, lyrics arrived).
 pub const WM_MUSIC: u32 = WM_APP + 5;
@@ -27,18 +27,18 @@ pub struct Track {
     pub artist: String,
     pub playing: bool,
     pub duration_ms: u64,
-    position_ms: u64,
-    start_ticks: i64,
-    rate: f64,
-    reported_position: i64,
-    updated_ticks: i64,
+    pub(crate) position_ms: u64,
+    pub(crate) start_ticks: i64,
+    pub(crate) rate: f64,
+    pub(crate) reported_position: i64,
+    pub(crate) updated_ticks: i64,
     pub can_toggle: bool,
     pub can_next: bool,
     pub can_previous: bool,
     pub can_seek: bool,
     pub command_error: Option<&'static str>,
     /// When `position_ms` was read; the UI extrapolates from here while playing.
-    at: Option<Instant>,
+    pub(crate) at: Option<Instant>,
     /// Encoded cover image (PNG/JPEG), decoded by the renderer; `art_key` changes with the track.
     pub art: Option<Arc<Vec<u8>>>,
     pub art_key: u64,
@@ -112,7 +112,7 @@ impl Music {
 fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target: isize) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); };
-    let Ok(manager) = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().and_then(|op| op.get()) else { return };
+    let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().and_then(|op| op.get()).ok();
     let mut key = String::new();
     let mut art_key = 0u64;
     let (assets, jobs) = channel();
@@ -124,14 +124,18 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
             Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => None,
         };
-        let session = match &cmd {
-            Some((_, track)) => manager.GetSessions().ok().and_then(|sessions|
+        let native_target = cmd.as_ref().is_some_and(|(_, t)| t.source_id == crate::itunes::SOURCE_ID);
+        let mut session = match &cmd {
+            Some(_) if native_target => None,
+            Some((_, track)) => manager.as_ref().and_then(|m| m.GetSessions().ok()).and_then(|sessions|
                 sessions.into_iter().find(|s| s.SourceAppUserModelId().is_ok_and(|id| id == track.source_id.as_str()))),
-            None => manager.GetCurrentSession().ok(),
+            None => manager.as_ref().and_then(|m| m.GetCurrentSession().ok()),
         };
         let had_command = cmd.is_some();
         let mut command_error = None;
-        if let (Some((cmd, track)), Some(s)) = (cmd, &session) {
+        if let Some((cmd, track)) = &cmd {
+            let accepted = if native_target { crate::itunes::command(cmd) }
+            else if let Some(s) = &session {
             let op = match cmd {
                 Cmd::PlayPause => {
                     let info = s.GetPlaybackInfo().ok();
@@ -144,12 +148,21 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
                 Cmd::Next => s.TrySkipNextAsync(),
                 Cmd::Previous => s.TrySkipPreviousAsync(),
                 Cmd::Seek(position) => {
-                    s.TryChangePlaybackPositionAsync(track.seek_ticks(position))
+                    s.TryChangePlaybackPositionAsync(track.seek_ticks(*position))
                 }
             };
-            if op.and_then(|o| o.get()) != Ok(true) { command_error = Some("Trình phát chưa nhận lệnh. Hãy thử lại."); }
+            op.and_then(|o| o.get()) == Ok(true)
+            } else { false };
+            if !accepted { command_error = Some("Trình phát chưa nhận lệnh. Hãy thử lại."); }
         }
-        let Some(session) = session else {
+        let standard = session.as_ref().and_then(read);
+        let native = if cmd.is_none() || native_target { crate::itunes::read() } else { None };
+        let native_foreground = unsafe { FindWindowW(None, w!("iTunes")).is_ok_and(|h| h == GetForegroundWindow()) };
+        let selected = if native_target || (cmd.is_none() && prefer_itunes(standard.as_ref(), native.as_ref(), native_foreground)) {
+            session = None;
+            native
+        } else { standard };
+        let Some(mut t) = selected else {
             let had = shared.lock().map(|mut g| g.take().is_some()).unwrap_or(false);
             if had {
                 key.clear();
@@ -157,7 +170,6 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
             }
             continue;
         };
-        let Some(mut t) = read(&session) else { continue };
         let new_key = format!("{}\u{1}{}\u{1}{}\u{1}{}", t.source_id, t.title, t.artist, t.duration_ms);
         let changed_track = new_key != key;
         let prev = shared.lock().ok().and_then(|g| g.clone());
@@ -181,14 +193,18 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
     }
 }
 
-fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, GlobalSystemMediaTransportControlsSession)>, target: isize) {
+fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<GlobalSystemMediaTransportControlsSession>)>, target: isize) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     while let Ok(mut job) = rx.recv() {
         for newer in rx.try_iter() { job = newer; }
         let (t, session) = job;
         if !shared.lock().is_ok_and(|g| g.as_ref().is_some_and(|c| c.art_key == t.art_key)) { continue; }
-        let art = session.TryGetMediaPropertiesAsync().and_then(|o| o.get())
-            .and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)).map(Arc::new);
+        let art = match session {
+            Some(s) => s.TryGetMediaPropertiesAsync().and_then(|o| o.get())
+                .and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)),
+            None if t.source_id == crate::itunes::SOURCE_ID => crate::itunes::artwork(&t.title, &t.artist),
+            None => None,
+        }.map(Arc::new);
         if let Ok(mut g) = shared.lock() {
             if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) { cur.art = art; }
         }
@@ -199,6 +215,16 @@ fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, GlobalSy
             if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) { cur.lyrics = Arc::new(lines); }
         }
         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
+    }
+}
+
+fn prefer_itunes(standard: Option<&Track>, native: Option<&Track>, foreground: bool) -> bool {
+    let Some(native) = native else { return false };
+    let Some(standard) = standard else { return true };
+    match (native.playing, standard.playing) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => foreground,
     }
 }
 
@@ -215,7 +241,7 @@ fn read(s: &GlobalSystemMediaTransportControlsSession) -> Option<Track> {
     let (duration_ms, position_ms) = tl.as_ref().and_then(|t| Some(timeline_position(start_ticks,
         t.EndTime().ok()?.Duration, reported_position, updated_ticks,
         now_ticks(), playing, rate))).unwrap_or((0, 0));
-    Some(Track {
+    let mut track = Track {
         source_id: s.SourceAppUserModelId().ok()?.to_string(),
         title: props.Title().ok()?.to_string(),
         artist: props.Artist().map(|a| a.to_string()).unwrap_or_default(),
@@ -233,7 +259,17 @@ fn read(s: &GlobalSystemMediaTransportControlsSession) -> Option<Track> {
         can_seek: duration_ms > 0 && controls.as_ref().is_some_and(|c| c.IsPlaybackPositionEnabled().unwrap_or(false)),
         at: Some(Instant::now()),
         ..Default::default()
-    })
+    };
+    if track.duration_ms == 0 && track.source_id.to_ascii_lowercase().contains("foobar2000") {
+        if let Some(timing) = crate::foobar::timeline() {
+            track.duration_ms = timing.duration_ms;
+            track.position_ms = timing.position_ms;
+            track.start_ticks = 0;
+            track.reported_position = (timing.position_ms as i64).saturating_mul(10_000);
+            track.updated_ticks = 0;
+        }
+    }
+    Some(track)
 }
 
 fn timeline_position(start: i64, end: i64, position: i64, updated: i64, now: i64, playing: bool, rate: f64) -> (u64, u64) {
@@ -354,6 +390,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn automatic_source_selection_prefers_playing_then_foreground() {
+        let mut standard = Track::default();
+        let mut native = Track::default();
+        assert!(!prefer_itunes(Some(&standard), None, true));
+        assert!(prefer_itunes(None, Some(&native), false));
+        native.playing = true;
+        assert!(prefer_itunes(Some(&standard), Some(&native), false));
+        standard.playing = true;
+        assert!(!prefer_itunes(Some(&standard), Some(&native), false));
+        assert!(prefer_itunes(Some(&standard), Some(&native), true));
+        native.playing = false;
+        assert!(!prefer_itunes(Some(&standard), Some(&native), true));
+    }
+
+    #[test]
+    #[ignore = "read-only live test of the complete source-selection worker"]
+    fn live_selected_source() {
+        let music = Music::start(HWND::default());
+        let end = Instant::now() + Duration::from_secs(5);
+        let mut result = None;
+        while Instant::now() < end {
+            if let Some(track) = music.snapshot() { result = Some(track); break; }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let track = result.expect("a supported player must be open with a current track");
+        eprintln!("selected={} title={} playing={} time={}/{}ms", track.source_id, track.title, track.playing, track.position_ms(), track.duration_ms);
+        assert!(!track.title.is_empty());
+        assert!(track.position_ms() <= track.duration_ms);
+    }
+
+    #[test]
     fn timeline_uses_relative_position_and_valid_update_time() {
         let now = 1_340_000_000_000_000i64;
         assert_eq!(timeline_position(100_000_000, 700_000_000, 250_000_000, now - 20_000_000, now, true, 1.0), (60_000, 17_000));
@@ -417,6 +484,20 @@ mod tests {
         for s in m.GetSessions().unwrap() {
             let t = read(&s);
             eprintln!("{:?} title={:?} playing={:?} dur={:?} pos={:?} seek={:?}", s.SourceAppUserModelId().ok(), t.as_ref().map(|t| &t.title), t.as_ref().map(|t| t.playing), t.as_ref().map(|t| t.duration_ms), t.as_ref().map(|t| t.position_ms()), t.as_ref().map(|t| t.can_seek));
+            if let Ok(tl) = s.GetTimelineProperties() {
+                eprintln!("timeline start={:?} end={:?} min={:?} max={:?} pos={:?} updated={:?}",
+                    tl.StartTime().map(|t| t.Duration), tl.EndTime().map(|t| t.Duration),
+                    tl.MinSeekTime().map(|t| t.Duration), tl.MaxSeekTime().map(|t| t.Duration),
+                    tl.Position().map(|t| t.Duration), tl.LastUpdatedTime().map(|t| t.UniversalTime));
+            }
+            if let Ok(info) = s.GetPlaybackInfo() {
+                eprintln!("status={:?} rate={:?}", info.PlaybackStatus(), info.PlaybackRate().and_then(|r| r.Value()));
+                if let Ok(c) = info.Controls() { eprintln!("controls play={:?} pause={:?} toggle={:?} prev={:?} next={:?} seek={:?}",
+                    c.IsPlayEnabled(), c.IsPauseEnabled(), c.IsPlayPauseToggleEnabled(), c.IsPreviousEnabled(), c.IsNextEnabled(), c.IsPlaybackPositionEnabled()); }
+            }
+            let art = s.TryGetMediaPropertiesAsync().and_then(|op| op.get()).and_then(|p| p.Thumbnail())
+                .and_then(|r| r.OpenReadAsync()).and_then(|op| op.get()).and_then(|s| s.Size());
+            eprintln!("thumbnail bytes={art:?}");
         }
     }
 

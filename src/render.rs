@@ -12,6 +12,7 @@ use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_numerics::{Matrix3x2, Vector2};
+use std::sync::Arc;
 
 use crate::connectivity::DeviceKind;
 use crate::music::Track;
@@ -137,6 +138,12 @@ pub fn device_icon(kind: DeviceKind) -> &'static str {
     }
 }
 
+struct CoverCache {
+    track_key: u64,
+    bytes: Option<Arc<Vec<u8>>>,
+    bitmap: Option<ID2D1Bitmap>,
+}
+
 pub struct Renderer {
     factory: ID2D1Factory,
     rt: ID2D1DCRenderTarget,
@@ -149,7 +156,7 @@ pub struct Renderer {
     h: i32,
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
     /// Decoded cover of the current track (keyed by Track::art_key).
-    cover: Option<(u64, Option<ID2D1Bitmap>)>,
+    cover: Option<CoverCache>,
 }
 
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
@@ -256,9 +263,11 @@ impl Renderer {
         Ok(self.fonts.as_ref().unwrap().1.clone())
     }
 
-    /// Decode the cover once per track (WIC → premultiplied BGRA → D2D bitmap).
+    /// Decode again when the track's asynchronous artwork arrives.
     fn cover(&mut self, t: &Track) -> Option<ID2D1Bitmap> {
-        if self.cover.as_ref().map(|c| c.0) != Some(t.art_key) {
+        let cached = self.cover.as_ref().is_some_and(|cache| cache.track_key == t.art_key
+            && match (&cache.bytes, &t.art) { (None, None) => true, (Some(a), Some(b)) => Arc::ptr_eq(a, b), _ => false });
+        if !cached {
             let decoded = t.art.as_ref().and_then(|bytes| unsafe {
                 let wic = self.wic.as_ref()?;
                 let stream = wic.CreateStream().ok()?;
@@ -269,9 +278,9 @@ impl Renderer {
                 conv.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
                 self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()
             });
-            self.cover = Some((t.art_key, decoded));
+            self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), bitmap: decoded });
         }
-        self.cover.as_ref().and_then(|c| c.1.clone())
+        self.cover.as_ref().and_then(|c| c.bitmap.clone())
     }
 
     /// iPhone-style notch: flat top on the screen edge, concave "ears" flaring into it,
@@ -466,7 +475,9 @@ impl Renderer {
                         let title = if t.title.is_empty() { "Đang phát" } else { &t.title };
                         text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
                         text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, grey(0.65, a))?;
-                        let lyric = t.lyric_now().unwrap_or_else(|| v.hovered.map_or(if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
+                        let lyric = t.lyric_now().unwrap_or_else(|| v.hovered.map_or(
+                            if t.duration_ms == 0 { "Trình phát chưa cung cấp thời gian" }
+                            else if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
                         text(t.command_error.unwrap_or(lyric), F_BODY, rect(tl, top + 40.0 * s, cr, top + 58.0 * s), lead,
                             if t.command_error.is_some() { color(1.0, 0.5, 0.4, a) } else { grey(0.95, a) })?;
                     }
@@ -524,11 +535,31 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "uses native Direct2D/WIC; run explicitly for delayed cover loading"]
+    fn cover_reloads_when_art_arrives_after_track() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let mut renderer = Renderer::new().unwrap();
+            renderer.ensure_surface(2, 2).unwrap();
+            let mut track = Track { art_key: 1, ..Default::default() };
+            assert!(renderer.cover(&track).is_none());
+            let mut bmp = Vec::from(&b"BM"[..]);
+            bmp.extend_from_slice(&58u32.to_le_bytes()); bmp.extend_from_slice(&[0; 4]);
+            bmp.extend_from_slice(&54u32.to_le_bytes()); bmp.extend_from_slice(&40u32.to_le_bytes());
+            bmp.extend_from_slice(&1i32.to_le_bytes()); bmp.extend_from_slice(&1i32.to_le_bytes());
+            bmp.extend_from_slice(&1u16.to_le_bytes()); bmp.extend_from_slice(&32u16.to_le_bytes());
+            bmp.extend_from_slice(&[0; 24]); bmp.extend_from_slice(&[0, 0, 255, 255]);
+            assert_eq!(bmp.len(), 58);
+            track.art = Some(std::sync::Arc::new(bmp));
+            assert!(renderer.cover(&track).is_some(), "late cover data must invalidate the cached empty image");
+            assert!(renderer.cover(&track).is_some());
+        }
+    }
+
+    #[test]
     fn seek_and_icon_hit_areas_follow_dpi_and_capabilities() {
-        let mut track = Track::default();
-        track.duration_ms = 120_000;
-        track.can_seek = true;
-        track.can_toggle = true;
+        let track = Track { duration_ms: 120_000, can_seek: true, can_toggle: true, ..Default::default() };
         for scale in [1.0, 1.5, 2.0] {
             let cx = 265.0 * scale;
             let (_, seek) = buttons(cx, scale)[3];
@@ -550,10 +581,9 @@ mod tests {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Media preview"), WS_POPUP,
                 0, 0, 530, 210, None, None, None, None).unwrap();
-            let mut track = Track::default();
-            track.title = "Bản nhạc đang phát".into(); track.artist = "YouTube / foobar2000".into();
-            track.duration_ms = 210_000; track.playing = true;
-            track.can_toggle = true; track.can_next = true; track.can_previous = true; track.can_seek = true;
+            let track = Track { title: "Bản nhạc đang phát".into(), artist: "YouTube / foobar2000".into(),
+                duration_ms: 210_000, playing: true, can_toggle: true, can_next: true,
+                can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "Thứ Bảy, 24 tháng 10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), phase: 0.0, hovered: Some(Button::PlayPause) };

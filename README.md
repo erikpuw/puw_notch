@@ -47,7 +47,10 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - Các nút ⏮ ⏯ ⏭ chỉ hiện icon, không có nền tròn; rê chuột đổi màu và hiện con trỏ tay. Nút trình phát không hỗ trợ sẽ mờ và không nhận bấm.
 - Bấm thanh tiến độ để tua khi trình phát cho phép. Thời gian tính theo điểm bắt đầu timeline, mốc cập nhật và tốc độ phát; không tự chạy đến cuối khi ứng dụng gửi mốc giờ rỗng.
 - Tải ảnh bìa/lời chạy riêng, không giữ luồng nhận lệnh phát/dừng/chuyển bài. Lệnh gửi đúng phiên media đang hiển thị; nếu trình phát từ chối sẽ có dòng báo trong bảng.
-- App không gửi vị trí bài (ví dụ foobar2000 mặc định) thì không có thanh tiến độ và lời không chạy theo được.
+- Ảnh bìa tải xong sẽ được nạp vào bộ vẽ ngay cả khi tên bài không đổi. Khi trình phát không gửi timeline, bảng ghi rõ "Trình phát chưa cung cấp thời gian" thay vì tự dựng thời gian.
+- foobar2000: bổ sung thời gian thật từ thanh trạng thái của giao diện mặc định khi Windows không gửi timeline; lệnh phát/dừng/chuyển bài vẫn dùng phiên Windows. Chỉ bật tua nếu trình phát công bố hỗ trợ.
+- iTunes: tự nhận qua COM khi ứng dụng đang mở, gồm tên bài, nghệ sĩ, thời gian, ảnh bìa và điều khiển phát/dừng/chuyển bài/tua; không tự khởi động iTunes khi ứng dụng đã đóng.
+- Tự ưu tiên nguồn đang phát; nếu iTunes và nguồn Windows cùng phát thì ưu tiên iTunes khi cửa sổ iTunes đang ở trước. Các trình phát khác tiếp tục nhận tự động qua Windows media.
 
 **Khác**: tray (Notch tối giản, Khởi động cùng Windows, Thoát), chạy một bản duy nhất, cài đặt ở `%APPDATA%\PuwNotch\settings.txt`.
 Chọn **Thoát** sẽ kết thúc tiến trình và gỡ biểu tượng tray.
@@ -76,6 +79,8 @@ rồi tắt "Hiện banner thông báo" cho từng app.
 | `src/connectivity.rs` | Luồng phụ mỗi 2 giây: radio Wi-Fi/Bluetooth/di động, chế độ máy bay (registry), mạng (NetworkInformation), thiết bị Bluetooth; so sánh trạng thái → sự kiện (có test). |
 | `src/status.rs` | Hook bàn phím cấp thấp (chỉ phím khóa + âm lượng), độ sáng qua WMI. |
 | `src/music.rs` | Luồng phụ đọc phiên media (GlobalSystemMediaTransportControls) mỗi 500 ms, lệnh ⏮⏯⏭, tải lời LRCLIB (WinRT HttpClient + JSON), tách LRC. |
+| `src/foobar.rs` | Đọc timeline thật từ status bar foobar2000 qua UI Automation, có giới hạn thời gian chờ và test parser. |
+| `src/itunes.rs` | Đọc/điều khiển iTunes qua COM, lấy ảnh bìa bằng file tạm và tự dọn file. |
 | `src/system.rs` | Giờ, pin (+ tiết kiệm pin) và sự kiện pin (có test), file cài đặt, khóa Run trong registry. |
 | `src/main.rs` | Cửa sổ, timer, chuột, tray, nối các phần. |
 

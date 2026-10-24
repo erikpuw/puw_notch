@@ -3,6 +3,8 @@
 mod audio;
 mod connectivity;
 mod music;
+mod foobar;
+mod itunes;
 mod notch;
 mod notify;
 mod render;
