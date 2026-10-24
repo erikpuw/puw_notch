@@ -27,7 +27,7 @@ pub fn battery() -> String {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("APPDATA")?).join("NusaRebuild").join("settings.txt"))
+    Some(PathBuf::from(std::env::var_os("APPDATA")?).join("PuwNotch").join("settings.txt"))
 }
 
 pub fn load_minimal() -> bool {
@@ -46,7 +46,7 @@ pub fn save_minimal(on: bool) {
 }
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const RUN_NAME: PCWSTR = w!("NusaRebuild");
+const RUN_NAME: PCWSTR = w!("PuwNotch");
 
 pub fn autostart_enabled() -> bool {
     let r = unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, RRF_RT_REG_SZ, None, None, None) };

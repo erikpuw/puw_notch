@@ -13,6 +13,8 @@ pub enum Mode {
     PeekMini,
     /// Full panel.
     Expanded,
+    /// Banner for a new Windows notification; ends by timer.
+    Alert,
 }
 
 /// (width, height, corner radius) the notch animates towards in each mode.
@@ -22,13 +24,18 @@ pub fn target(mode: Mode) -> [f32; 3] {
         Mode::Mini => [44.0, 4.0, 2.0],
         Mode::Peek => [166.0, 34.0, 12.0],
         Mode::PeekMini => [72.0, 8.0, 4.0],
-        Mode::Expanded => [420.0, 140.0, 28.0],
+        Mode::Expanded => [440.0, 200.0, 28.0],
+        Mode::Alert => [360.0, 64.0, 22.0],
     }
 }
 
 /// Window must fit the largest target plus the hover margin.
-pub const MAX_W: f32 = 440.0;
-pub const MAX_H: f32 = 160.0;
+pub const MAX_W: f32 = 460.0;
+pub const MAX_H: f32 = 220.0;
+/// How long a notification banner stays.
+pub const ALERT_MS: u32 = 5000;
+/// How long a status banner (Caps Lock, brightness) stays.
+pub const STATUS_MS: u32 = 1500;
 /// Invisible hover margin around the pill (not used in mini: only the line itself reacts).
 pub const HOVER_MARGIN: f32 = 4.0;
 /// Notch wider than this would cover the side strips the obstruction check samples.
@@ -99,6 +106,8 @@ impl Notch {
         self.mode = match self.mode {
             Mode::Collapsed => Mode::Peek,
             Mode::Mini => Mode::PeekMini,
+            // Banner stays as is; resting on it opens the panel.
+            Mode::Alert => Mode::Alert,
             _ => return false,
         };
         true
@@ -106,13 +115,33 @@ impl Notch {
 
     /// Dwell timer fired.
     pub fn on_dwell(&mut self, inside: bool) {
-        if matches!(self.mode, Mode::Peek | Mode::PeekMini) {
-            self.mode = if inside { Mode::Expanded } else { self.rest_mode() };
+        match self.mode {
+            Mode::Peek | Mode::PeekMini => self.mode = if inside { Mode::Expanded } else { self.rest_mode() },
+            Mode::Alert if inside => self.mode = Mode::Expanded,
+            _ => {}
         }
     }
 
     pub fn on_leave(&mut self) {
-        self.mode = self.rest_mode();
+        // A banner ends by its own timer, not by the mouse passing over it.
+        if self.mode != Mode::Alert {
+            self.mode = self.rest_mode();
+        }
+    }
+
+    /// New notification. Returns true if the banner is shown (not while the panel is open).
+    pub fn on_alert(&mut self) -> bool {
+        if self.mode == Mode::Expanded {
+            return false;
+        }
+        self.mode = Mode::Alert;
+        true
+    }
+
+    pub fn on_alert_end(&mut self) {
+        if self.mode == Mode::Alert {
+            self.mode = self.rest_mode();
+        }
     }
 
     pub fn set_minimal(&mut self, on: bool) {
@@ -207,6 +236,28 @@ mod tests {
         assert_eq!(n.mode, Mode::Expanded);
         n.on_leave();
         assert_eq!(n.mode, Mode::Mini);
+    }
+
+    #[test]
+    fn alert_banner_flow() {
+        let mut n = Notch::new(false);
+        n.report_busy(true);
+        assert!(n.on_alert());
+        assert_eq!(n.mode, Mode::Alert);
+        // passing over the banner does not end it
+        assert!(n.on_enter());
+        n.on_leave();
+        assert_eq!(n.mode, Mode::Alert);
+        n.on_alert_end();
+        assert_eq!(n.mode, Mode::Mini);
+        // resting on the banner opens the panel, and the panel is not replaced by a banner
+        n.on_alert();
+        n.on_enter();
+        n.on_dwell(true);
+        assert_eq!(n.mode, Mode::Expanded);
+        assert!(!n.on_alert());
+        n.on_alert_end();
+        assert_eq!(n.mode, Mode::Expanded);
     }
 
     #[test]

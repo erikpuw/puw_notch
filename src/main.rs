@@ -1,8 +1,12 @@
 #![windows_subsystem = "windows"]
 
+mod audio;
+mod bluetooth;
 mod notch;
+mod notify;
 mod render;
 mod screen;
+mod status;
 mod system;
 
 use std::cell::RefCell;
@@ -11,6 +15,7 @@ use std::time::Instant;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::*;
@@ -18,8 +23,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use notch::{Mode, Notch, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W};
-use render::{Renderer, View};
+use bluetooth::{Bt, WM_BT};
+use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_MS};
+use status::{WM_LOCKKEY, WM_VOLKEY};
+use notify::Toast;
+use render::{Button, Renderer, View};
 
 const WM_TRAY: u32 = WM_APP + 1;
 /// Lives in the commctrl headers; not worth a crate feature for one constant.
@@ -27,7 +35,10 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const T_ANIM: usize = 1;
 const T_CHECK: usize = 2;
 const T_DWELL: usize = 3;
+const T_ALERT: usize = 4;
+const T_VOLKEY: usize = 5;
 const CHECK_MS: u32 = 500;
+const VOLUME_STEP: f32 = 0.05;
 const MENU_MINIMAL: usize = 10;
 const MENU_AUTOSTART: usize = 11;
 const MENU_QUIT: usize = 12;
@@ -48,6 +59,17 @@ struct App {
     time: String,
     date: String,
     battery: String,
+    notifications: Option<notify::Reader>,
+    /// What the Alert banner shows right now.
+    banner: Option<Toast>,
+    /// Newest notification, the card in the panel.
+    toast: Option<Toast>,
+    brightness: Option<status::Brightness>,
+    last_brightness: Option<u8>,
+    audio: Option<audio::Audio>,
+    volume: Option<(f32, bool)>,
+    mic_muted: Option<bool>,
+    bt: Bt,
 }
 
 thread_local! {
@@ -74,7 +96,18 @@ impl App {
 
     fn redraw(&mut self) {
         let (x, y, w, h) = self.win;
-        let view = View { mode: self.notch.mode, size: self.notch.size(), time: &self.time, date: &self.date, battery: &self.battery };
+        let view = View {
+            mode: self.notch.mode,
+            size: self.notch.size(),
+            time: &self.time,
+            date: &self.date,
+            battery: &self.battery,
+            banner: self.banner.as_ref(),
+            toast: self.toast.as_ref(),
+            volume: self.volume,
+            mic_muted: self.mic_muted,
+            bt: self.bt,
+        };
         let _ = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view);
     }
 
@@ -111,19 +144,30 @@ impl App {
         x >= cx - nw / 2.0 - m && x <= cx + nw / 2.0 + m && y >= 0.0 && y <= nh + m
     }
 
+    /// Re-read speaker/mic; true if anything shown changed.
+    fn refresh_audio(&mut self) -> bool {
+        let Some(a) = &self.audio else { return false };
+        let now = (a.volume(), a.mic_muted());
+        let changed = now != (self.volume, self.mic_muted);
+        (self.volume, self.mic_muted) = now;
+        changed
+    }
+
     fn tick(&mut self) {
         let (time, date) = system::clock();
         let battery = system::battery();
-        let changed = (&time, &date, &battery) != (&self.time, &self.date, &self.battery);
+        let mut changed = (&time, &date, &battery) != (&self.time, &self.date, &self.battery);
         (self.time, self.date, self.battery) = (time, date, battery);
+        changed |= self.refresh_audio();
 
         // While wide the notch covers the sampled strips; keep the last verdict.
-        if !self.notch.is_wide() {
-            let cx = self.win.0 + self.win.2 / 2;
-            match screen::check(self.hwnd, cx, self.monitor, self.scale) {
-                screen::Check::Fullscreen => self.set_hidden(true),
-                screen::Check::Busy(busy) => {
-                    self.set_hidden(false);
+        let wide = self.notch.is_wide();
+        let cx = self.win.0 + self.win.2 / 2;
+        match screen::check(self.hwnd, cx, self.monitor, self.scale, !wide) {
+            screen::Check::Fullscreen => self.set_hidden(true),
+            screen::Check::Busy(busy) => {
+                self.set_hidden(false);
+                if !wide {
                     let before = self.notch.mode;
                     self.notch.report_busy(busy);
                     if self.notch.mode != before {
@@ -132,9 +176,59 @@ impl App {
                 }
             }
         }
+
+        let new = self.notifications.as_mut().map(|r| r.poll()).unwrap_or_default();
+        if let Some(t) = new.into_iter().last() {
+            self.toast = Some(t.clone());
+            self.show_banner(t, ALERT_MS);
+            changed = true;
+        }
+
+        let level = self.brightness.as_ref().and_then(|b| b.percent());
+        if level.is_some() && self.last_brightness.is_some() && level != self.last_brightness {
+            let p = level.unwrap_or(0);
+            self.show_banner(status_toast("Màn hình", format!("Độ sáng {p}%"), "", Some(p as f32 / 100.0)), STATUS_MS);
+        }
+        self.last_brightness = level.or(self.last_brightness);
+
         if changed && !self.animating {
             self.redraw();
         }
+    }
+
+    /// Short banner on the notch; skipped over a fullscreen game or while the panel is open.
+    fn show_banner(&mut self, t: Toast, ms: u32) {
+        if self.hidden || !self.notch.on_alert() {
+            return;
+        }
+        self.banner = Some(t);
+        unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
+        self.kick();
+    }
+
+    fn click(&mut self, x: f32, y: f32) {
+        if self.notch.mode != Mode::Expanded {
+            return;
+        }
+        let cx = self.win.2 as f32 / 2.0;
+        let hit = render::buttons(cx, self.scale).into_iter().find(|(_, r)| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+        let Some((button, r)) = hit else { return };
+        if button == Button::Bluetooth {
+            bluetooth::request(self.hwnd, true);
+            return;
+        }
+        let Some(a) = &self.audio else { return };
+        let level = self.volume.map_or(0.0, |(l, _)| l);
+        match button {
+            Button::SpeakerMute => a.toggle_speaker_mute(),
+            Button::VolDown => a.set_volume(level - VOLUME_STEP),
+            Button::VolUp => a.set_volume(level + VOLUME_STEP),
+            Button::VolBar => a.set_volume((x - r.left) / (r.right - r.left)),
+            Button::Mic => a.toggle_mic(),
+            Button::Bluetooth => {}
+        }
+        self.refresh_audio();
+        self.redraw();
     }
 
     fn set_hidden(&mut self, hide: bool) {
@@ -154,7 +248,7 @@ impl App {
             hIcon: unsafe { LoadIconW(None, IDI_APPLICATION) }.unwrap_or_default(),
             ..Default::default()
         };
-        for (d, s) in nid.szTip.iter_mut().zip("Nusa Notch".encode_utf16()) {
+        for (d, s) in nid.szTip.iter_mut().zip("PUW Notch".encode_utf16()) {
             *d = s;
         }
         unsafe { let _ = Shell_NotifyIconW(msg, &nid); }
@@ -196,6 +290,32 @@ impl App {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
                     let inside = self.cursor_inside();
                     self.notch.on_dwell(inside);
+                    if self.notch.mode == Mode::Expanded {
+                        // Radio state can change from Windows settings; re-read when the panel opens.
+                        bluetooth::request(self.hwnd, false);
+                        self.refresh_audio();
+                    }
+                    self.kick();
+                }
+                T_VOLKEY => {
+                    unsafe { let _ = KillTimer(Some(self.hwnd), T_VOLKEY); }
+                    self.refresh_audio();
+                    if let Some((level, muted)) = self.volume {
+                        let pct = (level * 100.0).round();
+                        let title = if muted { "Đã tắt tiếng".to_string() } else { format!("Âm lượng {pct}%") };
+                        self.show_banner(status_toast("Loa", title, "", Some(if muted { 0.0 } else { level })), STATUS_MS);
+                    }
+                    if !self.animating {
+                        self.redraw();
+                    }
+                }
+                T_ALERT => {
+                    unsafe { let _ = KillTimer(Some(self.hwnd), T_ALERT); }
+                    self.notch.on_alert_end();
+                    // Mouse resting on the banner when it ends: treat as a fresh visit.
+                    if self.tracking && self.notch.on_enter() {
+                        unsafe { SetTimer(Some(self.hwnd), T_DWELL, DWELL_MS, None) };
+                    }
                     self.kick();
                 }
                 _ => return None,
@@ -216,7 +336,26 @@ impl App {
                 self.notch.on_leave();
                 self.kick();
             }
+            WM_LBUTTONUP => {
+                let x = (lp.0 & 0xffff) as i16 as f32;
+                let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+                self.click(x, y);
+            }
             WM_RBUTTONUP => self.menu(),
+            WM_LOCKKEY => {
+                let (name, on) = status::lock_state(wp.0);
+                self.show_banner(status_toast("Bàn phím", name.to_string(), if on { "Bật" } else { "Tắt" }, None), STATUS_MS);
+            }
+            // Windows applies the key after the hook returns; read the level a moment later.
+            WM_VOLKEY => unsafe {
+                SetTimer(Some(self.hwnd), T_VOLKEY, 60, None);
+            },
+            WM_BT => {
+                self.bt = Bt::from_wparam(wp.0);
+                if !self.animating {
+                    self.redraw();
+                }
+            }
             WM_TRAY => {
                 let event = (lp.0 & 0xffff) as u32;
                 if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
@@ -238,6 +377,10 @@ impl App {
     }
 }
 
+fn status_toast(source: &str, title: String, body: &str, level: Option<f32>) -> Toast {
+    Toast { app: source.to_string(), title, body: body.to_string(), level }
+}
+
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // Win32 calls made while handling a message can re-enter here; those fall back to the default.
     let handled = APP.with(|a| a.try_borrow_mut().ok().and_then(|mut g| g.as_mut().and_then(|app| app.handle(msg, wp, lp))));
@@ -246,14 +389,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
 
 fn main() -> windows::core::Result<()> {
     unsafe {
-        let _mutex = CreateMutexW(None, false, w!("Local\\NusaRebuild.SingleInstance"))?;
+        let _mutex = CreateMutexW(None, false, w!("Local\\PuwNotch.SingleInstance"))?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             return Ok(());
         }
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
         let instance: HINSTANCE = GetModuleHandleW(None)?.into();
-        let class = w!("NusaRebuildNotch");
+        let class = w!("PuwNotchWindow");
         let wc = WNDCLASSEXW {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(wndproc),
@@ -266,7 +410,7 @@ fn main() -> windows::core::Result<()> {
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class,
-            w!("Nusa Notch"),
+            w!("PUW Notch"),
             WS_POPUP,
             0,
             0,
@@ -279,6 +423,7 @@ fn main() -> windows::core::Result<()> {
         )?;
 
         let (time, date) = system::clock();
+        let (notifications, history) = notify::Reader::open().map_or((None, Vec::new()), |(r, h)| (Some(r), h));
         let mut app = App {
             hwnd,
             notch: Notch::new(system::load_minimal()),
@@ -294,7 +439,19 @@ fn main() -> windows::core::Result<()> {
             time,
             date,
             battery: system::battery(),
+            notifications,
+            banner: None,
+            toast: history.into_iter().last(),
+            brightness: status::Brightness::new(),
+            last_brightness: None,
+            audio: audio::Audio::new(),
+            volume: None,
+            mic_muted: None,
+            bt: Bt::Unknown,
         };
+        app.refresh_audio();
+        bluetooth::request(hwnd, false);
+        status::watch_lock_keys(hwnd);
         app.layout();
         app.redraw();
         app.tray(NIM_ADD);

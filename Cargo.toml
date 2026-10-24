@@ -1,8 +1,12 @@
 [package]
-name = "nusa_rebuild"
+name = "puw_notch"
 version = "0.1.0"
 edition = "2021"
-description = "A living notch for Windows (rebuild)"
+description = "PUW Notch: a living notch for Windows"
+
+[dependencies]
+# Already pulled in by `windows`; named here because D2D point types come from it.
+windows-numerics = "0.2"
 
 [dependencies.windows]
 version = "0.61"
@@ -23,6 +27,17 @@ features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_HiDpi",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Wmi",
+    "Win32_System_Ole",
+    "Win32_System_WinRT",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Foundation",
+    "Foundation_Collections",
+    "Devices_Radios",
 ]
 
 [profile.release]
