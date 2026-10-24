@@ -14,7 +14,8 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 ## Tính năng
 
 **Notch**
-- Dính mép trên màn hình chính, viền "tai thỏ" kiểu iPhone (hai góc trên loe cong, to dần theo chiều cao), co giãn kiểu lò xo.
+- Dính mép trên màn hình chính, viền "tai thỏ" kiểu iPhone (hai góc trên loe cong, to dần theo chiều cao).
+- Co giãn kiểu lò xo nảy (giảm chấn ~0,47): mở ra vượt đích ~15% rồi bật lại, thu vào lún qua rồi bật lên.
 - **Thường** (150×30): giờ (chữ đậm 15 px). **Hover** 200 ms thì mở bảng (440×180).
 - **Pin** (laptop): vòng tròn mức pin cạnh giờ — xanh lá + tia sét khi đang sạc, đỏ khi ≤ 20%, trắng khi bình thường.
   PC không có pin thì không hiện gì. Khi có nhạc vòng pin nằm trước cột sóng.
@@ -28,7 +29,7 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - Đọc thông báo: dùng trung tâm thông báo của Windows; notch chỉ báo khi có thông báo mới.
 
 **Banner tự giãn ra**
-- Thông báo Windows mới: 5 giây (tên app, tiêu đề, nội dung). Để chuột lên banner thì mở bảng.
+- Thông báo Windows mới: 5 giây, banner rộng 420 px, nội dung 2 dòng (tên app, tiêu đề, nội dung). Để chuột lên banner thì mở bảng.
 - Phím âm lượng / tắt tiếng: "Âm lượng 72%" + thanh mức.
 - Độ sáng màn hình laptop thay đổi: "Độ sáng 90%" + thanh mức.
 - Caps Lock / Num Lock: Bật / Tắt.

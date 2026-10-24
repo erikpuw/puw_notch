@@ -32,9 +32,13 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
     }
 }
 
+/// Banner for a notification with a body: wider and two lines of text.
+pub const ALERT_TALL: [f32; 3] = [420.0, 86.0, 24.0];
+
 /// Window must fit the largest target plus the hover margin.
-pub const MAX_W: f32 = 460.0;
-pub const MAX_H: f32 = 190.0;
+/// Includes room for the spring overshoot (~15% of the travel) and the ears.
+pub const MAX_W: f32 = 530.0;
+pub const MAX_H: f32 = 210.0;
 /// How long a notification banner stays.
 pub const ALERT_MS: u32 = 5000;
 /// How long a status banner (Caps Lock, brightness) stays.
@@ -51,13 +55,22 @@ struct Spring {
 }
 
 impl Spring {
-    const K: f32 = 230.0;
-    const C: f32 = 24.0;
+    /// Stiffness and damping: damping ratio C / (2 * sqrt(K)) ~ 0.47, so the notch overshoots by
+    /// about 15% and settles back, the springy grow / shrink of a Dynamic Island.
+    const K: f32 = 320.0;
+    const C: f32 = 17.0;
+    /// Integrate in small slices so a late frame does not change the motion.
+    const SLICE: f32 = 0.004;
 
     fn step(&mut self, target: f32, dt: f32) -> bool {
-        let acc = Self::K * (target - self.pos) - Self::C * self.vel;
-        self.vel += acc * dt;
-        self.pos += self.vel * dt;
+        let mut left = dt;
+        while left > 0.0 {
+            let h = left.min(Self::SLICE);
+            let acc = Self::K * (target - self.pos) - Self::C * self.vel;
+            self.vel += acc * h;
+            self.pos += self.vel * h;
+            left -= h;
+        }
         if (target - self.pos).abs() < 0.05 && self.vel.abs() < 0.5 {
             self.pos = target;
             self.vel = 0.0;
@@ -71,6 +84,8 @@ pub struct Notch {
     pub mode: Mode,
     pub minimal: bool,
     pub live: bool,
+    /// Current banner wants the tall size (`ALERT_TALL`).
+    tall_alert: bool,
     obstructed: bool,
     clear_checks: u8,
     size: [Spring; 3],
@@ -78,7 +93,7 @@ pub struct Notch {
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, tall_alert: false, obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         for (s, t) in n.size.iter_mut().zip(target(n.mode, false)) {
             s.pos = t;
@@ -99,9 +114,9 @@ impl Notch {
         self.is_resting() && self.size() == target(self.mode, self.live)
     }
 
-    /// Current (w, h, r).
+    /// Current (w, h, r). The bounce can swing past zero when shrinking to the mini line; clamp.
     pub fn size(&self) -> [f32; 3] {
-        [self.size[0].pos, self.size[1].pos, self.size[2].pos]
+        [self.size[0].pos.max(0.0), self.size[1].pos.max(0.0), self.size[2].pos.max(0.0)]
     }
 
     /// Music started/stopped. Returns true if the target size changed (caller animates).
@@ -139,13 +154,20 @@ impl Notch {
         }
     }
 
-    /// New notification. Returns true if the banner is shown (not while the panel is open).
-    pub fn on_alert(&mut self) -> bool {
+    /// New banner (`tall` = notification text needing two lines). Returns true if shown
+    /// (not while the panel is open).
+    pub fn on_alert(&mut self, tall: bool) -> bool {
         if self.mode == Mode::Expanded {
             return false;
         }
         self.mode = Mode::Alert;
+        self.tall_alert = tall;
         true
+    }
+
+    /// Size the springs head for right now.
+    fn goal(&self) -> [f32; 3] {
+        if self.mode == Mode::Alert && self.tall_alert { ALERT_TALL } else { target(self.mode, self.live) }
     }
 
     pub fn on_alert_end(&mut self) {
@@ -180,7 +202,7 @@ impl Notch {
 
     /// Advance the animation. Returns true while still moving.
     pub fn step(&mut self, dt: f32) -> bool {
-        let t = target(self.mode, self.live);
+        let t = self.goal();
         let mut moving = false;
         for (s, t) in self.size.iter_mut().zip(t) {
             moving |= s.step(t, dt);
@@ -228,6 +250,27 @@ mod tests {
     }
 
     #[test]
+    fn springy_overshoot_and_never_negative() {
+        let mut n = Notch::new(false);
+        n.on_enter();
+        n.on_dwell(true);
+        let goal = target(Mode::Expanded, false);
+        let mut peak = 0.0f32;
+        for _ in 0..120 {
+            n.step(1.0 / 60.0);
+            peak = peak.max(n.size()[1]);
+        }
+        assert!(peak > goal[1] * 1.05, "bounces past the target: {peak}");
+        // shrink hard to the mini line: the undershoot is clamped at 0
+        n.set_minimal(true);
+        n.on_leave();
+        for _ in 0..120 {
+            n.step(1.0 / 60.0);
+            assert!(n.size().iter().all(|v| *v >= 0.0));
+        }
+    }
+
+    #[test]
     fn short_visit_does_not_expand() {
         let mut n = Notch::new(false);
         n.on_enter();
@@ -261,7 +304,7 @@ mod tests {
     fn alert_banner_flow() {
         let mut n = Notch::new(false);
         n.report_busy(true);
-        assert!(n.on_alert());
+        assert!(n.on_alert(false));
         assert_eq!(n.mode, Mode::Alert);
         // passing over the banner does not end it
         assert!(n.on_enter());
@@ -270,13 +313,18 @@ mod tests {
         n.on_alert_end();
         assert_eq!(n.mode, Mode::Mini);
         // resting on the banner opens the panel, and the panel is not replaced by a banner
-        n.on_alert();
+        n.on_alert(false);
         n.on_enter();
         n.on_dwell(true);
         assert_eq!(n.mode, Mode::Expanded);
-        assert!(!n.on_alert());
+        assert!(!n.on_alert(false));
         n.on_alert_end();
         assert_eq!(n.mode, Mode::Expanded);
+        // a notification with text grows to the tall banner
+        let mut n = Notch::new(false);
+        n.on_alert(true);
+        settle(&mut n);
+        assert_eq!(n.size(), ALERT_TALL);
     }
 
     #[test]

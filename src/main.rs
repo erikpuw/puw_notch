@@ -243,7 +243,9 @@ impl App {
 
     /// Short banner on the notch; skipped over a fullscreen game or while the panel is open.
     fn show_banner(&mut self, t: Toast, ms: u32) {
-        if self.hidden || !self.notch.on_alert() {
+        // Notifications (no status icon) with text get the taller two-line banner.
+        let tall = t.icon.is_none() && !t.body.is_empty();
+        if self.hidden || !self.notch.on_alert(tall) {
             return;
         }
         self.banner = Some(t);

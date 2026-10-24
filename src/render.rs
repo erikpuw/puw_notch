@@ -66,6 +66,7 @@ const F_LABEL: usize = 2;
 const F_ICON: usize = 3;
 const F_TITLE: usize = 4;
 const F_TINY_ICON: usize = 5;
+const F_BODY_WRAP: usize = 6;
 
 pub const ICON_VOLUME: &str = "\u{E767}";
 pub const ICON_MUTE: &str = "\u{E74F}";
@@ -202,6 +203,14 @@ impl Renderer {
                     Ok(f)
                 }
             };
+            // Same body text, but wrapping onto more lines (top-aligned; the box clips it).
+            let wrap = |f: IDWriteTextFormat| -> Result<IDWriteTextFormat> {
+                unsafe {
+                    f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+                    f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                }
+                Ok(f)
+            };
             let ui = w!("Segoe UI");
             let set = vec![
                 make(ui, 15.0, DWRITE_FONT_WEIGHT_BOLD)?,
@@ -210,6 +219,7 @@ impl Renderer {
                 make(w!("Segoe Fluent Icons"), 16.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(ui, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(w!("Segoe Fluent Icons"), 8.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+                wrap(make(ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL)?)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -401,6 +411,8 @@ impl Renderer {
                             rt.FillRoundedRectangle(&bar(tr), &brush(grey(0.25, a))?);
                             rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &brush(grey(1.0, a))?);
                         }
+                        // Tall banner: up to two lines of the notification text.
+                        None if nh > 74.0 * s => text(&t.body, F_BODY_WRAP, rect(tl, 43.0 * s, tr, 79.0 * s), lead, grey(0.75, a))?,
                         None => text(&t.body, F_BODY, rect(tl, 42.0 * s, tr, 58.0 * s), lead, grey(0.75, a))?,
                     }
                 }
