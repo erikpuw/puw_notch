@@ -19,6 +19,7 @@ use crate::music::Track;
 use crate::notch::{target, Mode, HOVER_MARGIN};
 use crate::notify::Toast;
 use crate::system::Battery;
+use crate::todo::Item;
 
 /// Everything the painter needs for one frame (logical px).
 pub struct View<'a> {
@@ -35,6 +36,30 @@ pub struct View<'a> {
     /// Seconds, drives the equaliser bars.
     pub phase: f32,
     pub hovered: Option<Button>,
+    pub page: Page,
+    pub todo: TodoView<'a>,
+}
+
+/// Pages of the open panel, switched with the side arrows.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Page {
+    Music,
+    Todo,
+}
+
+/// What the to-do page shows.
+pub struct TodoView<'a> {
+    pub items: &'a [Item],
+    /// Open tasks, and tasks ticked today.
+    pub open: usize,
+    pub done_today: usize,
+    /// Text being typed (kept when the box loses focus).
+    pub draft: &'a str,
+    pub editing: bool,
+    /// Caret blink phase.
+    pub caret: bool,
+    /// First visible row.
+    pub scroll: usize,
 }
 
 /// Media buttons of the open panel (the notch only reports; these are the only controls).
@@ -44,6 +69,12 @@ pub enum Button {
     PlayPause,
     Next,
     Seek,
+    PagePrev,
+    PageNext,
+    TodoInput,
+    /// Tick / untick task at this index (the whole row, text included).
+    TodoToggle(usize),
+    TodoDelete(usize),
 }
 
 impl Button {
@@ -51,15 +82,17 @@ impl Button {
         match self {
             Self::Previous => "Bài trước", Self::PlayPause => "Phát / Tạm dừng",
             Self::Next => "Bài tiếp theo", Self::Seek => "Bấm để tua",
+            _ => "",
         }
     }
     pub fn enabled(self, track: Option<&Track>) -> bool {
-        track.is_some_and(|t| match self {
-            Self::Previous => t.can_previous,
-            Self::PlayPause => t.can_toggle,
-            Self::Next => t.can_next,
-            Self::Seek => t.can_seek && t.duration_ms > 0,
-        })
+        match self {
+            Self::Previous => track.is_some_and(|t| t.can_previous),
+            Self::PlayPause => track.is_some_and(|t| t.can_toggle),
+            Self::Next => track.is_some_and(|t| t.can_next),
+            Self::Seek => track.is_some_and(|t| t.can_seek && t.duration_ms > 0),
+            _ => true,
+        }
     }
 }
 
@@ -69,15 +102,48 @@ const EAR_RATIO: f32 = 0.35;
 const EAR_MAX: f32 = 14.0;
 const MEDIA_BTN: f32 = 40.0;
 const COVER: f32 = 64.0;
+/// Page content sits between the side arrows (logical px from the panel edge).
+const SIDE: f32 = 44.0;
+const ARROW: f32 = 24.0;
+const ARROW_Y: f32 = 80.0;
+const DOTS_Y: f32 = 174.0;
+/// To-do page rows.
+const INPUT_Y: f32 = 36.0;
+const INPUT_H: f32 = 26.0;
+const COUNT_Y: f32 = 66.0;
+const ROW_Y: f32 = 84.0;
+const ROW_H: f32 = 22.0;
+pub const TODO_ROWS: usize = 3;
 
-/// Clickable rects in window px for the settled panel centred at `cx`.
+/// Media controls of the music page, in window px for the settled panel centred at `cx`.
 pub fn buttons(cx: f32, scale: f32) -> [(Button, D2D_RECT_F); 4] {
     let w = target(Mode::Expanded, false)[0];
     let left = cx / scale - w / 2.0;
     let (y, c) = (124.0, w / 2.0 - MEDIA_BTN / 2.0);
     let r = |x: f32| rect((left + x) * scale, y * scale, (left + x + MEDIA_BTN) * scale, (y + MEDIA_BTN) * scale);
-    let seek = rect((left + PAD + 40.0) * scale, 102.0 * scale, (left + w - PAD - 40.0) * scale, 122.0 * scale);
+    let seek = rect((left + SIDE + 40.0) * scale, 102.0 * scale, (left + w - SIDE - 40.0) * scale, 122.0 * scale);
     [(Button::Previous, r(c - 48.0)), (Button::PlayPause, r(c)), (Button::Next, r(c + 48.0)), (Button::Seek, seek)]
+}
+
+/// Every clickable rect of the open panel on `page`; `todo_len` / `scroll` place the task rows.
+pub fn page_buttons(cx: f32, scale: f32, page: Page, todo_len: usize, scroll: usize) -> Vec<(Button, D2D_RECT_F)> {
+    let w = target(Mode::Expanded, false)[0];
+    let left = cx / scale - w / 2.0;
+    let r = |x: f32, y: f32, bw: f32, bh: f32| rect((left + x) * scale, y * scale, (left + x + bw) * scale, (y + bh) * scale);
+    let mut out = vec![(Button::PagePrev, r(10.0, ARROW_Y, ARROW, ARROW)), (Button::PageNext, r(w - 10.0 - ARROW, ARROW_Y, ARROW, ARROW))];
+    let (cl, cw) = (SIDE, w - 2.0 * SIDE);
+    match page {
+        Page::Music => out.extend(buttons(cx, scale)),
+        Page::Todo => {
+            out.push((Button::TodoInput, r(cl, INPUT_Y, cw, INPUT_H)));
+            for (row, i) in (scroll..todo_len.min(scroll + TODO_ROWS)).enumerate() {
+                let y = ROW_Y + row as f32 * ROW_H;
+                out.push((Button::TodoToggle(i), r(cl, y, cw - 24.0, ROW_H)));
+                out.push((Button::TodoDelete(i), r(cl + cw - 22.0, y, 22.0, ROW_H)));
+            }
+        }
+    }
+    out
 }
 
 pub fn seek_at(cx: f32, scale: f32, x: f32, duration: u64) -> u64 {
@@ -85,8 +151,8 @@ pub fn seek_at(cx: f32, scale: f32, x: f32, duration: u64) -> u64 {
     (((x - r.left) / (r.right - r.left)).clamp(0.0, 1.0) as f64 * duration as f64) as u64
 }
 
-pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>) -> Option<Button> {
-    buttons(cx, scale).into_iter().find(|(b, r)| b.enabled(track)
+pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, page: Page, todo_len: usize, scroll: usize) -> Option<Button> {
+    page_buttons(cx, scale, page, todo_len, scroll).into_iter().find(|(b, r)| b.enabled(track)
         && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom).map(|(b, _)| b)
 }
 
@@ -98,6 +164,7 @@ const F_ICON: usize = 3;
 const F_TITLE: usize = 4;
 const F_TINY_ICON: usize = 5;
 const F_BODY_WRAP: usize = 6;
+const F_SMALL_ICON: usize = 7;
 
 pub const ICON_VOLUME: &str = "\u{E767}";
 pub const ICON_MUTE: &str = "\u{E74F}";
@@ -123,6 +190,12 @@ const ICON_NEXT: &str = "\u{E893}";
 const ICON_NOTE: &str = "\u{E8D6}";
 const ICON_BELL: &str = "\u{EA8F}";
 const ICON_BOLT: &str = "\u{E945}";
+const ICON_LEFT: &str = "\u{E76B}";
+const ICON_RIGHT: &str = "\u{E76C}";
+const ICON_ADD: &str = "\u{E710}";
+const ICON_CHECK: &str = "\u{E73E}";
+const ICON_CLOSE: &str = "\u{E711}";
+const GREEN: (f32, f32, f32) = (0.2, 0.84, 0.29);
 
 /// Banner icon for a Bluetooth device.
 pub fn device_icon(kind: DeviceKind) -> &'static str {
@@ -257,6 +330,7 @@ impl Renderer {
                 make(ui, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(w!("Segoe Fluent Icons"), 8.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 wrap(make(ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL)?)?,
+                make(w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -372,6 +446,16 @@ impl Renderer {
             let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
             let center = DWRITE_TEXT_ALIGNMENT_CENTER;
             let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
+            // Width of a run in font `f` (caret placement, strike-through).
+            let dw = &self.dw;
+            let width = |t: &str, f: usize| -> f32 {
+                let u: Vec<u16> = t.encode_utf16().collect();
+                let mut m = DWRITE_TEXT_METRICS::default();
+                match dw.CreateTextLayout(&u, &fonts[f], 10_000.0, 100.0) {
+                    Ok(layout) if layout.GetMetrics(&mut m).is_ok() => m.widthIncludingTrailingWhitespace,
+                    _ => 0.0,
+                }
+            };
 
             rt.BeginDraw();
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
@@ -459,56 +543,173 @@ impl Renderer {
 
             let a = fade(110.0, 50.0);
             if a > 0.0 && v.mode != Mode::Alert {
-                let (cl, cr) = (l + PAD * s, r - PAD * s);
+                let (hl, hr) = (l + PAD * s, r - PAD * s);
                 // Header: date · time on the left, battery on the right.
-                text(&format!("{}   {}", v.date, v.time), F_SMALL, rect(cl, 6.0 * s, cr - 100.0 * s, 28.0 * s), lead, grey(1.0, a))?;
+                text(&format!("{}   {}", v.date, v.time), F_SMALL, rect(hl, 6.0 * s, hr - 100.0 * s, 28.0 * s), lead, grey(1.0, a))?;
                 if let Some(b) = v.battery {
-                    text(&b.label(), F_LABEL, rect(cr - 100.0 * s, 6.0 * s, cr, 28.0 * s), trail, grey(0.6, a))?;
+                    text(&b.label(), F_LABEL, rect(hr - 100.0 * s, 6.0 * s, hr, 28.0 * s), trail, grey(0.6, a))?;
                 }
+                // Page content sits between the side arrows.
+                let (cl, cr) = (l + SIDE * s, r - SIDE * s);
+                let btns = page_buttons(cx, s, v.page, v.todo.items.len(), v.todo.scroll);
+                let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
 
-                // Now playing.
-                let top = 38.0 * s;
-                draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 10.0 * s, a)?;
-                let tl = cl + (COVER + 12.0) * s;
-                match v.music {
-                    Some(t) => {
-                        let title = if t.title.is_empty() { "Đang phát" } else { &t.title };
-                        text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
-                        text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, grey(0.65, a))?;
-                        let lyric = t.lyric_now().unwrap_or_else(|| v.hovered.map_or(
-                            if t.duration_ms == 0 { "Trình phát chưa cung cấp thời gian" }
-                            else if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
-                        text(t.command_error.unwrap_or(lyric), F_BODY, rect(tl, top + 40.0 * s, cr, top + 58.0 * s), lead,
-                            if t.command_error.is_some() { color(1.0, 0.5, 0.4, a) } else { grey(0.95, a) })?;
+                match v.page {
+                    Page::Music => {
+                        let top = 38.0 * s;
+                        draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 10.0 * s, a)?;
+                        let tl = cl + (COVER + 12.0) * s;
+                        match v.music {
+                            Some(t) => {
+                                let title = if t.title.is_empty() { "Đang phát" } else { &t.title };
+                                text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
+                                text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, grey(0.65, a))?;
+                                let lyric = t.lyric_now().unwrap_or_else(|| v.hovered.map_or(
+                                    if t.duration_ms == 0 { "Trình phát chưa cung cấp thời gian" }
+                                    else if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
+                                text(t.command_error.unwrap_or(lyric), F_BODY, rect(tl, top + 40.0 * s, cr, top + 58.0 * s), lead,
+                                    if t.command_error.is_some() { color(1.0, 0.5, 0.4, a) } else { grey(0.95, a) })?;
+                            }
+                            None => text("Không có bài", F_TITLE, rect(tl, top, cr, top + COVER * s), lead, grey(1.0, a))?,
+                        }
+                        let pos = v.music.map_or(0, |t| t.position_ms());
+                        let dur = v.music.map_or(0, |t| t.duration_ms);
+                        let by = 112.0 * s;
+                        let lw = 40.0 * s;
+                        let (bl, brr) = (cl + lw, cr - lw);
+                        text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, grey(0.6, a))?;
+                        text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, grey(0.6, a))?;
+                        let th = 4.0 * s;
+                        let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
+                        rt.FillRoundedRectangle(&bar(brr), &brush(grey(0.25, a))?);
+                        if dur > 0 {
+                            let p = (pos as f32 / dur as f32).clamp(0.0, 1.0);
+                            rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &brush(grey(1.0, a))?);
+                        }
+
+                        let playing = v.music.is_some_and(|t| t.playing);
+                        for (b, br) in buttons(cx, s) {
+                            let icon = match b {
+                                Button::Previous => ICON_PREV,
+                                Button::PlayPause => if playing { ICON_PAUSE } else { ICON_PLAY },
+                                Button::Next => ICON_NEXT,
+                                _ => continue,
+                            };
+                            let c = if !b.enabled(v.music) { grey(0.3, a) }
+                                else if v.hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
+                            text(icon, F_ICON, br, center, c)?;
+                        }
                     }
-                    None => text("Không có bài", F_TITLE, rect(tl, top, cr, top + COVER * s), lead, grey(1.0, a))?,
-                }
-                let pos = v.music.map_or(0, |t| t.position_ms());
-                let dur = v.music.map_or(0, |t| t.duration_ms);
-                let by = 112.0 * s;
-                let lw = 40.0 * s;
-                let (bl, brr) = (cl + lw, cr - lw);
-                text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, grey(0.6, a))?;
-                text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, grey(0.6, a))?;
-                let th = 4.0 * s;
-                let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
-                rt.FillRoundedRectangle(&bar(brr), &brush(grey(0.25, a))?);
-                if dur > 0 {
-                    let p = (pos as f32 / dur as f32).clamp(0.0, 1.0);
-                    rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &brush(grey(1.0, a))?);
+                    Page::Todo => {
+                        let td = &v.todo;
+                        // Add box: placeholder, or the draft with a blinking caret while typing.
+                        if let Some(ib) = rect_of(Button::TodoInput) {
+                            let focus = td.editing || v.hovered == Some(Button::TodoInput);
+                            rt.FillRoundedRectangle(&rounded(ib, 13.0 * s), &brush(grey(if focus { 0.16 } else { 0.12 }, a))?);
+                            if td.editing {
+                                let inner = rect(ib.left + 0.5, ib.top + 0.5, ib.right - 0.5, ib.bottom - 0.5);
+                                rt.DrawRoundedRectangle(&rounded(inner, 13.0 * s), &brush(grey(1.0, a * 0.35))?, 1.0 * s, None);
+                            }
+                            let icon_box = rect(ib.left + 8.0 * s, ib.top, ib.left + 26.0 * s, ib.bottom);
+                            text(ICON_ADD, F_SMALL_ICON, icon_box, center, grey(0.6, a))?;
+                            let tb = rect(icon_box.right + 4.0 * s, ib.top, ib.right - 12.0 * s, ib.bottom);
+                            if td.draft.is_empty() && !td.editing {
+                                text("Thêm việc… (Enter để lưu)", F_BODY, tb, lead, grey(0.55, a))?;
+                            } else {
+                                // Long drafts keep their end in view.
+                                let tw = width(td.draft, F_BODY);
+                                let room = tb.right - tb.left - 4.0 * s;
+                                let align = if tw > room { trail } else { lead };
+                                text(td.draft, F_BODY, tb, align, grey(1.0, a))?;
+                                if td.editing && td.caret {
+                                    let x = if tw > room { tb.right - 2.0 * s } else { tb.left + tw + 1.0 * s };
+                                    let my = (ib.top + ib.bottom) / 2.0;
+                                    rt.FillRectangle(&rect(x, my - 7.0 * s, x + 1.5 * s, my + 7.0 * s), &brush(grey(1.0, a))?);
+                                }
+                            }
+                        }
+                        // Counts.
+                        let (open, done_today) = (td.open, td.done_today);
+                        let cy = COUNT_Y * s;
+                        text(&format!("Việc cần làm · {open}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
+                        text(&format!("✓ Xong hôm nay {done_today}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), trail,
+                            if done_today > 0 { color(GREEN.0, GREEN.1, GREEN.2, a) } else { grey(0.6, a) })?;
+                        // Rows.
+                        if td.items.is_empty() {
+                            let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * TODO_ROWS as f32) * s);
+                            text("Chưa có việc nào", F_BODY, area, center, grey(0.55, a))?;
+                        }
+                        for (b, br) in btns.iter() {
+                            let Button::TodoToggle(i) = *b else { continue };
+                            let Some(item) = td.items.get(i) else { continue };
+                            let hover_row = matches!(v.hovered, Some(Button::TodoToggle(j)) | Some(Button::TodoDelete(j)) if j == i);
+                            let row = rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s);
+                            if hover_row {
+                                rt.FillRoundedRectangle(&rounded(row, 8.0 * s), &brush(grey(0.1, a))?);
+                            }
+                            // Tick circle.
+                            let d = 14.0 * s;
+                            let (ccx, ccy) = (br.left + d / 2.0, (br.top + br.bottom) / 2.0);
+                            let circle = D2D1_ELLIPSE { point: Vector2 { X: ccx, Y: ccy }, radiusX: d / 2.0 - 0.75 * s, radiusY: d / 2.0 - 0.75 * s };
+                            let done = item.done.is_some();
+                            if done {
+                                rt.FillEllipse(&circle, &brush(color(GREEN.0, GREEN.1, GREEN.2, a))?);
+                                text(ICON_CHECK, F_TINY_ICON, rect(ccx - d / 2.0, ccy - d / 2.0, ccx + d / 2.0, ccy + d / 2.0), center, grey(0.0, a))?;
+                            } else {
+                                rt.DrawEllipse(&circle, &brush(grey(if hover_row { 0.85 } else { 0.55 }, a))?, 1.5 * s, None);
+                            }
+                            // Text, struck through when done.
+                            let tb = rect(br.left + d + 10.0 * s, br.top, br.right, br.bottom);
+                            text(&item.text, F_BODY, tb, lead, grey(if done { 0.45 } else { 1.0 }, a))?;
+                            if done {
+                                let tw = width(&item.text, F_BODY).min(tb.right - tb.left);
+                                let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
+                                rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &brush(grey(0.45, a))?);
+                            }
+                            // Delete, only on the hovered row.
+                            if hover_row {
+                                if let Some(db) = rect_of(Button::TodoDelete(i)) {
+                                    let c = if v.hovered == Some(Button::TodoDelete(i)) { color(1.0, 0.45, 0.4, a) } else { grey(0.6, a) };
+                                    text(ICON_CLOSE, F_SMALL_ICON, db, center, c)?;
+                                }
+                            }
+                        }
+                        // Scrollbar when there is more than fits.
+                        let n = td.items.len();
+                        if n > TODO_ROWS {
+                            let (top, bottom) = (ROW_Y * s, (ROW_Y + ROW_H * TODO_ROWS as f32) * s);
+                            let x = cr + 6.0 * s;
+                            rt.FillRoundedRectangle(&rounded(rect(x, top, x + 3.0 * s, bottom), 1.5 * s), &brush(grey(0.2, a))?);
+                            let len = (bottom - top) * TODO_ROWS as f32 / n as f32;
+                            let start = top + (bottom - top - len) * td.scroll as f32 / (n - TODO_ROWS) as f32;
+                            rt.FillRoundedRectangle(&rounded(rect(x, start, x + 3.0 * s, start + len), 1.5 * s), &brush(grey(0.6, a))?);
+                        }
+                    }
                 }
 
-                let playing = v.music.is_some_and(|t| t.playing);
-                for (b, br) in buttons(cx, s) {
-                    let icon = match b {
-                        Button::Previous => ICON_PREV,
-                        Button::PlayPause => if playing { ICON_PAUSE } else { ICON_PLAY },
-                        Button::Next => ICON_NEXT,
-                        Button::Seek => continue,
-                    };
-                    let c = if !b.enabled(v.music) { grey(0.3, a) }
-                        else if v.hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
-                    text(icon, F_ICON, br, center, c)?;
+                // Side arrows and page dots.
+                for (b, icon) in [(Button::PagePrev, ICON_LEFT), (Button::PageNext, ICON_RIGHT)] {
+                    if let Some(br) = rect_of(b) {
+                        let hot = v.hovered == Some(b);
+                        let circle = D2D1_ELLIPSE {
+                            point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
+                            radiusX: (br.right - br.left) / 2.0,
+                            radiusY: (br.bottom - br.top) / 2.0,
+                        };
+                        rt.FillEllipse(&circle, &brush(grey(if hot { 0.26 } else { 0.15 }, a))?);
+                        text(icon, F_SMALL_ICON, br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
+                    }
+                }
+                let (dot, wide, gap) = (5.0 * s, 14.0 * s, 5.0 * s);
+                let pages = [Page::Music, Page::Todo];
+                let total = wide + dot + gap;
+                let mut dx = cx - total / 2.0;
+                for p in pages {
+                    let current = p == v.page;
+                    let dw = if current { wide } else { dot };
+                    let c = if current { grey(1.0, a) } else { grey(0.45, a) };
+                    rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &brush(c)?);
+                    dx += dw + gap;
                 }
             }
             rt.EndDraw(None, None)?;
@@ -566,10 +767,10 @@ mod tests {
             assert_eq!(seek_at(cx, scale, seek.left - 100.0, track.duration_ms), 0);
             assert_eq!(seek_at(cx, scale, seek.right + 100.0, track.duration_ms), 120_000);
             assert_eq!(seek_at(cx, scale, (seek.left + seek.right) / 2.0, track.duration_ms), 60_000);
-            assert_eq!(hit_button(cx, scale, cx, 140.0 * scale, Some(&track)), Some(Button::PlayPause));
-            assert_eq!(hit_button(cx, scale, cx, 112.0 * scale, Some(&track)), Some(Button::Seek));
-            assert_eq!(hit_button(cx, scale, cx, 140.0 * scale, None), None);
-            assert!(buttons(cx, scale).iter().all(|(_, r)| r.bottom <= 170.0 * scale));
+            assert_eq!(hit_button(cx, scale, cx, 140.0 * scale, Some(&track), Page::Music, 0, 0), Some(Button::PlayPause));
+            assert_eq!(hit_button(cx, scale, cx, 112.0 * scale, Some(&track), Page::Music, 0, 0), Some(Button::Seek));
+            assert_eq!(hit_button(cx, scale, cx, 140.0 * scale, None, Page::Music, 0, 0), None);
+            assert!(buttons(cx, scale).iter().all(|(_, r)| r.bottom <= DOTS_Y * scale));
         }
     }
 
@@ -586,7 +787,8 @@ mod tests {
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "Thứ Bảy, 24 tháng 10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), phase: 0.0, hovered: Some(Button::PlayPause) };
+                banner: None, music: Some(&track), phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
+                todo: TodoView { items: &[], open: 0, done_today: 0, draft: "", editing: false, caret: false, scroll: 0 } };
             let mut renderer = Renderer::new().unwrap();
             renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
             let mut dib = DIBSECTION::default();

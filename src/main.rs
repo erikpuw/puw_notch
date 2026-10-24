@@ -11,6 +11,7 @@ mod render;
 mod screen;
 mod status;
 mod system;
+mod todo;
 
 use std::cell::RefCell;
 use std::time::Instant;
@@ -31,7 +32,7 @@ use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_
 use music::WM_MUSIC;
 use status::{WM_LOCKKEY, WM_VOLKEY};
 use notify::Toast;
-use render::{Button, Renderer, View};
+use render::{Button, Page, Renderer, TodoView, View, TODO_ROWS};
 
 const WM_TRAY: u32 = WM_APP + 1;
 /// Lives in the commctrl headers; not worth a crate feature for one constant.
@@ -41,6 +42,8 @@ const T_CHECK: usize = 2;
 const T_DWELL: usize = 3;
 const T_ALERT: usize = 4;
 const T_VOLKEY: usize = 5;
+const T_CARET: usize = 6;
+const CARET_MS: u32 = 530;
 const CHECK_MS: u32 = 500;
 const MENU_MINIMAL: usize = 10;
 const MENU_AUTOSTART: usize = 11;
@@ -76,6 +79,21 @@ struct App {
     /// Current T_ANIM interval: fast while the spring moves, slower for the equaliser alone.
     frame_ms: u32,
     hovered_button: Option<Button>,
+    /// Foreground window + rect at the last check: busy sampling waits for it to hold still.
+    last_foreground: Option<(isize, RECT)>,
+    page: Page,
+    todo: todo::Todo,
+    today: u32,
+    /// Text in the add box; kept if the box loses focus.
+    draft: String,
+    /// The add box has the keyboard (window activated for it).
+    editing: bool,
+    caret: bool,
+    todo_scroll: usize,
+    /// Window that had the keyboard before typing started; it gets it back after.
+    prev_foreground: HWND,
+    /// First half of a UTF-16 pair arriving in WM_CHAR (emoji).
+    high_surrogate: Option<u16>,
 }
 
 /// Animation frame intervals.
@@ -116,6 +134,16 @@ impl App {
             music: self.track.as_ref(),
             phase: self.started.elapsed().as_secs_f32(),
             hovered: self.hovered_button,
+            page: self.page,
+            todo: TodoView {
+                items: &self.todo.items,
+                open: self.todo.open_count(),
+                done_today: self.todo.done_today(self.today),
+                draft: &self.draft,
+                editing: self.editing,
+                caret: self.caret,
+                scroll: self.todo_scroll,
+            },
         };
         let _ = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view);
     }
@@ -204,6 +232,14 @@ impl App {
             }
         }
         (self.time, self.date, self.battery) = (time, date, battery);
+        let today = system::today();
+        if today != self.today {
+            self.today = today;
+            if self.todo.new_day(today) {
+                self.clamp_scroll();
+                changed = true;
+            }
+        }
         self.refresh_audio();
         self.refresh_music();
         // Progress bar and lyric line move on their own while the panel is open.
@@ -213,8 +249,9 @@ impl App {
         let sample = self.notch.is_settled_rest();
         let cx = self.win.0 + self.win.2 / 2;
         let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
-        match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w, sample) {
+        match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w, sample, &mut self.last_foreground) {
             screen::Check::Fullscreen => self.set_hidden(true),
+            screen::Check::Settling => self.set_hidden(false),
             screen::Check::Busy(busy) => {
                 self.set_hidden(false);
                 if sample {
@@ -257,19 +294,124 @@ impl App {
         self.kick();
     }
 
-    /// The panel's only controls are the media buttons.
+    fn hit(&self, x: f32, y: f32) -> Option<Button> {
+        render::hit_button(self.win.2 as f32 / 2.0, self.scale, x, y, self.track.as_ref(), self.page, self.todo.items.len(), self.todo_scroll)
+    }
+
     fn click(&mut self, x: f32, y: f32) {
         if self.notch.mode != Mode::Expanded {
             return;
         }
         let cx = self.win.2 as f32 / 2.0;
-        if let Some(button) = render::hit_button(cx, self.scale, x, y, self.track.as_ref()) {
-            self.music.send(match button {
-                Button::Previous => music::Cmd::Previous,
-                Button::PlayPause => music::Cmd::PlayPause,
-                Button::Next => music::Cmd::Next,
-                Button::Seek => music::Cmd::Seek(render::seek_at(cx, self.scale, x, self.track.as_ref().map_or(0, |t| t.duration_ms))),
-            });
+        let Some(button) = self.hit(x, y) else { return };
+        let duration = self.track.as_ref().map_or(0, |t| t.duration_ms);
+        match button {
+            Button::Previous => self.music.send(music::Cmd::Previous),
+            Button::PlayPause => self.music.send(music::Cmd::PlayPause),
+            Button::Next => self.music.send(music::Cmd::Next),
+            Button::Seek => self.music.send(music::Cmd::Seek(render::seek_at(cx, self.scale, x, duration))),
+            Button::PagePrev | Button::PageNext => {
+                self.end_edit(false);
+                self.page = if self.page == Page::Music { Page::Todo } else { Page::Music };
+            }
+            Button::TodoInput => self.begin_edit(),
+            Button::TodoToggle(i) => self.todo.toggle(i, self.today),
+            Button::TodoDelete(i) => {
+                self.todo.remove(i);
+                self.clamp_scroll();
+            }
+        }
+        self.hovered_button = self.hit(x, y);
+        self.redraw();
+    }
+
+    fn clamp_scroll(&mut self) {
+        self.todo_scroll = self.todo_scroll.min(self.todo.items.len().saturating_sub(TODO_ROWS));
+    }
+
+    /// Typing needs the keyboard: let the window activate for once, remembering who had it.
+    fn begin_edit(&mut self) {
+        if self.editing {
+            return;
+        }
+        unsafe {
+            self.prev_foreground = GetForegroundWindow();
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex & !(WS_EX_NOACTIVATE.0 as isize));
+            let _ = SetForegroundWindow(self.hwnd);
+            let _ = SetFocus(Some(self.hwnd));
+            SetTimer(Some(self.hwnd), T_CARET, CARET_MS, None);
+        }
+        self.editing = true;
+        self.caret = true;
+    }
+
+    /// Stop typing (`commit` adds the draft) and hand the keyboard back.
+    fn end_edit(&mut self, commit: bool) {
+        if commit && self.todo.add(&self.draft) {
+            self.draft.clear();
+            self.todo_scroll = 0;
+        }
+        if !self.editing {
+            return;
+        }
+        self.editing = false;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), T_CARET);
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
+            let prev = self.prev_foreground;
+            if !prev.is_invalid() && prev != self.hwnd && IsWindow(Some(prev)).as_bool() && GetForegroundWindow() == self.hwnd {
+                let _ = SetForegroundWindow(prev);
+            }
+        }
+        self.prev_foreground = HWND::default();
+        // The mouse may have left while typing kept the panel open.
+        if !self.tracking && !self.cursor_inside() {
+            self.notch.on_leave();
+            self.kick();
+        }
+    }
+
+    /// One WM_CHAR unit while typing in the add box.
+    fn type_char(&mut self, unit: u16) {
+        match unit {
+            0x0D => {
+                // Enter: save and stay in the box for the next task.
+                if self.todo.add(&self.draft) {
+                    self.draft.clear();
+                    self.todo_scroll = 0;
+                }
+            }
+            0x1B => {
+                self.draft.clear();
+                self.end_edit(false);
+            }
+            0x08 => {
+                self.draft.pop();
+            }
+            0xD800..=0xDBFF => self.high_surrogate = Some(unit),
+            0xDC00..=0xDFFF => {
+                if let Some(high) = self.high_surrogate.take() {
+                    if let Some(c) = char::decode_utf16([high, unit]).next().and_then(|r| r.ok()) {
+                        self.push_char(c);
+                    }
+                }
+            }
+            u if u >= 0x20 => {
+                if let Some(c) = char::from_u32(u as u32) {
+                    self.push_char(c);
+                }
+            }
+            _ => {}
+        }
+        self.caret = true;
+        self.redraw();
+    }
+
+    fn push_char(&mut self, c: char) {
+        if self.draft.chars().count() < todo::MAX_LEN {
+            self.draft.push(c);
         }
     }
 
@@ -346,6 +488,10 @@ impl App {
                         self.redraw();
                     }
                 }
+                T_CARET => {
+                    self.caret = !self.caret;
+                    self.redraw();
+                }
                 T_ALERT => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_ALERT); }
                     self.notch.on_alert_end();
@@ -369,20 +515,34 @@ impl App {
                 let hover = if self.notch.mode == Mode::Expanded {
                     let x = (lp.0 & 0xffff) as i16 as f32;
                     let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
-                    render::hit_button(self.win.2 as f32 / 2.0, self.scale, x, y, self.track.as_ref())
+                    self.hit(x, y)
                 } else { None };
                 if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
             }
             WM_SETCURSOR if self.hovered_button.is_some_and(|b| b.enabled(self.track.as_ref())) => {
-                unsafe { let _ = SetCursor(LoadCursorW(None, IDC_HAND).ok()); }
+                let cursor = if self.hovered_button == Some(Button::TodoInput) { IDC_IBEAM } else { IDC_HAND };
+                unsafe { let _ = SetCursor(LoadCursorW(None, cursor).ok()); }
                 return Some(LRESULT(1));
             }
             WM_MOUSELEAVE => {
                 self.hovered_button = None;
                 self.tracking = false;
                 unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
-                self.notch.on_leave();
+                // Typing keeps the panel open; it closes when the box lets go of the keyboard.
+                if !self.editing {
+                    self.notch.on_leave();
+                }
                 self.kick();
+            }
+            WM_CHAR if self.editing => self.type_char(wp.0 as u16),
+            // Lost the keyboard (clicked elsewhere): stop typing, keep the draft.
+            WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => self.end_edit(false),
+            // The wheel only scrolls a long to-do list; pages switch with the arrows.
+            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && self.page == Page::Todo => {
+                let delta = ((wp.0 >> 16) & 0xffff) as i16;
+                let max = self.todo.items.len().saturating_sub(TODO_ROWS);
+                self.todo_scroll = if delta > 0 { self.todo_scroll.saturating_sub(1) } else { (self.todo_scroll + 1).min(max) };
+                self.redraw();
             }
             WM_LBUTTONUP => {
                 let x = (lp.0 & 0xffff) as i16 as f32;
@@ -540,6 +700,16 @@ fn main() -> windows::core::Result<()> {
             started: Instant::now(),
             frame_ms: 0,
             hovered_button: None,
+            last_foreground: None,
+            page: Page::Music,
+            todo: todo::Todo::load(system::today()),
+            today: system::today(),
+            draft: String::new(),
+            editing: false,
+            caret: false,
+            todo_scroll: 0,
+            prev_foreground: HWND::default(),
+            high_surrogate: None,
         };
         app.refresh_audio();
         status::watch_lock_keys(hwnd);

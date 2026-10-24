@@ -10,6 +10,12 @@ use windows::Win32::System::SystemInformation::GetLocalTime;
 const WEEKDAYS: [&str; 7] = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
 
 /// ("16:04", "Thứ Bảy, 24 tháng 10")
+/// Local date as yyyymmdd (to-do "done today").
+pub fn today() -> u32 {
+    let t = unsafe { GetLocalTime() };
+    t.wYear as u32 * 10_000 + t.wMonth as u32 * 100 + t.wDay as u32
+}
+
 pub fn clock() -> (String, String) {
     let t = unsafe { GetLocalTime() };
     let day = WEEKDAYS[t.wDayOfWeek as usize % 7];

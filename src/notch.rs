@@ -27,7 +27,7 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
         (Mode::Peek, false) => [166.0, 34.0, 15.0],
         (Mode::Peek, true) => [232.0, 34.0, 15.0],
         (Mode::PeekMini, _) => [72.0, 8.0, 4.0],
-        (Mode::Expanded, _) => [440.0, 170.0, 28.0],
+        (Mode::Expanded, _) => [440.0, 186.0, 28.0],
         (Mode::Alert, _) => [360.0, 64.0, 22.0],
     }
 }
@@ -87,12 +87,13 @@ pub struct Notch {
     tall_alert: bool,
     obstructed: bool,
     clear_checks: u8,
+    busy_checks: u8,
     size: [Spring; 3],
 }
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, tall_alert: false, obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, tall_alert: false, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         for (s, t) in n.size.iter_mut().zip(target(n.mode, false)) {
             s.pos = t;
@@ -182,16 +183,22 @@ impl Notch {
         }
     }
 
-    /// Result of one obstruction check. Busy applies at once, clear needs two checks in a row
-    /// so a single quiet frame does not make the notch jump back.
+    /// Result of one obstruction check. Both directions need two checks in a row, so one odd
+    /// frame (a window mid-animation, a tooltip) neither shrinks the notch nor brings it back.
     pub fn report_busy(&mut self, busy: bool) {
         if busy {
-            self.obstructed = true;
             self.clear_checks = 0;
-        } else if self.obstructed {
-            self.clear_checks += 1;
-            if self.clear_checks >= 2 {
-                self.obstructed = false;
+            self.busy_checks = self.busy_checks.saturating_add(1);
+            if self.busy_checks >= 2 {
+                self.obstructed = true;
+            }
+        } else {
+            self.busy_checks = 0;
+            if self.obstructed {
+                self.clear_checks += 1;
+                if self.clear_checks >= 2 {
+                    self.obstructed = false;
+                }
             }
         }
         if self.is_resting() {
@@ -282,8 +289,13 @@ mod tests {
     }
 
     #[test]
-    fn busy_goes_mini_and_needs_two_clear_checks() {
+    fn busy_and_clear_both_need_two_checks() {
         let mut n = Notch::new(false);
+        n.report_busy(true);
+        assert_eq!(n.mode, Mode::Collapsed, "one busy frame (window mid-animation) is not enough");
+        n.report_busy(false);
+        n.report_busy(true);
+        assert_eq!(n.mode, Mode::Collapsed, "busy checks must be in a row");
         n.report_busy(true);
         assert_eq!(n.mode, Mode::Mini);
         n.report_busy(false);
@@ -298,6 +310,7 @@ mod tests {
         n.on_enter();
         n.on_dwell(true);
         n.report_busy(true);
+        n.report_busy(true);
         assert_eq!(n.mode, Mode::Expanded);
         n.on_leave();
         assert_eq!(n.mode, Mode::Mini);
@@ -306,6 +319,7 @@ mod tests {
     #[test]
     fn alert_banner_flow() {
         let mut n = Notch::new(false);
+        n.report_busy(true);
         n.report_busy(true);
         assert!(n.on_alert(false));
         assert_eq!(n.mode, Mode::Alert);

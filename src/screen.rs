@@ -10,6 +10,9 @@ pub enum Check {
     /// Normal desktop; `true` when the window under the notch has busy pixels beside the pill.
     /// Not sampled -> `false`, and the caller ignores it.
     Busy(bool),
+    /// The foreground window just changed, moved or resized (maximize / restore animation):
+    /// no verdict until it holds still.
+    Settling,
 }
 
 /// Strips sampled left and right of the collapsed pill (logical px).
@@ -18,8 +21,14 @@ const STRIP_W: f32 = 60.0;
 const STRIP_H: f32 = 36.0;
 /// A pixel is "edge" when a channel differs from its left neighbour by at least this much.
 const EDGE_DELTA: u8 = 14;
-/// This many edge pixels across both strips = busy (tabs, text, icons).
-const BUSY_EDGES: usize = 12;
+/// Edge pixels needed on EACH side of the pill to call it busy: a row of tabs or text running
+/// under the notch. A search box or a title in the middle of a title bar touches one side at most.
+const BUSY_EDGES_PER_SIDE: usize = 12;
+
+/// Busy only with text on both sides of the pill. `None` = that strip was not sampled.
+pub fn is_busy(left: Option<usize>, right: Option<usize>) -> bool {
+    matches!((left, right), (Some(l), Some(r)) if l >= BUSY_EDGES_PER_SIDE && r >= BUSY_EDGES_PER_SIDE)
+}
 
 /// Count edge pixels in a top-down BGRA buffer `w` pixels wide.
 pub fn edge_pixels(px: &[u8], w: usize) -> usize {
@@ -47,7 +56,8 @@ fn class_name(hwnd: HWND) -> String {
 /// `pill_w` = resting pill width (logical px); the strips sit just outside it.
 /// `sample` = false skips the pixel strips: the capture includes our own window, so they are only
 /// meaningful while the notch rests at its pill size (not hovered, open, bannering or animating).
-pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, sample: bool) -> Check {
+/// `last` = foreground window and rect seen by the previous call; sampling waits until they repeat.
+pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, sample: bool, last: &mut Option<(isize, RECT)>) -> Check {
     unsafe {
         let fg = GetForegroundWindow();
         if fg.is_invalid() || fg == own || !IsWindowVisible(fg).as_bool() || IsIconic(fg).as_bool() {
@@ -64,8 +74,14 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         if near(r.left, monitor.left) && near(r.top, monitor.top) && near(r.right, monitor.right) && near(r.bottom, monitor.bottom) {
             return Check::Fullscreen;
         }
+        let seen = Some((fg.0 as isize, r));
+        let still = *last == seen;
+        *last = seen;
         if !sample {
             return Check::Busy(false);
+        }
+        if !still {
+            return Check::Settling;
         }
         let half = (pill_w / 2.0 * scale) as i32;
         let gap = (STRIP_GAP * scale) as i32;
@@ -78,14 +94,8 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         }
         let y = r.top.max(top);
         let h = top + sh - y;
-        let strips = [center_x - half - gap - sw, center_x + half + gap];
-        let mut edges = 0;
-        for x in strips {
-            if x >= r.left + 2 && x + sw <= r.right - 2 && h > 3 {
-                edges += grab_edges(x, y, sw, h);
-            }
-        }
-        Check::Busy(edges >= BUSY_EDGES)
+        let strip = |x: i32| (x >= r.left + 2 && x + sw <= r.right - 2 && h > 3).then(|| grab_edges(x, y, sw, h));
+        Check::Busy(is_busy(strip(center_x - half - gap - sw), strip(center_x + half + gap)))
     }
 }
 
@@ -118,7 +128,15 @@ unsafe fn grab_edges(x: i32, y: i32, w: i32, h: i32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::edge_pixels;
+    use super::{edge_pixels, is_busy};
+
+    #[test]
+    fn busy_needs_text_on_both_sides() {
+        assert!(is_busy(Some(40), Some(30)), "tabs running under the notch");
+        assert!(!is_busy(Some(200), Some(0)), "one-sided content (search box, title) is not busy");
+        assert!(!is_busy(Some(200), None), "a strip outside the window does not count");
+        assert!(!is_busy(Some(11), Some(11)));
+    }
 
     #[test]
     fn flat_is_quiet_stripes_are_busy() {

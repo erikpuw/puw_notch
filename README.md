@@ -19,13 +19,17 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - **Thường** (150×30): giờ (chữ đậm 15 px). **Hover** 80 ms thì mở bảng (440×180).
 - **Pin** (laptop): vòng tròn mức pin cạnh giờ — xanh lá + tia sét khi đang sạc, đỏ khi ≤ 20%, trắng khi bình thường.
   PC không có pin thì không hiện gì. Khi có nhạc vòng pin nằm trước cột sóng.
-- **Mini** (44×4): khi cửa sổ phía dưới có nội dung lởm chởm sát notch (nhiều tab), hoặc bật "Notch tối giản".
+- **Mini** (44×4): khi có nhiều chữ ở **cả hai bên** notch (thanh nhiều tab), đo 2 lần liên tiếp và chỉ khi cửa sổ
+  đứng yên (phóng to / thu nhỏ / mở lại không làm nó tụt mini), hoặc bật "Notch tối giản".
   Ở mini chỉ chính vạch 44×4 nhận chuột.
 - **Ẩn khi fullscreen** (game, video) trên màn hình có notch; desktop/taskbar không tính. Không hiện banner khi đang ẩn.
 
-**Bảng mở rộng** (chỉ nhạc; notch không điều khiển gì khác, chỉ báo khi có thứ bật/tắt)
+**Bảng mở rộng** (2 trang, chuyển bằng mũi tên ‹ › hai bên, chấm trang ở dưới; không dùng lăn chuột để chuyển)
 - Dòng đầu: thứ/ngày · giờ, pin bên phải.
-- Ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26`, ⏮ ⏯ ⏭ ("Không có bài" khi không phát).
+- Trang **Nhạc**: ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26` (bấm để tua), ⏮ ⏯ ⏭.
+- Trang **Việc cần làm**: ô "Thêm việc…" (bấm để gõ, Enter lưu và gõ tiếp, Esc hủy), tick vòng tròn để xong
+  (chữ gạch ngang, xuống cuối), ✕ để xóa (hiện khi rê chuột), "Xong hôm nay", lăn chuột để cuộn khi > 3 việc.
+  Lưu ở `%APPDATA%\PuwNotch	odo.txt`; sang ngày mới thì việc đã xong hôm trước tự dọn.
 - Đọc thông báo: dùng trung tâm thông báo của Windows; notch chỉ báo khi có thông báo mới.
 
 **Banner tự giãn ra**
@@ -81,9 +85,10 @@ rồi tắt "Hiện banner thông báo" cho từng app.
 | `src/music.rs` | Luồng phụ đọc phiên media (GlobalSystemMediaTransportControls) mỗi 500 ms, lệnh ⏮⏯⏭, tải lời LRCLIB (WinRT HttpClient + JSON), tách LRC. |
 | `src/foobar.rs` | Đọc timeline thật từ status bar foobar2000 qua UI Automation, có giới hạn thời gian chờ và test parser. |
 | `src/itunes.rs` | Đọc/điều khiển iTunes qua COM, lấy ảnh bìa bằng file tạm và tự dọn file. |
+| `src/todo.rs` | Danh sách việc: thêm, tick, xóa, dọn theo ngày, đọc/ghi file (có test). |
 | `src/system.rs` | Giờ, pin (+ tiết kiệm pin) và sự kiện pin (có test), file cài đặt, khóa Run trong registry. |
 | `src/main.rs` | Cửa sổ, timer, chuột, tray, nối các phần. |
 
 ## Kế hoạch
 
-4. Pomodoro, nhắc uống nước, to-do, kệ file.
+4. Pomodoro, nhắc uống nước, kệ file.
