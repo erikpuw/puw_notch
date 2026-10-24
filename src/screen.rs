@@ -21,13 +21,15 @@ const STRIP_W: f32 = 60.0;
 const STRIP_H: f32 = 36.0;
 /// A pixel is "edge" when a channel differs from its left neighbour by at least this much.
 const EDGE_DELTA: u8 = 14;
-/// Edge pixels needed on EACH side of the pill to call it busy: a row of tabs or text running
-/// under the notch. A search box or a title in the middle of a title bar touches one side at most.
-const BUSY_EDGES_PER_SIDE: usize = 12;
+/// Edge pixels that make a strip "text": tabs or a title running up to the notch.
+const BUSY_EDGES: usize = 12;
 
-/// Busy only with text on both sides of the pill. `None` = that strip was not sampled.
+/// Busy when text sits right beside the pill on either side: tabs reaching under the notch from
+/// the left (Edge, Terminal) count as much as tabs on both sides. `None` = strip outside the window.
+/// Maximize / restore no longer trips it: `check` only samples a window that held still, and
+/// `Notch::report_busy` needs two checks in a row.
 pub fn is_busy(left: Option<usize>, right: Option<usize>) -> bool {
-    matches!((left, right), (Some(l), Some(r)) if l >= BUSY_EDGES_PER_SIDE && r >= BUSY_EDGES_PER_SIDE)
+    [left, right].into_iter().flatten().any(|n| n >= BUSY_EDGES)
 }
 
 /// Count edge pixels in a top-down BGRA buffer `w` pixels wide.
@@ -131,11 +133,13 @@ mod tests {
     use super::{edge_pixels, is_busy};
 
     #[test]
-    fn busy_needs_text_on_both_sides() {
-        assert!(is_busy(Some(40), Some(30)), "tabs running under the notch");
-        assert!(!is_busy(Some(200), Some(0)), "one-sided content (search box, title) is not busy");
-        assert!(!is_busy(Some(200), None), "a strip outside the window does not count");
-        assert!(!is_busy(Some(11), Some(11)));
+    fn busy_with_text_beside_the_notch() {
+        assert!(is_busy(Some(40), Some(30)), "tabs on both sides");
+        assert!(is_busy(Some(105), Some(0)), "Edge / Terminal tabs reaching the notch from the left");
+        assert!(is_busy(None, Some(60)), "the other strip outside the window");
+        assert!(!is_busy(Some(11), Some(0)), "a few stray pixels");
+        assert!(!is_busy(Some(0), Some(0)), "empty title bar");
+        assert!(!is_busy(None, None));
     }
 
     #[test]
