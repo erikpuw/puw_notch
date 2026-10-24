@@ -31,6 +31,7 @@ pub struct View<'a> {
     pub mode: Mode,
     pub size: [f32; 3],
     pub time: &'a str,
+    /// Short date for the panel header ("CN, 25/10").
     pub date: &'a str,
     /// None on a desktop PC: no ring, no label.
     pub battery: Option<Battery>,
@@ -61,6 +62,18 @@ pub enum Page {
 }
 
 pub const PAGES: [Page; 4] = [Page::Music, Page::Todo, Page::Calendar, Page::Health];
+
+impl Page {
+    /// Header of the page: icon, name, accent colour.
+    fn title(self) -> (&'static str, &'static str, (f32, f32, f32)) {
+        match self {
+            Page::Music => ("\u{E8D6}", "Nhạc", (0.72, 0.52, 1.0)),
+            Page::Todo => ("\u{E9D5}", "Việc cần làm", GREEN),
+            Page::Calendar => (ICON_CALENDAR, "Lịch hẹn", BLUE),
+            Page::Health => ("\u{E95E}", "Sức khỏe", (1.0, 0.42, 0.5)),
+        }
+    }
+}
 
 /// The add / edit box and the visible rows of a list page.
 pub struct ListView<'a> {
@@ -703,11 +716,31 @@ impl Renderer {
             let a = fade(110.0, 50.0);
             if a > 0.0 && v.mode != Mode::Alert {
                 let (hl, hr) = (l + PAD * s, r - PAD * s);
-                // Header: date · time on the left, battery on the right.
-                text(&format!("{}   {}", v.date, v.time), F_SMALL, rect(hl, 6.0 * s, hr - 100.0 * s, 28.0 * s), lead, grey(1.0, a))?;
-                if let Some(b) = v.battery {
-                    text(&b.label(), F_LABEL, rect(hr - 100.0 * s, 6.0 * s, hr, 28.0 * s), trail, grey(0.6, a))?;
+                // Header: the page's icon and name on the left (they morph with the page),
+                // short date · time and battery on the right.
+                let (ht, hb) = (6.0 * s, 28.0 * s);
+                let draw_title = |page: Page, dx: f32, ta: f32| -> Result<()> {
+                    if ta <= 0.01 {
+                        return Ok(());
+                    }
+                    let (icon, name, c) = page.title();
+                    text(icon, F_SMALL_ICON, rect(hl + dx, ht, hl + dx + 18.0 * s, hb), center, color(c.0, c.1, c.2, a * ta))?;
+                    text(name, F_SMALL, rect(hl + dx + 24.0 * s, ht, hl + dx + 170.0 * s, hb), lead, grey(1.0, a * ta))
+                };
+                match v.leaving {
+                    Some((from, t, dir)) => {
+                        let d = dir as f32 * 24.0 * s;
+                        draw_title(from, -d * t.min(1.0), (1.0 - t * 1.8).max(0.0))?;
+                        draw_title(v.page, d * (1.0 - ease_out_back(t)), (t * 1.6).min(1.0))?;
+                    }
+                    None => draw_title(v.page, 0.0, 1.0)?,
                 }
+                let battery_w = if v.battery.is_some() { 92.0 * s } else { 0.0 };
+                if let Some(b) = v.battery {
+                    text(&b.label(), F_LABEL, rect(hr - battery_w, ht, hr, hb), trail, grey(0.6, a))?;
+                }
+                let when_right = hr - battery_w - if v.battery.is_some() { 10.0 * s } else { 0.0 };
+                text(&format!("{} · {}", v.date, v.time), F_LABEL, rect(hl + 170.0 * s, ht, when_right, hb), trail, grey(0.85, a))?;
                 // Page content sits between the side arrows.
                 let (cl, cr) = (l + SIDE * s, r - SIDE * s);
                 let lv = &v.list;
@@ -854,7 +887,7 @@ impl Renderer {
                             draw_input("Thêm việc… (vd: Họp nhóm 20:00)")?;
                             let (open, done_today) = if current { lv.counts } else { (v.todos.iter().filter(|i| i.done.is_none()).count(), 0) };
                             let cy = COUNT_Y * s;
-                            text(&format!("Việc cần làm · {open}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
+                            text(&format!("Chưa xong · {open}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
                             text(&format!("✓ Xong hôm nay {done_today}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), trail,
                                 if done_today > 0 { solid(GREEN, a) } else { grey(0.6, a) })?;
                             if v.todos.is_empty() {
@@ -1171,7 +1204,7 @@ mod tests {
                 duration_ms: 210_000, playing: true, can_toggle: true, can_next: true,
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
-                date: "Thứ Bảy, 24 tháng 10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
+                date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], appts: &[],
                 list: ListView { counts: (0, 0), now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },

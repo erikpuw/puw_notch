@@ -67,6 +67,7 @@ struct App {
     last_frame: Instant,
     taskbar_created: u32,
     time: String,
+    /// Short date for the panel header.
     date: String,
     battery: Option<system::Battery>,
     notifications: Option<notify::Reader>,

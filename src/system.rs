@@ -7,9 +7,8 @@ use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::System::Registry::*;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
-const WEEKDAYS: [&str; 7] = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
+const WEEKDAYS: [&str; 7] = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 
-/// ("16:04", "Thứ Bảy, 24 tháng 10")
 /// Local time as yyyymmddHHMM (to-do reminders).
 pub fn now_stamp() -> u64 {
     let t = unsafe { GetLocalTime() };
@@ -22,10 +21,11 @@ pub fn today() -> u32 {
     t.wYear as u32 * 10_000 + t.wMonth as u32 * 100 + t.wDay as u32
 }
 
+/// ("16:04", "T7, 24/10"): time for the pill, short date for the panel header.
 pub fn clock() -> (String, String) {
     let t = unsafe { GetLocalTime() };
     let day = WEEKDAYS[t.wDayOfWeek as usize % 7];
-    (format!("{:02}:{:02}", t.wHour, t.wMinute), format!("{day}, {} tháng {}", t.wDay, t.wMonth))
+    (format!("{:02}:{:02}", t.wHour, t.wMinute), format!("{day}, {:02}/{:02}", t.wDay, t.wMonth))
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
