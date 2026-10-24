@@ -27,6 +27,7 @@ use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Power::{RegisterPowerSettingNotification, POWERBROADCAST_SETTING};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -37,7 +38,8 @@ use connectivity::{Event, Net, RadioType, WM_CONN};
 use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_MS};
 use music::WM_MUSIC;
 use i18n::tr;
-use status::{WM_LOCKKEY, WM_VOLKEY};
+use audio::WM_VOLUME;
+use status::WM_LOCKKEY;
 use notify::Toast;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, PAGES};
 
@@ -49,7 +51,6 @@ const T_ANIM: usize = 1;
 const T_CHECK: usize = 2;
 const T_DWELL: usize = 3;
 const T_ALERT: usize = 4;
-const T_VOLKEY: usize = 5;
 const T_CARET: usize = 6;
 /// Page switch morph length.
 const PAGE_MORPH_S: f32 = 0.32;
@@ -81,10 +82,9 @@ struct App {
     notifications: Option<notify::Reader>,
     /// What the Alert banner shows right now.
     banner: Option<Toast>,
-    brightness: Option<status::Brightness>,
+    /// Last brightness Windows reported; the first report (sent on registering) is not a change.
     last_brightness: Option<u8>,
     audio: Option<audio::Audio>,
-    volume: Option<(f32, bool)>,
     mic_muted: Option<bool>,
     music: music::Music,
     track: Option<music::Track>,
@@ -258,16 +258,18 @@ impl App {
         x >= cx - nw / 2.0 - m && x <= cx + nw / 2.0 + m && y >= 0.0 && y <= nh + m
     }
 
-    /// Re-read speaker/mic. A mic mute change from anywhere (laptop mic key, Windows settings,
-    /// a call app) gets a banner.
+    /// Keep the speaker callback on the default device and re-read the mic. A mic mute change
+    /// from anywhere (laptop mic key, Windows settings, a call app) gets a banner.
     fn refresh_audio(&mut self) {
-        let Some(a) = &self.audio else { return };
-        let now = (a.volume(), a.mic_muted());
-        let mic_flip = match (self.mic_muted, now.1) {
+        let hwnd = self.hwnd;
+        let Some(a) = &mut self.audio else { return };
+        a.watch_speaker(hwnd);
+        let now = a.mic_muted();
+        let mic_flip = match (self.mic_muted, now) {
             (Some(before), Some(after)) if before != after => Some(after),
             _ => None,
         };
-        (self.volume, self.mic_muted) = now;
+        self.mic_muted = now;
         if let Some(muted) = mic_flip {
             let (title, icon) = if muted { (tr("Đã tắt mic", "Mic off"), render::ICON_MIC_OFF) } else { (tr("Đã bật mic", "Mic on"), render::ICON_MIC) };
             self.show_banner(status_toast("Mic", title.to_string(), "", None, icon), STATUS_MS);
@@ -322,13 +324,6 @@ impl App {
         if let Some(t) = new.into_iter().last() {
             self.show_banner(t, ALERT_MS);
         }
-
-        let level = self.brightness.as_ref().and_then(|b| b.percent());
-        if level.is_some() && self.last_brightness.is_some() && level != self.last_brightness {
-            let p = level.unwrap_or(0);
-            self.show_banner(status_toast(tr("Màn hình", "Display"), format!("{} {p}%", tr("Độ sáng", "Brightness")), "", Some(p as f32 / 100.0), render::ICON_BRIGHTNESS), STATUS_MS);
-        }
-        self.last_brightness = level.or(self.last_brightness);
 
         if changed && !self.animating {
             self.redraw();
@@ -651,18 +646,6 @@ impl App {
                     self.notch.on_dwell(inside);
                     self.kick();
                 }
-                T_VOLKEY => {
-                    unsafe { let _ = KillTimer(Some(self.hwnd), T_VOLKEY); }
-                    self.refresh_audio();
-                    if let Some((level, muted)) = self.volume {
-                        let pct = (level * 100.0).round();
-                        let title = if muted { tr("Đã tắt tiếng", "Muted").to_string() } else { format!("{} {pct}%", tr("Âm lượng", "Volume")) };
-                        self.show_banner(status_toast(tr("Loa", "Speaker"), title, "", Some(if muted { 0.0 } else { level }), if muted { render::ICON_MUTE } else { render::ICON_VOLUME }), STATUS_MS);
-                    }
-                    if !self.animating {
-                        self.redraw();
-                    }
-                }
                 T_CARET => {
                     self.caret = !self.caret;
                     self.redraw();
@@ -730,10 +713,30 @@ impl App {
                 let (name, on) = status::lock_state(wp.0);
                 self.show_banner(status_toast(tr("Bàn phím", "Keyboard"), name.to_string(), on_off(on), None, render::ICON_KEYBOARD), STATUS_MS);
             }
-            // Windows applies the key after the hook returns; read the level a moment later.
-            WM_VOLKEY => unsafe {
-                SetTimer(Some(self.hwnd), T_VOLKEY, 60, None);
-            },
+            // From the speaker callback: any change, keys, taskbar slider or an app.
+            WM_VOLUME => {
+                let (pct, muted) = (wp.0 as u8, lp.0 != 0);
+                let title = if muted { tr("Đã tắt tiếng", "Muted").to_string() } else { format!("{} {pct}%", tr("Âm lượng", "Volume")) };
+                let level = if muted { 0.0 } else { pct as f32 / 100.0 };
+                self.show_banner(status_toast(tr("Loa", "Speaker"), title, "", Some(level), if muted { render::ICON_MUTE } else { render::ICON_VOLUME }), STATUS_MS);
+                if !self.animating {
+                    self.redraw();
+                }
+            }
+            WM_POWERBROADCAST if wp.0 as u32 == PBT_POWERSETTINGCHANGE => {
+                let setting = unsafe { (lp.0 as *const POWERBROADCAST_SETTING).as_ref() };
+                let level = setting.and_then(|ps| {
+                    let data = unsafe { std::slice::from_raw_parts(ps.Data.as_ptr(), ps.DataLength as usize) };
+                    status::brightness_setting(&ps.PowerSetting, data)
+                });
+                if let Some(p) = level {
+                    if self.last_brightness.is_some_and(|before| before != p) {
+                        self.show_banner(status_toast(tr("Màn hình", "Display"), format!("{} {p}%", tr("Độ sáng", "Brightness")), "", Some(p as f32 / 100.0), render::ICON_BRIGHTNESS), STATUS_MS);
+                    }
+                    self.last_brightness = Some(p);
+                }
+                return Some(LRESULT(1));
+            }
             WM_MUSIC => {
                 self.refresh_music();
                 if !self.animating {
@@ -938,10 +941,8 @@ fn main() -> windows::core::Result<()> {
             battery: system::battery(),
             notifications: notify::Reader::open(),
             banner: None,
-            brightness: status::Brightness::new(),
             last_brightness: None,
             audio: audio::Audio::new(),
-            volume: None,
             mic_muted: None,
             music: music::Music::start(hwnd),
             track: None,
@@ -968,6 +969,7 @@ fn main() -> windows::core::Result<()> {
             high_surrogate: None,
         };
         app.refresh_audio();
+        let _ = RegisterPowerSettingNotification(HANDLE(hwnd.0), &status::VIDEO_BRIGHTNESS, DEVICE_NOTIFY_WINDOW_HANDLE);
         status::watch_lock_keys(hwnd);
         connectivity::watch(hwnd);
         app.layout();

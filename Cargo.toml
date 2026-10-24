@@ -7,6 +7,8 @@ description = "PUW Notch: a living notch for Windows"
 [dependencies]
 # Already pulled in by `windows`; named here because D2D point types come from it.
 windows-numerics = "0.2"
+# Already pulled in by `windows`; the `#[implement]` macro (audio volume callback) expands to it.
+windows-core = "0.61"
 
 [dependencies.windows]
 version = "0.61"
@@ -32,7 +34,6 @@ features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
-    "Win32_System_Wmi",
     "Win32_System_Ole",
     "Win32_System_WinRT",
     "Win32_Media_Audio",
