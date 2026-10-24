@@ -2,6 +2,10 @@
 
 Notch "sống" cho Windows, viết bằng Rust (Win32 + Direct2D, không WebView). Exe khoảng 210 KB.
 
+Mã nguồn: https://github.com/erikpuw/puw_notch
+
+[![Mời tôi một ly cà phê](https://img.shields.io/badge/M%E1%BB%9Di%20t%C3%B4i%20m%E1%BB%99t%20ly%20c%C3%A0%20ph%C3%AA-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/erikpuw)
+
 ## Build & chạy
 
 ```bash
@@ -69,7 +73,7 @@ chuyển trang có hiệu ứng morph: trang cũ trượt ra mờ dần, trang m
 
 **Icon app**: `assets/puw.ico` / `assets/puw.res` (vẽ bằng `assets/make_icon.py`), nhúng vào exe qua `build.rs`; dùng cho tray.
 
-**Ngôn ngữ**: tray → *Ngôn ngữ / Language* → Tiếng Việt / English. Đổi xong áp dụng ngay (tiêu đề trang, ngày "Sun, 25/10", banner, nhắc nhở, menu) và lưu `lang=vi|en`. Ô nhập lịch hẹn hiểu cả "today" / "tomorrow", việc cần làm hiểu "at 16:00".
+**Ngôn ngữ**: tray → *Ngôn ngữ* (bản English: *Language*) → Tiếng Việt / English. Đổi xong áp dụng ngay (tiêu đề trang, ngày "Sun, 25/10", banner, nhắc nhở, menu) và lưu `lang=vi|en`. Ô nhập lịch hẹn hiểu cả "today" / "tomorrow", việc cần làm hiểu "at 16:00".
 
 **Khác**: tray (Notch tối giản, Khởi động cùng Windows, Ngôn ngữ, Thoát), chạy một bản duy nhất, cài đặt ở `%APPDATA%\PuwNotch\settings.txt`.
 Chọn **Thoát** sẽ kết thúc tiến trình và gỡ biểu tượng tray.
@@ -110,3 +114,7 @@ rồi tắt "Hiện banner thông báo" cho từng app.
 ## Kế hoạch
 
 4. Pomodoro, kệ file.
+
+## Ủng hộ
+
+Nếu PUW Notch giúp ích cho bạn, mời tôi một ly cà phê ☕: https://paypal.me/erikpuw

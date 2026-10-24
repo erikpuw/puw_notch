@@ -592,7 +592,7 @@ impl App {
             if let Ok(langs) = CreatePopupMenu() {
                 let _ = AppendMenuW(langs, MF_STRING | check(!english), MENU_LANG_VI, w!("Tiếng Việt"));
                 let _ = AppendMenuW(langs, MF_STRING | check(english), MENU_LANG_EN, w!("English"));
-                let _ = AppendMenuW(menu, MF_POPUP, langs.0 as usize, w!("Ngôn ngữ / Language"));
+                let _ = AppendMenuW(menu, MF_POPUP, langs.0 as usize, &text(tr("Ngôn ngữ", "Language")));
             }
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, &text(tr("Thoát", "Quit")));
