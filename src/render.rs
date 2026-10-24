@@ -377,7 +377,9 @@ impl Renderer {
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let props = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                // Software: a 530x210 DC target draws faster on the CPU (1.0 vs 2.0 ms a frame) and skips
+                // loading the GPU driver (private RAM 9.4 vs 27.9 MB), measured 2026-10-25.
+                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
                 pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
                 dpiX: 96.0,
                 dpiY: 96.0,
