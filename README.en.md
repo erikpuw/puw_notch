@@ -2,7 +2,7 @@
 
 [Tiếng Việt](README.md) · **English**
 
-A Dynamic Island–style notch for Windows. Rust + Direct2D, ~210 KB exe, no WebView.
+A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no WebView.
 
 [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/erikpuw)
 
