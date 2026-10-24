@@ -36,6 +36,7 @@ pub struct View<'a> {
     pub music: Option<&'a Track>,
     /// Seconds, drives the equaliser bars.
     pub phase: f32,
+    pub page: Page,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -49,7 +50,19 @@ pub enum Button {
     Previous,
     PlayPause,
     Next,
+    PagePrev,
+    PageNext,
 }
+
+/// Pages of the open panel, switched with the side arrows or the mouse wheel.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Page {
+    Music,
+    Notifications,
+    Controls,
+}
+
+pub const PAGES: [Page; 3] = [Page::Music, Page::Notifications, Page::Controls];
 
 const PAD: f32 = 24.0;
 /// Concave flares joining the notch sides to the screen edge: grow with the notch, capped.
@@ -57,54 +70,55 @@ const EAR_RATIO: f32 = 0.35;
 const EAR_MAX: f32 = 14.0;
 const BTN: f32 = 36.0;
 const MEDIA_BTN: f32 = 32.0;
-/// Panel rows (logical px from the top). The music card only exists while live.
-const MUSIC_TOP: f32 = 66.0;
-const MUSIC_H: f32 = 86.0;
-const CARD_H: f32 = 64.0;
-const COVER: f32 = 70.0;
+const ARROW: f32 = 24.0;
+/// Page content sits between the side arrows (logical px from the panel edge).
+const SIDE: f32 = 48.0;
+const COVER: f32 = 64.0;
+const DOTS_Y: f32 = 166.0;
 
-fn card_top(live: bool) -> f32 {
-    if live { MUSIC_TOP + MUSIC_H + 8.0 } else { 68.0 }
-}
-
-fn controls_top(live: bool) -> f32 {
-    card_top(live) + CARD_H + 14.0
-}
-
-/// Control rects in window px for the settled Expanded panel centred at `cx`.
-pub fn buttons(cx: f32, scale: f32, live: bool) -> Vec<(Button, D2D_RECT_F)> {
-    let w = target(Mode::Expanded, live)[0];
-    let x0 = cx / scale - w / 2.0 + PAD;
-    let inner = w - 2.0 * PAD;
-    let r = |a: f32, b: f32, top: f32, size: f32| rect((x0 + a) * scale, top * scale, (x0 + b) * scale, (top + size) * scale);
-    let gap = 8.0;
-    let ct = controls_top(live);
-    let right = |i: f32| inner - BTN * (i + 1.0) - gap * i;
-    let mut out = vec![
-        (Button::SpeakerMute, r(0.0, BTN, ct, BTN)),
-        (Button::VolDown, r(BTN + gap, 2.0 * BTN + gap, ct, BTN)),
-        (Button::VolBar, r(2.0 * (BTN + gap), right(2.0) - gap, ct, BTN)),
-        (Button::VolUp, r(right(2.0), right(2.0) + BTN, ct, BTN)),
-        (Button::Mic, r(right(1.0), right(1.0) + BTN, ct, BTN)),
-        (Button::Bluetooth, r(right(0.0), right(0.0) + BTN, ct, BTN)),
-    ];
-    if live {
-        let top = MUSIC_TOP + 8.0;
-        let m = |i: f32| inner - 10.0 - MEDIA_BTN * (i + 1.0) - 6.0 * i;
-        out.push((Button::Previous, r(m(2.0), m(2.0) + MEDIA_BTN, top, MEDIA_BTN)));
-        out.push((Button::PlayPause, r(m(1.0), m(1.0) + MEDIA_BTN, top, MEDIA_BTN)));
-        out.push((Button::Next, r(m(0.0), m(0.0) + MEDIA_BTN, top, MEDIA_BTN)));
+/// Clickable rects in window px for `page` of the settled panel centred at `cx`.
+pub fn buttons(cx: f32, scale: f32, page: Page) -> Vec<(Button, D2D_RECT_F)> {
+    let w = target(Mode::Expanded, false)[0];
+    let h = target(Mode::Expanded, false)[1];
+    let left = cx / scale - w / 2.0;
+    // (x from panel left, y, width, height) in logical px
+    let r = |x: f32, y: f32, bw: f32, bh: f32| rect((left + x) * scale, y * scale, (left + x + bw) * scale, (y + bh) * scale);
+    let mid = h / 2.0 + 4.0 - ARROW / 2.0;
+    let mut out = vec![(Button::PagePrev, r(14.0, mid, ARROW, ARROW)), (Button::PageNext, r(w - 14.0 - ARROW, mid, ARROW, ARROW))];
+    let (cl, cr) = (SIDE, w - SIDE);
+    match page {
+        Page::Music => {
+            let y = 124.0;
+            let c = w / 2.0 - MEDIA_BTN / 2.0;
+            out.push((Button::Previous, r(c - 48.0, y, MEDIA_BTN, MEDIA_BTN)));
+            out.push((Button::PlayPause, r(c, y, MEDIA_BTN, MEDIA_BTN)));
+            out.push((Button::Next, r(c + 48.0, y, MEDIA_BTN, MEDIA_BTN)));
+        }
+        Page::Notifications => {}
+        Page::Controls => {
+            let y = 54.0;
+            out.push((Button::SpeakerMute, r(cl, y, BTN, BTN)));
+            out.push((Button::VolDown, r(cl + BTN + 8.0, y, BTN, BTN)));
+            let bar_l = cl + 2.0 * (BTN + 8.0);
+            let bar_r = cr - BTN - 8.0;
+            out.push((Button::VolBar, r(bar_l, y, bar_r - bar_l, BTN)));
+            out.push((Button::VolUp, r(cr - BTN, y, BTN, BTN)));
+            let y2 = 106.0;
+            let half = (cr - cl - 10.0) / 2.0;
+            out.push((Button::Mic, r(cl, y2, half, BTN)));
+            out.push((Button::Bluetooth, r(cl + half + 10.0, y2, half, BTN)));
+        }
     }
     out
 }
 
 /// Text styles, indexed by these constants.
 const F_SMALL: usize = 0;
-const F_BIG: usize = 1;
-const F_BODY: usize = 2;
-const F_LABEL: usize = 3;
-const F_ICON: usize = 4;
-const F_TITLE: usize = 5;
+const F_BODY: usize = 1;
+const F_LABEL: usize = 2;
+const F_ICON: usize = 3;
+const F_TITLE: usize = 4;
+const F_LABEL_ICON: usize = 5;
 
 const ICON_VOLUME: &str = "\u{E767}";
 const ICON_MUTE: &str = "\u{E74F}";
@@ -117,6 +131,8 @@ const ICON_PLAY: &str = "\u{E768}";
 const ICON_PAUSE: &str = "\u{E769}";
 const ICON_NEXT: &str = "\u{E893}";
 const ICON_NOTE: &str = "\u{E8D6}";
+const ICON_LEFT: &str = "\u{E76B}";
+const ICON_RIGHT: &str = "\u{E76C}";
 
 pub struct Renderer {
     factory: ID2D1Factory,
@@ -216,12 +232,12 @@ impl Renderer {
             };
             let ui = w!("Segoe UI");
             let set = vec![
-                make(ui, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
-                make(ui, 36.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(ui, 15.0, DWRITE_FONT_WEIGHT_BOLD)?,
                 make(ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(ui, 12.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(w!("Segoe Fluent Icons"), 16.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(ui, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(w!("Segoe Fluent Icons"), 11.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -282,7 +298,6 @@ impl Renderer {
         let cover = v.music.and_then(|t| self.cover(t));
         let rt = &self.rt;
         let s = scale;
-        let live = v.music.is_some();
         let [nw, nh, nr] = v.size.map(|d| d * s);
         let cx = w as f32 / 2.0;
         let (l, r) = (cx - nw / 2.0, cx + nw / 2.0);
@@ -368,94 +383,132 @@ impl Renderer {
                 }
             }
 
-            let a = fade(130.0, 60.0);
+            let a = fade(110.0, 50.0);
             if a > 0.0 && v.mode != Mode::Alert {
-                let (pl, pr) = (l + PAD * s, r - PAD * s);
-                text(v.time, F_BIG, rect(pl, 12.0 * s, pr, 60.0 * s), lead, grey(1.0, a))?;
-                text(v.date, F_BODY, rect(pl, 16.0 * s, pr, 36.0 * s), trail, grey(0.75, a))?;
-                text(v.battery, F_BODY, rect(pl, 36.0 * s, pr, 56.0 * s), trail, grey(0.75, a))?;
+                let (cl, cr) = (l + SIDE * s, r - SIDE * s);
+                // Header shared by every page: battery · date · time.
+                text(v.battery, F_LABEL, rect(l + PAD * s, 6.0 * s, cl + 60.0 * s, 28.0 * s), lead, grey(0.6, a))?;
+                text(&format!("{}   {}", v.date, v.time), F_SMALL, rect(cl, 6.0 * s, cr, 28.0 * s), center, grey(1.0, a))?;
 
-                let btns = buttons(cx, s, live);
-                if let Some(t) = v.music {
-                    let card = rect(pl, MUSIC_TOP * s, pr, (MUSIC_TOP + MUSIC_H) * s);
-                    rt.FillRoundedRectangle(&rounded(card, 14.0 * s), &brush(grey(0.11, a))?);
-                    let ct = card.top + 8.0 * s;
-                    draw_cover(rect(pl + 8.0 * s, ct, pl + (8.0 + COVER) * s, ct + COVER * s), 10.0 * s, a)?;
-                    let tl = pl + (COVER + 20.0) * s;
-                    let first_btn = btns.iter().find(|b| b.0 == Button::Previous).map_or(pr, |b| b.1.left);
-                    let title = if t.title.is_empty() { "Đang phát" } else { &t.title };
-                    text(title, F_TITLE, rect(tl, ct, first_btn - 6.0 * s, ct + 18.0 * s), lead, grey(1.0, a))?;
-                    text(&t.artist, F_BODY, rect(tl, ct + 18.0 * s, first_btn - 6.0 * s, ct + 34.0 * s), lead, grey(0.65, a))?;
-                    let lyric = t.lyric_now().unwrap_or(if t.lyrics.is_empty() { "" } else { "♪" });
-                    text(lyric, F_BODY, rect(tl, ct + 38.0 * s, pr - 12.0 * s, ct + 56.0 * s), lead, grey(0.95, a))?;
-                    if t.duration_ms > 0 {
-                        let pos = t.position_ms();
-                        let th = 4.0 * s;
-                        let by = ct + 64.0 * s;
-                        let label_w = 40.0 * s;
-                        let (bl, brr) = (tl + label_w, pr - 12.0 * s - label_w);
-                        text(&clock(pos), F_LABEL, rect(tl, by - 8.0 * s, bl - 6.0 * s, by + 12.0 * s), lead, grey(0.6, a))?;
-                        text(&format!("-{}", clock(t.duration_ms - pos)), F_LABEL, rect(brr + 6.0 * s, by - 8.0 * s, pr - 12.0 * s, by + 12.0 * s), trail, grey(0.6, a))?;
-                        let bar = |right: f32| rounded(rect(bl, by, right, by + th), th / 2.0);
-                        let p = pos as f32 / t.duration_ms as f32;
-                        rt.FillRoundedRectangle(&bar(brr), &brush(grey(0.25, a))?);
-                        rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p.clamp(0.0, 1.0)), &brush(grey(1.0, a))?);
-                    }
-                }
-
-                let card = rounded(rect(pl, card_top(live) * s, pr, (card_top(live) + CARD_H) * s), 14.0 * s);
-                rt.FillRoundedRectangle(&card, &brush(grey(0.11, a))?);
-                let (tl, tr) = (pl + 14.0 * s, pr - 14.0 * s);
-                let top = card.rect.top;
-                match v.toast {
-                    Some(t) => {
-                        text(&t.app, F_LABEL, rect(tl, top + 6.0 * s, tr, top + 22.0 * s), lead, grey(0.6, a))?;
-                        text(&t.title, F_TITLE, rect(tl, top + 22.0 * s, tr, top + 40.0 * s), lead, grey(1.0, a))?;
-                        text(&t.body, F_BODY, rect(tl, top + 40.0 * s, tr, top + 58.0 * s), lead, grey(0.75, a))?;
-                    }
-                    None => text("Không có thông báo", F_BODY, card.rect, center, grey(0.55, a))?,
-                }
-
-                for &(b, br) in &btns {
-                    if b == Button::VolBar {
-                        let level = v.volume.map_or(0.0, |(lv, _)| lv);
-                        let track_h = 6.0 * s;
-                        let my = (br.top + br.bottom) / 2.0;
-                        let track = |right: f32| rounded(rect(br.left, my - track_h / 2.0, right, my + track_h / 2.0), track_h / 2.0);
-                        rt.FillRoundedRectangle(&track(br.right), &brush(grey(0.25, a))?);
-                        rt.FillRoundedRectangle(&track(br.left + (br.right - br.left) * level), &brush(grey(1.0, a))?);
-                        if let Some((level, _)) = v.volume {
-                            let label = format!("{}%", (level * 100.0).round());
-                            text(&label, F_LABEL, rect(br.left, br.top - 14.0 * s, br.right, br.top + 4.0 * s), center, grey(0.6, a))?;
+                let btns = buttons(cx, s, v.page);
+                match v.page {
+                    Page::Music => {
+                        let top = 38.0 * s;
+                        draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 10.0 * s, a)?;
+                        let tl = cl + (COVER + 12.0) * s;
+                        match v.music {
+                            Some(t) => {
+                                let title = if t.title.is_empty() { "Đang phát" } else { &t.title };
+                                text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
+                                text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, grey(0.65, a))?;
+                                let lyric = t.lyric_now().unwrap_or(if t.lyrics.is_empty() { "" } else { "♪" });
+                                text(lyric, F_BODY, rect(tl, top + 40.0 * s, cr, top + 58.0 * s), lead, grey(0.95, a))?;
+                            }
+                            None => text("Không có bài", F_TITLE, rect(tl, top, cr, top + COVER * s), lead, grey(1.0, a))?,
                         }
-                        continue;
+                        let pos = v.music.map_or(0, |t| t.position_ms());
+                        let dur = v.music.map_or(0, |t| t.duration_ms);
+                        let by = 112.0 * s;
+                        let lw = 40.0 * s;
+                        let (bl, brr) = (cl + lw, cr - lw);
+                        text(&clock(pos), F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, grey(0.6, a))?;
+                        text(&format!("-{}", clock(dur.saturating_sub(pos))), F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, grey(0.6, a))?;
+                        let th = 4.0 * s;
+                        let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
+                        rt.FillRoundedRectangle(&bar(brr), &brush(grey(0.25, a))?);
+                        if dur > 0 {
+                            let p = (pos as f32 / dur as f32).clamp(0.0, 1.0);
+                            rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &brush(grey(1.0, a))?);
+                        }
                     }
-                    let playing = v.music.is_some_and(|t| t.playing);
-                    // (icon, lit = white button with black icon, warn = red)
-                    let (icon, lit, warn) = match b {
-                        Button::SpeakerMute => match v.volume {
-                            Some((_, true)) => (ICON_MUTE, false, true),
-                            _ => (ICON_VOLUME, false, false),
-                        },
-                        Button::VolDown => (ICON_MINUS, false, false),
-                        Button::VolUp => (ICON_PLUS, false, false),
-                        Button::Mic => (ICON_MIC, false, v.mic_muted == Some(true)),
-                        Button::Bluetooth => (ICON_BT, v.bt == Bt::On, false),
-                        Button::Previous => (ICON_PREV, false, false),
-                        Button::PlayPause => (if playing { ICON_PAUSE } else { ICON_PLAY }, true, false),
-                        Button::Next => (ICON_NEXT, false, false),
-                        Button::VolBar => unreachable!(),
-                    };
-                    let missing = (b == Button::Mic && v.mic_muted.is_none()) || (b == Button::Bluetooth && v.bt == Bt::Missing);
-                    let bg = if warn { color(1.0, 0.27, 0.23, a) } else if lit { grey(1.0, a) } else { grey(0.17, a) };
-                    let fg = if lit { grey(0.0, a) } else { grey(1.0, if missing { a * 0.35 } else { a }) };
-                    let circle = D2D1_ELLIPSE {
-                        point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
-                        radiusX: (br.right - br.left) / 2.0,
-                        radiusY: (br.bottom - br.top) / 2.0,
-                    };
-                    rt.FillEllipse(&circle, &brush(bg)?);
-                    text(icon, F_ICON, br, center, fg)?;
+                    Page::Notifications => {
+                        text("Thông báo", F_LABEL, rect(cl, 34.0 * s, cr, 50.0 * s), lead, grey(0.6, a))?;
+                        let card = rounded(rect(cl, 54.0 * s, cr, 146.0 * s), 14.0 * s);
+                        rt.FillRoundedRectangle(&card, &brush(grey(0.11, a))?);
+                        let (tl, tr) = (cl + 14.0 * s, cr - 14.0 * s);
+                        let top = card.rect.top;
+                        match v.toast {
+                            Some(t) => {
+                                text(&t.app, F_LABEL, rect(tl, top + 12.0 * s, tr, top + 28.0 * s), lead, grey(0.6, a))?;
+                                text(&t.title, F_TITLE, rect(tl, top + 32.0 * s, tr, top + 52.0 * s), lead, grey(1.0, a))?;
+                                text(&t.body, F_BODY, rect(tl, top + 54.0 * s, tr, top + 74.0 * s), lead, grey(0.75, a))?;
+                            }
+                            None => text("Không có thông báo", F_BODY, card.rect, center, grey(0.55, a))?,
+                        }
+                    }
+                    Page::Controls => {}
+                }
+
+                // Page dots: current one is a short white pill.
+                let n = PAGES.len() as f32;
+                let current = PAGES.iter().position(|p| *p == v.page).unwrap_or(0) as f32;
+                let (dot, wide, gap) = (5.0 * s, 14.0 * s, 5.0 * s);
+                let total = wide + (n - 1.0) * dot + (n - 1.0) * gap;
+                let mut dx = cx - total / 2.0;
+                for i in 0..PAGES.len() {
+                    let dw = if i as f32 == current { wide } else { dot };
+                    let c = if i as f32 == current { grey(1.0, a) } else { grey(0.45, a) };
+                    rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &brush(c)?);
+                    dx += dw + gap;
+                }
+
+                let playing = v.music.is_some_and(|t| t.playing);
+                for &(b, br) in &btns {
+                    match b {
+                        Button::VolBar => {
+                            let level = v.volume.map_or(0.0, |(lv, _)| lv);
+                            let track_h = 6.0 * s;
+                            let my = (br.top + br.bottom) / 2.0;
+                            let track = |right: f32| rounded(rect(br.left, my - track_h / 2.0, right, my + track_h / 2.0), track_h / 2.0);
+                            rt.FillRoundedRectangle(&track(br.right), &brush(grey(0.25, a))?);
+                            rt.FillRoundedRectangle(&track(br.left + (br.right - br.left) * level), &brush(grey(1.0, a))?);
+                            if let Some((level, _)) = v.volume {
+                                let label = format!("Âm lượng {}%", (level * 100.0).round());
+                                text(&label, F_LABEL, rect(br.left, br.top - 16.0 * s, br.right, br.top + 2.0 * s), center, grey(0.6, a))?;
+                            }
+                        }
+                        Button::Mic | Button::Bluetooth => {
+                            // Wide pill: icon + label + state.
+                            let (icon, label, on, missing) = if b == Button::Mic {
+                                (ICON_MIC, "Mic", v.mic_muted == Some(false), v.mic_muted.is_none())
+                            } else {
+                                (ICON_BT, "Bluetooth", v.bt == Bt::On, v.bt == Bt::Missing)
+                            };
+                            let warn = b == Button::Mic && v.mic_muted == Some(true);
+                            let bg = if warn { color(1.0, 0.27, 0.23, a) } else if on { grey(1.0, a) } else { grey(0.17, a) };
+                            let fg = if on && !warn { grey(0.0, a) } else { grey(1.0, if missing { a * 0.35 } else { a }) };
+                            rt.FillRoundedRectangle(&rounded(br, (br.bottom - br.top) / 2.0), &brush(bg)?);
+                            let ib = rect(br.left + 8.0 * s, br.top, br.left + 36.0 * s, br.bottom);
+                            text(icon, F_ICON, ib, center, fg)?;
+                            let state = if missing { "Không có" } else if on { "Bật" } else { "Tắt" };
+                            text(&format!("{label}: {state}"), F_SMALL, rect(ib.right + 4.0 * s, br.top, br.right - 10.0 * s, br.bottom), lead, fg)?;
+                        }
+                        _ => {
+                            // (icon, lit = white with black icon, warn = red, small = side arrow)
+                            let (icon, lit, warn) = match b {
+                                Button::SpeakerMute => match v.volume {
+                                    Some((_, true)) => (ICON_MUTE, false, true),
+                                    _ => (ICON_VOLUME, false, false),
+                                },
+                                Button::VolDown => (ICON_MINUS, false, false),
+                                Button::VolUp => (ICON_PLUS, false, false),
+                                Button::Previous => (ICON_PREV, false, false),
+                                Button::PlayPause => (if playing { ICON_PAUSE } else { ICON_PLAY }, true, false),
+                                Button::Next => (ICON_NEXT, false, false),
+                                Button::PagePrev => (ICON_LEFT, false, false),
+                                _ => (ICON_RIGHT, false, false),
+                            };
+                            let bg = if warn { color(1.0, 0.27, 0.23, a) } else if lit { grey(1.0, a) } else { grey(0.17, a) };
+                            let fg = if lit { grey(0.0, a) } else { grey(1.0, a) };
+                            let circle = D2D1_ELLIPSE {
+                                point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
+                                radiusX: (br.right - br.left) / 2.0,
+                                radiusY: (br.bottom - br.top) / 2.0,
+                            };
+                            rt.FillEllipse(&circle, &brush(bg)?);
+                            text(icon, if matches!(b, Button::PagePrev | Button::PageNext) { F_LABEL_ICON } else { F_ICON }, br, center, fg)?;
+                        }
+                    }
                 }
             }
             rt.EndDraw(None, None)?;

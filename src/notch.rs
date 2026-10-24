@@ -18,7 +18,7 @@ pub enum Mode {
 }
 
 /// (width, height, corner radius) the notch animates towards in each mode.
-/// `live` = music is playing: wider pill (cover + bars) and a music card in the panel.
+/// `live` = music is playing: wider pill (cover + bars). The panel is one size; it pages its content.
 pub fn target(mode: Mode, live: bool) -> [f32; 3] {
     match (mode, live) {
         (Mode::Collapsed, false) => [150.0, 30.0, 14.0],
@@ -27,15 +27,14 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
         (Mode::Peek, false) => [166.0, 34.0, 15.0],
         (Mode::Peek, true) => [206.0, 34.0, 15.0],
         (Mode::PeekMini, _) => [72.0, 8.0, 4.0],
-        (Mode::Expanded, false) => [440.0, 200.0, 28.0],
-        (Mode::Expanded, true) => [440.0, 286.0, 28.0],
+        (Mode::Expanded, _) => [440.0, 180.0, 28.0],
         (Mode::Alert, _) => [360.0, 64.0, 22.0],
     }
 }
 
 /// Window must fit the largest target plus the hover margin.
 pub const MAX_W: f32 = 460.0;
-pub const MAX_H: f32 = 300.0;
+pub const MAX_H: f32 = 200.0;
 /// How long a notification banner stays.
 pub const ALERT_MS: u32 = 5000;
 /// How long a status banner (Caps Lock, brightness) stays.

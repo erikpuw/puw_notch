@@ -15,15 +15,16 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 
 **Notch**
 - Dính mép trên màn hình chính, viền "tai thỏ" kiểu iPhone (hai góc trên loe cong, to dần theo chiều cao), co giãn kiểu lò xo.
-- **Thường** (150×30): giờ. **Hover** 200 ms thì bung (440×200).
+- **Thường** (150×30): giờ (chữ đậm 15 px). **Hover** 200 ms thì mở bảng (440×180).
 - **Mini** (44×4): khi cửa sổ phía dưới có nội dung lởm chởm sát notch (nhiều tab), hoặc bật "Notch tối giản".
   Ở mini chỉ chính vạch 44×4 nhận chuột.
 - **Ẩn khi fullscreen** (game, video) trên màn hình có notch; desktop/taskbar không tính. Không hiện banner khi đang ẩn.
 
-**Bảng mở rộng**
-- Giờ lớn, thứ/ngày tiếng Việt, pin.
-- Thẻ thông báo Windows mới nhất.
-- Điều khiển: loa (bật/tắt tiếng), − / thanh âm lượng (bấm để đặt mức) / +, mic (bật/tắt), Bluetooth (bật/tắt radio).
+**Bảng mở rộng** (chia trang như Nusa: mũi tên ‹ › hai bên, chấm trang ở dưới, hoặc lăn chuột)
+- Dòng đầu mọi trang: pin · thứ/ngày · giờ.
+- Trang **Nhạc**: ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26`, ⏮ ⏯ ⏭ ("Không có bài" khi không phát).
+- Trang **Thông báo**: thông báo Windows mới nhất.
+- Trang **Điều khiển**: loa (bật/tắt tiếng), − / thanh âm lượng (bấm để đặt mức) / +, Mic: Bật/Tắt, Bluetooth: Bật/Tắt.
 
 **Banner tự giãn ra**
 - Thông báo Windows mới: 5 giây (tên app, tiêu đề, nội dung). Để chuột lên banner thì mở bảng.
@@ -33,7 +34,7 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 
 **Nhạc** (mọi app báo lên điều khiển media của Windows: Spotify, Chrome/Edge, Media Player, foobar2000...)
 - Notch thường khi có nhạc: ảnh bìa bên trái, giờ ở giữa, cột sóng nhạc bên phải.
-- Bảng mở rộng có thẻ nhạc: ảnh bìa, tên bài, ca sĩ, câu lời đang hát (LRCLIB), thanh tiến độ `00:33 / -03:26`, ⏮ ⏯ ⏭.
+- Lời bài hát lấy từ LRCLIB, chạy theo vị trí bài.
 - App không gửi vị trí bài (ví dụ foobar2000 mặc định) thì không có thanh tiến độ và lời không chạy theo được.
 
 **Khác**: tray (Notch tối giản, Khởi động cùng Windows, Thoát), chạy một bản duy nhất, cài đặt ở `%APPDATA%\PuwNotch\settings.txt`.

@@ -29,7 +29,7 @@ use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_
 use music::WM_MUSIC;
 use status::{WM_LOCKKEY, WM_VOLKEY};
 use notify::Toast;
-use render::{Button, Renderer, View};
+use render::{Button, Page, Renderer, View, PAGES};
 
 const WM_TRAY: u32 = WM_APP + 1;
 /// Lives in the commctrl headers; not worth a crate feature for one constant.
@@ -77,6 +77,7 @@ struct App {
     started: Instant,
     /// Current T_ANIM interval: fast while the spring moves, slower for the equaliser alone.
     frame_ms: u32,
+    page: Page,
 }
 
 /// Animation frame intervals.
@@ -120,6 +121,7 @@ impl App {
             bt: self.bt,
             music: self.track.as_ref(),
             phase: self.started.elapsed().as_secs_f32(),
+            page: self.page,
         };
         let _ = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view);
     }
@@ -250,10 +252,12 @@ impl App {
             return;
         }
         let cx = self.win.2 as f32 / 2.0;
-        let hit = render::buttons(cx, self.scale, self.notch.live).into_iter().find(|(_, r)| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+        let hit = render::buttons(cx, self.scale, self.page).into_iter().find(|(_, r)| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
         let Some((button, r)) = hit else { return };
         let media = match button {
             Button::Bluetooth => return bluetooth::request(self.hwnd, true),
+            Button::PagePrev => return self.turn_page(-1),
+            Button::PageNext => return self.turn_page(1),
             Button::Previous => Some(music::Cmd::Previous),
             Button::PlayPause => Some(music::Cmd::PlayPause),
             Button::Next => Some(music::Cmd::Next),
@@ -273,6 +277,12 @@ impl App {
             _ => {}
         }
         self.refresh_audio();
+        self.redraw();
+    }
+
+    fn turn_page(&mut self, step: isize) {
+        let i = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as isize;
+        self.page = PAGES[(i + step).rem_euclid(PAGES.len() as isize) as usize];
         self.redraw();
     }
 
@@ -387,6 +397,10 @@ impl App {
                 self.click(x, y);
             }
             WM_RBUTTONUP => self.menu(),
+            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded => {
+                let delta = ((wp.0 >> 16) & 0xffff) as i16;
+                self.turn_page(if delta > 0 { -1 } else { 1 });
+            }
             WM_LOCKKEY => {
                 let (name, on) = status::lock_state(wp.0);
                 self.show_banner(status_toast("Bàn phím", name.to_string(), if on { "Bật" } else { "Tắt" }, None), STATUS_MS);
@@ -503,6 +517,7 @@ fn main() -> windows::core::Result<()> {
             track: None,
             started: Instant::now(),
             frame_ms: 0,
+            page: Page::Music,
         };
         app.refresh_audio();
         bluetooth::request(hwnd, false);
