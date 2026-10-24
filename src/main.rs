@@ -17,10 +17,13 @@ mod system;
 mod todo;
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -39,6 +42,7 @@ use notify::Toast;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, PAGES};
 
 const WM_TRAY: u32 = WM_APP + 1;
+const WM_FRAME: u32 = WM_APP + 7;
 /// Lives in the commctrl headers; not worth a crate feature for one constant.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const T_ANIM: usize = 1;
@@ -85,8 +89,9 @@ struct App {
     music: music::Music,
     track: Option<music::Track>,
     started: Instant,
-    /// Current T_ANIM interval: fast while the spring moves, slower for the equaliser alone.
+    /// Frame pacing: VSYNC while something moves, T_ANIM at BARS_FRAME_MS for the equaliser alone, 0 = idle.
     frame_ms: u32,
+    vsync: Vsync,
     hovered_button: Option<Button>,
     /// Foreground window + rect at the last check: busy sampling waits for it to hold still.
     last_foreground: Option<(isize, RECT)>,
@@ -116,7 +121,8 @@ struct App {
 }
 
 /// Animation frame intervals.
-const FRAME_MS: u32 = 15;
+/// `frame_ms` value for frames paced by the display (see `Vsync`).
+const VSYNC: u32 = 1;
 const BARS_FRAME_MS: u32 = 40;
 
 thread_local! {
@@ -182,7 +188,14 @@ impl App {
     fn set_frame_interval(&mut self, ms: u32) {
         if self.frame_ms != ms {
             self.frame_ms = ms;
-            unsafe { SetTimer(Some(self.hwnd), T_ANIM, ms, None) };
+            self.vsync.set(ms == VSYNC);
+            unsafe {
+                if ms == BARS_FRAME_MS {
+                    SetTimer(Some(self.hwnd), T_ANIM, ms, None);
+                } else {
+                    let _ = KillTimer(Some(self.hwnd), T_ANIM);
+                }
+            }
         }
     }
 
@@ -191,7 +204,7 @@ impl App {
             self.animating = true;
             self.last_frame = Instant::now();
         }
-        self.set_frame_interval(FRAME_MS);
+        self.set_frame_interval(VSYNC);
     }
 
     /// The equaliser in the resting pill keeps frames coming while music plays.
@@ -215,13 +228,12 @@ impl App {
         };
         self.redraw();
         if moving || morphing || self.icons_morphing {
-            self.set_frame_interval(FRAME_MS);
+            self.set_frame_interval(VSYNC);
         } else if self.bars_active() {
             self.set_frame_interval(BARS_FRAME_MS);
         } else {
             self.animating = false;
-            self.frame_ms = 0;
-            unsafe { let _ = KillTimer(Some(self.hwnd), T_ANIM); }
+            self.set_frame_interval(0);
         }
     }
 
@@ -624,6 +636,12 @@ impl App {
 
     fn handle(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         match msg {
+            WM_FRAME => {
+                self.vsync.pending.store(false, Ordering::Relaxed);
+                if self.frame_ms == VSYNC {
+                    self.frame();
+                }
+            }
             WM_TIMER => match wp.0 {
                 T_ANIM => self.frame(),
                 T_CHECK => self.tick(),
@@ -813,6 +831,45 @@ fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
     }
 }
 
+/// Paces animation frames to the display: a helper thread waits for each DWM composition and
+/// posts WM_FRAME while on. WM_TIMER ticks every 15.6 ms and gets coalesced (frames 3-36 ms
+/// apart measured), which made the spring stutter.
+struct Vsync {
+    on: Arc<AtomicBool>,
+    /// A WM_FRAME is queued and not yet handled: never stack more than one.
+    pending: Arc<AtomicBool>,
+    thread: std::thread::Thread,
+}
+
+impl Vsync {
+    fn start(hwnd: HWND) -> Self {
+        let (on, pending) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+        let (on2, pending2, target) = (on.clone(), pending.clone(), hwnd.0 as isize);
+        let thread = std::thread::spawn(move || loop {
+            if !on2.load(Ordering::Relaxed) {
+                std::thread::park();
+                continue;
+            }
+            if unsafe { DwmFlush() }.is_err() {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+            if on2.load(Ordering::Relaxed) && !pending2.swap(true, Ordering::Relaxed) {
+                unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_FRAME, WPARAM(0), LPARAM(0)); }
+            }
+        })
+        .thread()
+        .clone();
+        Vsync { on, pending, thread }
+    }
+
+    fn set(&self, on: bool) {
+        self.on.store(on, Ordering::Relaxed);
+        if on {
+            self.thread.unpark();
+        }
+    }
+}
+
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // DestroyWindow re-enters here while the tray menu still holds APP's mutable borrow.
     if msg == WM_DESTROY {
@@ -890,6 +947,7 @@ fn main() -> windows::core::Result<()> {
             track: None,
             started: Instant::now(),
             frame_ms: 0,
+            vsync: Vsync::start(hwnd),
             hovered_button: None,
             last_foreground: None,
             page: Page::Music,
