@@ -24,15 +24,22 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
   Ở mini chỉ chính vạch 44×4 nhận chuột.
 - **Ẩn khi fullscreen** (game, video) trên màn hình có notch; desktop/taskbar không tính. Không hiện banner khi đang ẩn.
 
-**Bảng mở rộng** (2 trang, chuyển bằng mũi tên ‹ › hai bên, chấm trang ở dưới; không dùng lăn chuột để chuyển)
+**Bảng mở rộng** (4 trang: Nhạc → Việc cần làm → Lịch hẹn → Sức khỏe; mũi tên ‹ › hai bên, chấm trang ở dưới;
+chuyển trang có hiệu ứng morph: trang cũ trượt ra mờ dần, trang mới trượt vào nảy nhẹ)
 - Dòng đầu: thứ/ngày · giờ, pin bên phải.
 - Trang **Nhạc**: ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26` (bấm để tua), ⏮ ⏯ ⏭.
 - Trang **Việc cần làm**: ô "Thêm việc…" (bấm để gõ, Enter lưu và gõ tiếp, Esc hủy), tick vòng tròn để xong
   (chữ gạch ngang, xuống cuối), ✎ sửa / ✕ xóa (hiện khi rê chuột), "Xong hôm nay", lăn chuột để cuộn khi > 3 việc.
 - **Nhắc giờ (24h)**: gõ giờ trong nội dung ("Họp nhóm 20:00", "8h30 gửi báo cáo", "17h"). Giờ còn tới hôm nay thì nhắc
-  hôm nay, đã qua thì ngày mai ("Mai 08:30"). Nhãn giờ xám / cam (≤ 15 phút) / đỏ (quá giờ). Đến giờ: banner
-  "Nhắc việc"; đang chơi game fullscreen hoặc đang mở bảng thì chờ và hiện khi có thể.
-  Lưu ở `%APPDATA%\PuwNotch\todo.txt`; sang ngày mới thì việc đã xong hôm trước tự dọn.
+  hôm nay, đã qua thì ngày mai ("Mai 08:30"). Nhãn giờ xám / cam (≤ 15 phút) / đỏ (quá giờ).
+- Trang **Lịch hẹn**: "Khám răng 28/10 14:30", "Họp mai 9h", "Gọi điện 16:00" (24h; không giờ = 08:00). Nhắc trước
+  15 phút và đúng giờ. Cột ngày "Hôm nay / Mai / dd/mm", sửa (bấm dòng hoặc ✎), xóa ✕. Ngày đã qua tự dọn.
+- Trang **Sức khỏe**: thẻ **Uống nước** (đã uống / mục tiêu, nút "+ 250 ml", "Để sau" 10 phút; nhắc chia đều trong
+  khung giờ 08:00–17:00, đủ mục tiêu thì báo và ngừng) và thẻ **Đứng dậy** (phút ngồi liên tục, nhắc mỗi 45 phút,
+  rời máy ≥ 5 phút thì tính lại, nút "Đã đứng dậy"). ⚙ mở cài đặt: công tắc Nhắc, −/+ cho mỗi lần, mục tiêu,
+  từ / đến, số phút. Không nhắc khi đang chơi game fullscreen.
+- Banner nhắc (việc, lịch hẹn, uống nước, đứng dậy) chuyển sẵn bảng sang trang tương ứng.
+- Icon đổi có hiệu ứng morph (⏯, ⚙ ↔ ✓, icon banner): icon cũ thu lại, icon mới bật ra.
 - Đọc thông báo: dùng trung tâm thông báo của Windows; notch chỉ báo khi có thông báo mới.
 
 **Banner tự giãn ra**
@@ -58,6 +65,8 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - foobar2000: bổ sung thời gian thật từ thanh trạng thái của giao diện mặc định khi Windows không gửi timeline; lệnh phát/dừng/chuyển bài vẫn dùng phiên Windows. Chỉ bật tua nếu trình phát công bố hỗ trợ.
 - iTunes: tự nhận qua COM khi ứng dụng đang mở, gồm tên bài, nghệ sĩ, thời gian, ảnh bìa và điều khiển phát/dừng/chuyển bài/tua; không tự khởi động iTunes khi ứng dụng đã đóng.
 - Tự ưu tiên nguồn đang phát; nếu iTunes và nguồn Windows cùng phát thì ưu tiên iTunes khi cửa sổ iTunes đang ở trước. Các trình phát khác tiếp tục nhận tự động qua Windows media.
+
+**Icon app**: `assets/puw.ico` / `assets/puw.res` (vẽ bằng `assets/make_icon.py`), nhúng vào exe qua `build.rs`; dùng cho tray.
 
 **Khác**: tray (Notch tối giản, Khởi động cùng Windows, Thoát), chạy một bản duy nhất, cài đặt ở `%APPDATA%\PuwNotch\settings.txt`.
 Chọn **Thoát** sẽ kết thúc tiến trình và gỡ biểu tượng tray.
@@ -88,10 +97,12 @@ rồi tắt "Hiện banner thông báo" cho từng app.
 | `src/music.rs` | Luồng phụ đọc phiên media (GlobalSystemMediaTransportControls) mỗi 500 ms, lệnh ⏮⏯⏭, tải lời LRCLIB (WinRT HttpClient + JSON), tách LRC. |
 | `src/foobar.rs` | Đọc timeline thật từ status bar foobar2000 qua UI Automation, có giới hạn thời gian chờ và test parser. |
 | `src/itunes.rs` | Đọc/điều khiển iTunes qua COM, lấy ảnh bìa bằng file tạm và tự dọn file. |
+| `src/calendar.rs` | Lịch hẹn: đọc ngày/giờ 24h, nhắc trước 15 phút và đúng giờ, sửa/xóa, lưu `calendar.txt` (có test). |
+| `src/health.rs` | Uống nước + đứng dậy: lịch nhắc, thời gian rời máy, cài đặt −/+, lưu `health.txt` (có test). |
 | `src/todo.rs` | Danh sách việc: thêm, tick, xóa, dọn theo ngày, đọc/ghi file (có test). |
 | `src/system.rs` | Giờ, pin (+ tiết kiệm pin) và sự kiện pin (có test), file cài đặt, khóa Run trong registry. |
 | `src/main.rs` | Cửa sổ, timer, chuột, tray, nối các phần. |
 
 ## Kế hoạch
 
-4. Pomodoro, nhắc uống nước, kệ file.
+4. Pomodoro, kệ file.

@@ -1,9 +1,11 @@
 #![windows_subsystem = "windows"]
 
 mod audio;
+mod calendar;
 mod connectivity;
 mod music;
 mod foobar;
+mod health;
 mod itunes;
 mod notch;
 mod notify;
@@ -32,7 +34,7 @@ use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_
 use music::WM_MUSIC;
 use status::{WM_LOCKKEY, WM_VOLKEY};
 use notify::Toast;
-use render::{Button, Page, Renderer, TodoView, View, TODO_ROWS};
+use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, PAGES};
 
 const WM_TRAY: u32 = WM_APP + 1;
 /// Lives in the commctrl headers; not worth a crate feature for one constant.
@@ -43,6 +45,8 @@ const T_DWELL: usize = 3;
 const T_ALERT: usize = 4;
 const T_VOLKEY: usize = 5;
 const T_CARET: usize = 6;
+/// Page switch morph length.
+const PAGE_MORPH_S: f32 = 0.32;
 const CARET_MS: u32 = 530;
 const CHECK_MS: u32 = 500;
 const MENU_MINIMAL: usize = 10;
@@ -92,6 +96,14 @@ struct App {
     edit_item: Option<usize>,
     caret: bool,
     todo_scroll: usize,
+    cal_scroll: usize,
+    calendar: calendar::Calendar,
+    health: health::Health,
+    /// Health card showing its settings.
+    settings_open: Option<Card>,
+    /// Page switch in progress: (page leaving, start, direction).
+    page_anim: Option<(Page, Instant, i32)>,
+    icons_morphing: bool,
     /// Window that had the keyboard before typing started; it gets it back after.
     prev_foreground: HWND,
     /// First half of a UTF-16 pair arriving in WM_CHAR (emoji).
@@ -126,6 +138,7 @@ impl App {
 
     fn redraw(&mut self) {
         let (x, y, w, h) = self.win;
+        let now = system::now_stamp();
         let view = View {
             mode: self.notch.mode,
             size: self.notch.size(),
@@ -137,19 +150,28 @@ impl App {
             phase: self.started.elapsed().as_secs_f32(),
             hovered: self.hovered_button,
             page: self.page,
-            todo: TodoView {
-                items: &self.todo.items,
-                open: self.todo.open_count(),
-                done_today: self.todo.done_today(self.today),
-                now: system::now_stamp(),
+            leaving: self.page_anim.map(|(from, t0, dir)| (from, (t0.elapsed().as_secs_f32() / PAGE_MORPH_S).min(1.0), dir)),
+            list: ListView {
+                counts: match self.page {
+                    Page::Calendar => (self.calendar.upcoming(now), self.calendar.today_count(self.today)),
+                    _ => (self.todo.open_count(), self.todo.done_today(self.today)),
+                },
+                now,
                 draft: &self.draft,
                 editing: self.editing,
                 edit_item: self.edit_item,
                 caret: self.caret,
-                scroll: self.todo_scroll,
+                scroll: self.scroll(),
             },
+            todos: &self.todo.items,
+            appts: &self.calendar.items,
+            health: HealthView { h: &self.health, now: calendar::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
         };
-        let _ = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view);
+        // An icon that just changed keeps frames coming until its morph has played.
+        self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
+        if self.icons_morphing && !self.animating {
+            self.kick();
+        }
     }
 
     fn set_frame_interval(&mut self, ms: u32) {
@@ -177,8 +199,17 @@ impl App {
         let dt = (now - self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
         let moving = self.notch.step(dt);
+        // The page morph runs on the same frames; drop it once it has played out.
+        let morphing = match self.page_anim {
+            Some((_, t0, _)) if t0.elapsed().as_secs_f32() < PAGE_MORPH_S => true,
+            Some(_) => {
+                self.page_anim = None;
+                false
+            }
+            None => false,
+        };
         self.redraw();
-        if moving {
+        if moving || morphing || self.icons_morphing {
             self.set_frame_interval(FRAME_MS);
         } else if self.bars_active() {
             self.set_frame_interval(BARS_FRAME_MS);
@@ -239,10 +270,9 @@ impl App {
         let today = system::today();
         if today != self.today {
             self.today = today;
-            if self.todo.new_day(today) {
-                self.clamp_scroll();
-                changed = true;
-            }
+            changed |= self.todo.new_day(today) | self.calendar.new_day(today);
+            self.health.new_day(today);
+            self.clamp_scroll();
         }
         self.refresh_audio();
         self.refresh_music();
@@ -302,23 +332,67 @@ impl App {
         true
     }
 
-    /// To-do reminders whose time has come. One that cannot show now (fullscreen game, panel open)
-    /// stays pending and rings at the next chance.
+    /// To-do and appointment reminders whose time has come, then water / stand-up. A to-do or
+    /// appointment that cannot show now (fullscreen game, panel open) rings at the next chance.
+    /// A banner that shows switches the panel to its page, so resting on it opens the right one.
     fn remind(&mut self) {
         let now = system::now_stamp();
+        let hhmm = |d: u64| format!("{:02}:{:02}", d / 100 % 100, d % 100);
         for i in self.todo.due(now) {
             let Some(item) = self.todo.items.get(i) else { continue };
-            let at = item.due.map_or(String::new(), |d| format!("{:02}:{:02}", d / 100 % 100, d % 100));
+            let at = item.due.map_or(String::new(), hhmm);
             let toast = status_toast("Nhắc việc", item.text.clone(), &format!("Đến giờ · {at}"), None, render::ICON_REMINDER);
             if !self.show_banner(toast, ALERT_MS * 2) {
-                break;
+                return;
             }
             self.todo.mark_notified(i);
+            self.page = Page::Todo;
+        }
+        for (i, ring) in self.calendar.rings(now) {
+            let Some(ap) = self.calendar.items.get(i) else { continue };
+            let when = match ring {
+                calendar::Ring::Soon => format!("Còn {} phút · {}", calendar::SOON_MIN, hhmm(ap.at)),
+                calendar::Ring::Now => format!("Đến giờ · {}", hhmm(ap.at)),
+            };
+            let toast = status_toast("Lịch hẹn", ap.text.clone(), &when, None, render::ICON_CALENDAR);
+            if !self.show_banner(toast, ALERT_MS * 2) {
+                return;
+            }
+            self.calendar.mark(i, ring);
+            self.page = Page::Calendar;
+        }
+        let h = &self.health;
+        let (cup, goal) = (h.cup_ml, h.goal_ml);
+        let every = h.sit_every_min;
+        for ring in self.health.tick(calendar::minutes(now), minute_of_day(now), idle_seconds()) {
+            let taken = self.health.taken_ml;
+            let level = Some(taken as f32 / goal.max(1) as f32);
+            let toast = match ring {
+                health::Ring::Drink => status_toast("Uống nước", format!("Đến giờ uống {cup} ml nước"), "", level, render::ICON_DROP),
+                health::Ring::GoalReached => status_toast("Uống nước", format!("Đạt mục tiêu {:.1} L hôm nay", goal as f32 / 1000.0), "", Some(1.0), render::ICON_DROP),
+                health::Ring::StandUp => status_toast("Đứng dậy đi lại", format!("Bạn đã ngồi {every} phút liền"), "Vận động vài phút nhé", None, render::ICON_WALK),
+            };
+            if self.show_banner(toast, ALERT_MS * 2) {
+                self.page = Page::Health;
+            }
+        }
+    }
+
+    /// First visible row of the list page on screen.
+    fn scroll(&self) -> usize {
+        if self.page == Page::Calendar { self.cal_scroll } else { self.todo_scroll }
+    }
+
+    fn rows(&self) -> usize {
+        match self.page {
+            Page::Todo => self.todo.items.len(),
+            Page::Calendar => self.calendar.items.len(),
+            _ => 0,
         }
     }
 
     fn hit(&self, x: f32, y: f32) -> Option<Button> {
-        render::hit_button(self.win.2 as f32 / 2.0, self.scale, x, y, self.track.as_ref(), self.page, self.todo.items.len(), self.todo_scroll)
+        render::hit_button(self.win.2 as f32 / 2.0, self.scale, x, y, self.track.as_ref(), self.page, self.rows(), self.scroll(), self.settings_open)
     }
 
     fn click(&mut self, x: f32, y: f32) {
@@ -336,24 +410,36 @@ impl App {
             Button::PagePrev | Button::PageNext => {
                 self.cancel_task_edit();
                 self.end_edit();
-                self.page = if self.page == Page::Music { Page::Todo } else { Page::Music };
+                let dir = if button == Button::PageNext { 1 } else { -1 };
+                let i = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as i32;
+                let next = PAGES[(i + dir).rem_euclid(PAGES.len() as i32) as usize];
+                self.page_anim = Some((self.page, Instant::now(), dir));
+                self.page = next;
+                self.settings_open = None;
+                self.kick();
             }
-            Button::TodoInput => self.begin_edit(),
-            Button::TodoEdit(i) => {
-                self.draft = self.todo.edit_text(i);
+            Button::ListInput => self.begin_edit(),
+            Button::ListEdit(i) => {
+                self.draft = if self.page == Page::Calendar { self.calendar.edit_text(i) } else { self.todo.edit_text(i) };
                 self.edit_item = Some(i);
                 self.begin_edit();
             }
-            // Ticking or deleting reorders the list: an edit in progress would point at the wrong task.
-            Button::TodoToggle(i) => {
+            // Ticking or deleting reorders the list: an edit in progress would point at the wrong row.
+            Button::ListToggle(i) => {
                 self.cancel_task_edit();
                 self.todo.toggle(i, self.today);
             }
-            Button::TodoDelete(i) => {
+            Button::ListDelete(i) => {
                 self.cancel_task_edit();
-                self.todo.remove(i);
+                if self.page == Page::Calendar { self.calendar.remove(i) } else { self.todo.remove(i) }
                 self.clamp_scroll();
             }
+            Button::Gear(card) => self.settings_open = if self.settings_open == Some(card) { None } else { Some(card) },
+            Button::Drink => self.health.drink(calendar::minutes(system::now_stamp())),
+            Button::Snooze => self.health.snooze(calendar::minutes(system::now_stamp())),
+            Button::Stood => self.health.stood_up(calendar::minutes(system::now_stamp())),
+            Button::Step(set, dir) => self.health.change(set, dir),
+            Button::Toggle(set) => self.health.change(set, 1),
         }
         self.hovered_button = self.hit(x, y);
         self.redraw();
@@ -368,20 +454,25 @@ impl App {
     /// Enter in the box: save the edited task, or add a new one. The box stays for the next task.
     fn submit(&mut self) {
         let now = system::now_stamp();
-        let saved = match self.edit_item {
-            Some(i) => self.todo.update(i, &self.draft, now),
-            None => self.todo.add(&self.draft, now),
+        let calendar = self.page == Page::Calendar;
+        let saved = match (self.edit_item, calendar) {
+            (Some(i), true) => self.calendar.update(i, &self.draft, now),
+            (Some(i), false) => self.todo.update(i, &self.draft, now),
+            (None, true) => self.calendar.add(&self.draft, now),
+            (None, false) => self.todo.add(&self.draft, now),
         };
         if saved {
-            if self.edit_item.take().is_none() {
+            if self.edit_item.take().is_none() && !calendar {
                 self.todo_scroll = 0;
             }
             self.draft.clear();
+            self.clamp_scroll();
         }
     }
 
     fn clamp_scroll(&mut self) {
-        self.todo_scroll = self.todo_scroll.min(self.todo.items.len().saturating_sub(TODO_ROWS));
+        self.todo_scroll = self.todo_scroll.min(self.todo.items.len().saturating_sub(LIST_ROWS));
+        self.cal_scroll = self.cal_scroll.min(self.calendar.items.len().saturating_sub(LIST_ROWS));
     }
 
     /// Typing needs the keyboard: let the window activate for once, remembering who had it.
@@ -476,7 +567,7 @@ impl App {
             uID: 1,
             uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage: WM_TRAY,
-            hIcon: unsafe { LoadIconW(None, IDI_APPLICATION) }.unwrap_or_default(),
+            hIcon: app_icon(true),
             ..Default::default()
         };
         for (d, s) in nid.szTip.iter_mut().zip("PUW Notch".encode_utf16()) {
@@ -567,7 +658,7 @@ impl App {
                 if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
             }
             WM_SETCURSOR if self.hovered_button.is_some_and(|b| b.enabled(self.track.as_ref())) => {
-                let cursor = if self.hovered_button == Some(Button::TodoInput) { IDC_IBEAM } else { IDC_HAND };
+                let cursor = if self.hovered_button == Some(Button::ListInput) { IDC_IBEAM } else { IDC_HAND };
                 unsafe { let _ = SetCursor(LoadCursorW(None, cursor).ok()); }
                 return Some(LRESULT(1));
             }
@@ -585,10 +676,11 @@ impl App {
             // Lost the keyboard (clicked elsewhere): stop typing, keep the draft.
             WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => self.end_edit(),
             // The wheel only scrolls a long to-do list; pages switch with the arrows.
-            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && self.page == Page::Todo => {
+            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && matches!(self.page, Page::Todo | Page::Calendar) => {
                 let delta = ((wp.0 >> 16) & 0xffff) as i16;
-                let max = self.todo.items.len().saturating_sub(TODO_ROWS);
-                self.todo_scroll = if delta > 0 { self.todo_scroll.saturating_sub(1) } else { (self.todo_scroll + 1).min(max) };
+                let max = self.rows().saturating_sub(LIST_ROWS);
+                let scroll = if self.page == Page::Calendar { &mut self.cal_scroll } else { &mut self.todo_scroll };
+                *scroll = if delta > 0 { scroll.saturating_sub(1) } else { (*scroll + 1).min(max) };
                 self.redraw();
             }
             WM_LBUTTONUP => {
@@ -630,6 +722,35 @@ impl App {
             _ => return None,
         }
         Some(LRESULT(0))
+    }
+}
+
+/// yyyymmddHHMM -> minute of the day.
+fn minute_of_day(stamp: u64) -> u32 {
+    ((stamp / 100 % 100) * 60 + stamp % 100) as u32
+}
+
+/// Seconds since the last keyboard / mouse input anywhere (away from the PC -> sitting clock resets).
+fn idle_seconds() -> u32 {
+    let mut lii = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    unsafe {
+        if GetLastInputInfo(&mut lii).as_bool() {
+            windows::Win32::System::SystemInformation::GetTickCount().wrapping_sub(lii.dwTime) / 1000
+        } else {
+            0
+        }
+    }
+}
+
+/// The PUW icon embedded by build.rs (resource id 1), at the small (tray) or large size.
+fn app_icon(small: bool) -> HICON {
+    unsafe {
+        let module = GetModuleHandleW(None).ok().map(HINSTANCE::from);
+        let (cx, cy) = if small { (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) } else { (GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON)) };
+        LoadImageW(module, PCWSTR(1 as _), IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR)
+            .map(|h| HICON(h.0))
+            .or_else(|_| LoadIconW(None, IDI_APPLICATION))
+            .unwrap_or_default()
     }
 }
 
@@ -700,6 +821,8 @@ fn main() -> windows::core::Result<()> {
             lpfnWndProc: Some(wndproc),
             hInstance: instance,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
+            hIcon: app_icon(false),
+            hIconSm: app_icon(true),
             lpszClassName: class,
             ..Default::default()
         };
@@ -756,6 +879,12 @@ fn main() -> windows::core::Result<()> {
             edit_item: None,
             caret: false,
             todo_scroll: 0,
+            cal_scroll: 0,
+            calendar: calendar::Calendar::load(system::now_stamp()),
+            health: health::Health::load(system::today()),
+            settings_open: None,
+            page_anim: None,
+            icons_morphing: false,
             prev_foreground: HWND::default(),
             high_surrogate: None,
         };
