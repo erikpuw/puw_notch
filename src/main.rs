@@ -6,6 +6,7 @@ mod connectivity;
 mod music;
 mod foobar;
 mod health;
+mod i18n;
 mod itunes;
 mod notch;
 mod notify;
@@ -32,6 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use connectivity::{Event, Net, RadioType, WM_CONN};
 use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_MS};
 use music::WM_MUSIC;
+use i18n::tr;
 use status::{WM_LOCKKEY, WM_VOLKEY};
 use notify::Toast;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, PAGES};
@@ -52,6 +54,8 @@ const CHECK_MS: u32 = 500;
 const MENU_MINIMAL: usize = 10;
 const MENU_AUTOSTART: usize = 11;
 const MENU_QUIT: usize = 12;
+const MENU_LANG_VI: usize = 13;
+const MENU_LANG_EN: usize = 14;
 
 struct App {
     hwnd: HWND,
@@ -253,7 +257,7 @@ impl App {
         };
         (self.volume, self.mic_muted) = now;
         if let Some(muted) = mic_flip {
-            let (title, icon) = if muted { ("Đã tắt mic", render::ICON_MIC_OFF) } else { ("Đã bật mic", render::ICON_MIC) };
+            let (title, icon) = if muted { (tr("Đã tắt mic", "Mic off"), render::ICON_MIC_OFF) } else { (tr("Đã bật mic", "Mic on"), render::ICON_MIC) };
             self.show_banner(status_toast("Mic", title.to_string(), "", None, icon), STATUS_MS);
         }
     }
@@ -310,7 +314,7 @@ impl App {
         let level = self.brightness.as_ref().and_then(|b| b.percent());
         if level.is_some() && self.last_brightness.is_some() && level != self.last_brightness {
             let p = level.unwrap_or(0);
-            self.show_banner(status_toast("Màn hình", format!("Độ sáng {p}%"), "", Some(p as f32 / 100.0), render::ICON_BRIGHTNESS), STATUS_MS);
+            self.show_banner(status_toast(tr("Màn hình", "Display"), format!("{} {p}%", tr("Độ sáng", "Brightness")), "", Some(p as f32 / 100.0), render::ICON_BRIGHTNESS), STATUS_MS);
         }
         self.last_brightness = level.or(self.last_brightness);
 
@@ -342,7 +346,7 @@ impl App {
         for i in self.todo.due(now) {
             let Some(item) = self.todo.items.get(i) else { continue };
             let at = item.due.map_or(String::new(), hhmm);
-            let toast = status_toast("Nhắc việc", item.text.clone(), &format!("Đến giờ · {at}"), None, render::ICON_REMINDER);
+            let toast = status_toast(tr("Nhắc việc", "Reminder"), item.text.clone(), &format!("{} · {at}", tr("Đến giờ", "It's time")), None, render::ICON_REMINDER);
             if !self.show_banner(toast, ALERT_MS * 2) {
                 return;
             }
@@ -352,10 +356,10 @@ impl App {
         for (i, ring) in self.calendar.rings(now) {
             let Some(ap) = self.calendar.items.get(i) else { continue };
             let when = match ring {
-                calendar::Ring::Soon => format!("Còn {} phút · {}", calendar::SOON_MIN, hhmm(ap.at)),
-                calendar::Ring::Now => format!("Đến giờ · {}", hhmm(ap.at)),
+                calendar::Ring::Soon => format!("{} {} {} · {}", tr("Còn", "In"), calendar::SOON_MIN, tr("phút", "min"), hhmm(ap.at)),
+                calendar::Ring::Now => format!("{} · {}", tr("Đến giờ", "It's time"), hhmm(ap.at)),
             };
-            let toast = status_toast("Lịch hẹn", ap.text.clone(), &when, None, render::ICON_CALENDAR);
+            let toast = status_toast(tr("Lịch hẹn", "Appointment"), ap.text.clone(), &when, None, render::ICON_CALENDAR);
             if !self.show_banner(toast, ALERT_MS * 2) {
                 return;
             }
@@ -369,9 +373,9 @@ impl App {
             let taken = self.health.taken_ml;
             let level = Some(taken as f32 / goal.max(1) as f32);
             let toast = match ring {
-                health::Ring::Drink => status_toast("Uống nước", format!("Đến giờ uống {cup} ml nước"), "", level, render::ICON_DROP),
-                health::Ring::GoalReached => status_toast("Uống nước", format!("Đạt mục tiêu {:.1} L hôm nay", goal as f32 / 1000.0), "", Some(1.0), render::ICON_DROP),
-                health::Ring::StandUp => status_toast("Đứng dậy đi lại", format!("Bạn đã ngồi {every} phút liền"), "Vận động vài phút nhé", None, render::ICON_WALK),
+                health::Ring::Drink => status_toast(tr("Uống nước", "Water"), if i18n::english() { format!("Time to drink {cup} ml") } else { format!("Đến giờ uống {cup} ml nước") }, "", level, render::ICON_DROP),
+                health::Ring::GoalReached => status_toast(tr("Uống nước", "Water"), if i18n::english() { format!("Goal of {:.1} L reached today", goal as f32 / 1000.0) } else { format!("Đạt mục tiêu {:.1} L hôm nay", goal as f32 / 1000.0) }, "", Some(1.0), render::ICON_DROP),
+                health::Ring::StandUp => status_toast(tr("Đứng dậy đi lại", "Stand up and move"), if i18n::english() { format!("You have been sitting for {every} min") } else { format!("Bạn đã ngồi {every} phút liền") }, tr("Vận động vài phút nhé", "Walk around for a few minutes"), None, render::ICON_WALK),
             };
             if self.show_banner(toast, ALERT_MS * 2) {
                 self.page = Page::Health;
@@ -581,10 +585,17 @@ impl App {
         unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
             let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
-            let _ = AppendMenuW(menu, MF_STRING | check(self.notch.minimal), MENU_MINIMAL, w!("Notch tối giản"));
-            let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, w!("Khởi động cùng Windows"));
+            let text = |s: &str| windows::core::HSTRING::from(s);
+            let english = i18n::english();
+            let _ = AppendMenuW(menu, MF_STRING | check(self.notch.minimal), MENU_MINIMAL, &text(tr("Notch tối giản", "Minimal notch")));
+            let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, &text(tr("Khởi động cùng Windows", "Start with Windows")));
+            if let Ok(langs) = CreatePopupMenu() {
+                let _ = AppendMenuW(langs, MF_STRING | check(!english), MENU_LANG_VI, w!("Tiếng Việt"));
+                let _ = AppendMenuW(langs, MF_STRING | check(english), MENU_LANG_EN, w!("English"));
+                let _ = AppendMenuW(menu, MF_POPUP, langs.0 as usize, w!("Ngôn ngữ / Language"));
+            }
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Thoát"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, &text(tr("Thoát", "Quit")));
             let mut p = POINT::default();
             let _ = GetCursorPos(&mut p);
             let _ = SetForegroundWindow(self.hwnd);
@@ -594,10 +605,17 @@ impl App {
                 MENU_MINIMAL => {
                     let on = !self.notch.minimal;
                     self.notch.set_minimal(on);
-                    system::save_minimal(on);
+                    system::save_settings(system::Settings { minimal: on, english: i18n::english() });
                     self.kick();
                 }
                 MENU_AUTOSTART => system::set_autostart(!system::autostart_enabled()),
+                MENU_LANG_VI | MENU_LANG_EN => {
+                    i18n::set_english(cmd == MENU_LANG_EN);
+                    system::save_settings(system::Settings { minimal: self.notch.minimal, english: i18n::english() });
+                    // Everything shown is rebuilt from the new language on the next frame.
+                    (self.time, self.date) = system::clock();
+                    self.redraw();
+                }
                 MENU_QUIT => { let _ = DestroyWindow(self.hwnd); }
                 _ => {}
             }
@@ -620,8 +638,8 @@ impl App {
                     self.refresh_audio();
                     if let Some((level, muted)) = self.volume {
                         let pct = (level * 100.0).round();
-                        let title = if muted { "Đã tắt tiếng".to_string() } else { format!("Âm lượng {pct}%") };
-                        self.show_banner(status_toast("Loa", title, "", Some(if muted { 0.0 } else { level }), if muted { render::ICON_MUTE } else { render::ICON_VOLUME }), STATUS_MS);
+                        let title = if muted { tr("Đã tắt tiếng", "Muted").to_string() } else { format!("{} {pct}%", tr("Âm lượng", "Volume")) };
+                        self.show_banner(status_toast(tr("Loa", "Speaker"), title, "", Some(if muted { 0.0 } else { level }), if muted { render::ICON_MUTE } else { render::ICON_VOLUME }), STATUS_MS);
                     }
                     if !self.animating {
                         self.redraw();
@@ -692,7 +710,7 @@ impl App {
             WM_RBUTTONUP => self.menu(),
             WM_LOCKKEY => {
                 let (name, on) = status::lock_state(wp.0);
-                self.show_banner(status_toast("Bàn phím", name.to_string(), if on { "Bật" } else { "Tắt" }, None, render::ICON_KEYBOARD), STATUS_MS);
+                self.show_banner(status_toast(tr("Bàn phím", "Keyboard"), name.to_string(), on_off(on), None, render::ICON_KEYBOARD), STATUS_MS);
             }
             // Windows applies the key after the hook returns; read the level a moment later.
             WM_VOLKEY => unsafe {
@@ -760,23 +778,23 @@ fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, ico
 }
 
 fn on_off(on: bool) -> &'static str {
-    if on { "Bật" } else { "Tắt" }
+    if on { tr("Bật", "On") } else { tr("Tắt", "Off") }
 }
 
 /// Banner text for a connectivity change.
 fn connection_toast(e: Event) -> Toast {
     match e {
-        Event::Radio(RadioType::Wifi, on) => status_toast("Wi-Fi", format!("Đã {} Wi-Fi", if on { "bật" } else { "tắt" }), "", None, if on { render::ICON_WIFI } else { render::ICON_WIFI_OFF }),
-        Event::Radio(RadioType::Bluetooth, on) => status_toast("Bluetooth", format!("Đã {} Bluetooth", if on { "bật" } else { "tắt" }), "", None, render::ICON_BT),
-        Event::Radio(RadioType::Mobile, on) => status_toast("Mạng di động", on_off(on).to_string(), "", None, render::ICON_MOBILE),
-        Event::Airplane(on) => status_toast("Chế độ máy bay", on_off(on).to_string(), "", None, render::ICON_AIRPLANE),
+        Event::Radio(RadioType::Wifi, on) => status_toast("Wi-Fi", format!("{} Wi-Fi", if on { tr("Đã bật", "Turned on") } else { tr("Đã tắt", "Turned off") }), "", None, if on { render::ICON_WIFI } else { render::ICON_WIFI_OFF }),
+        Event::Radio(RadioType::Bluetooth, on) => status_toast("Bluetooth", format!("{} Bluetooth", if on { tr("Đã bật", "Turned on") } else { tr("Đã tắt", "Turned off") }), "", None, render::ICON_BT),
+        Event::Radio(RadioType::Mobile, on) => status_toast(tr("Mạng di động", "Mobile data"), on_off(on).to_string(), "", None, render::ICON_MOBILE),
+        Event::Airplane(on) => status_toast(tr("Chế độ máy bay", "Airplane mode"), on_off(on).to_string(), "", None, render::ICON_AIRPLANE),
         Event::Net(Net::Online { name, wifi }) => {
-            let (source, icon) = if wifi { ("Wi-Fi", render::ICON_WIFI) } else { ("Mạng", render::ICON_ETHERNET) };
-            status_toast(source, format!("Đã kết nối {name}"), "", None, icon)
+            let (source, icon) = if wifi { ("Wi-Fi", render::ICON_WIFI) } else { (tr("Mạng", "Network"), render::ICON_ETHERNET) };
+            status_toast(source, format!("{} {name}", tr("Đã kết nối", "Connected to")), "", None, icon)
         }
-        Event::Net(Net::Limited { name, .. }) => status_toast("Mạng", "Không có internet".to_string(), &name, None, render::ICON_NO_INTERNET),
-        Event::Net(Net::Offline) => status_toast("Mạng", "Mất kết nối mạng".to_string(), "", None, render::ICON_NO_INTERNET),
-        Event::Device { name, kind, up } => status_toast("Bluetooth", name, if up { "Đã kết nối" } else { "Đã ngắt kết nối" }, None, render::device_icon(kind)),
+        Event::Net(Net::Limited { name, .. }) => status_toast(tr("Mạng", "Network"), tr("Không có internet", "No internet").to_string(), &name, None, render::ICON_NO_INTERNET),
+        Event::Net(Net::Offline) => status_toast(tr("Mạng", "Network"), tr("Mất kết nối mạng", "Disconnected").to_string(), "", None, render::ICON_NO_INTERNET),
+        Event::Device { name, kind, up } => status_toast("Bluetooth", name, if up { tr("Đã kết nối", "Connected") } else { tr("Đã ngắt kết nối", "Disconnected") }, None, render::device_icon(kind)),
     }
 }
 
@@ -785,13 +803,13 @@ fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
     use system::PowerEvent::*;
     let level = Some(b.percent as f32 / 100.0);
     match e {
-        Plugged => status_toast("Pin", format!("Đang sạc {}%", b.percent), "", level, render::ICON_PLUG),
-        Unplugged => status_toast("Pin", format!("Đã rút sạc · {}%", b.percent), "", level, render::ICON_BATTERY),
-        SaverOn => status_toast("Tiết kiệm pin", "Bật".to_string(), "", None, render::ICON_SAVER),
-        SaverOff => status_toast("Tiết kiệm pin", "Tắt".to_string(), "", None, render::ICON_SAVER),
-        Low(p) => status_toast("Pin yếu", format!("Còn {p}% · nên cắm sạc"), "", level, render::ICON_BATTERY_LOW),
-        Critical(p) => status_toast("Pin rất yếu", format!("Còn {p}% · cắm sạc ngay"), "", level, render::ICON_BATTERY_LOW),
-        Full => status_toast("Pin", "Đã sạc đầy".to_string(), "", level, render::ICON_BATTERY),
+        Plugged => status_toast(tr("Pin", "Battery"), format!("{} {}%", tr("Đang sạc", "Charging"), b.percent), "", level, render::ICON_PLUG),
+        Unplugged => status_toast(tr("Pin", "Battery"), format!("{} · {}%", tr("Đã rút sạc", "Unplugged"), b.percent), "", level, render::ICON_BATTERY),
+        SaverOn => status_toast(tr("Tiết kiệm pin", "Battery saver"), on_off(true).to_string(), "", None, render::ICON_SAVER),
+        SaverOff => status_toast(tr("Tiết kiệm pin", "Battery saver"), on_off(false).to_string(), "", None, render::ICON_SAVER),
+        Low(p) => status_toast(tr("Pin yếu", "Low battery"), format!("{p}% · {}", tr("nên cắm sạc", "plug in soon")), "", level, render::ICON_BATTERY_LOW),
+        Critical(p) => status_toast(tr("Pin rất yếu", "Battery critical"), format!("{p}% · {}", tr("cắm sạc ngay", "plug in now")), "", level, render::ICON_BATTERY_LOW),
+        Full => status_toast(tr("Pin", "Battery"), tr("Đã sạc đầy", "Fully charged").to_string(), "", level, render::ICON_BATTERY),
     }
 }
 
@@ -843,10 +861,12 @@ fn main() -> windows::core::Result<()> {
             None,
         )?;
 
+        let settings = system::load_settings();
+        i18n::set_english(settings.english);
         let (time, date) = system::clock();
         let mut app = App {
             hwnd,
-            notch: Notch::new(system::load_minimal()),
+            notch: Notch::new(settings.minimal),
             renderer: Renderer::new()?,
             scale: 1.0,
             monitor: RECT::default(),

@@ -72,7 +72,7 @@ pub fn read(text: &str, now: u64) -> Option<(String, u64)> {
     let mut drop = Vec::new();
     for (i, w) in lower.iter().enumerate() {
         match w.as_str() {
-            "mai" => {
+            "mai" | "tomorrow" => {
                 date = Some((next_day(today), true));
                 drop.push(i);
                 if i > 0 && lower[i - 1] == "ngày" {
@@ -82,6 +82,10 @@ pub fn read(text: &str, now: u64) -> Option<(String, u64)> {
             "nay" if i > 0 && lower[i - 1] == "hôm" => {
                 date = Some((today, true));
                 drop.extend([i - 1, i]);
+            }
+            "today" => {
+                date = Some((today, true));
+                drop.push(i);
             }
             _ => {}
         }
@@ -280,6 +284,8 @@ mod tests {
         assert_eq!(read("Sinh nhật 5/1", NOW), Some(("Sinh nhật".into(), 202701050800)), "no time -> 08:00, past date -> next year");
         assert_eq!(read("Bảo vệ 3/11/2026 7h30", NOW), Some(("Bảo vệ".into(), 202611030730)));
         assert_eq!(read("Cuộc hẹn hôm nay 20:00", NOW), Some(("Cuộc hẹn".into(), 202610252000)));
+        assert_eq!(read("Dentist tomorrow 9:30", NOW), Some(("Dentist".into(), 202610260930)));
+        assert_eq!(read("Call today at 16:00", NOW), Some(("Call".into(), 202610251600)));
         assert_eq!(read("Lạ 31/2 9:00", NOW).map(|r| r.1), Some(202610260900), "invalid date ignored");
         assert_eq!(read("  28/10 9:00 ", NOW), None, "needs some text");
     }

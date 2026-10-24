@@ -24,6 +24,7 @@ use crate::notify::Toast;
 use crate::system::Battery;
 use crate::calendar::Appointment;
 use crate::health::{self, Health, Setting};
+use crate::i18n::tr;
 use crate::todo::Item;
 
 /// Everything the painter needs for one frame (logical px).
@@ -67,10 +68,10 @@ impl Page {
     /// Header of the page: icon, name, accent colour.
     fn title(self) -> (&'static str, &'static str, (f32, f32, f32)) {
         match self {
-            Page::Music => ("\u{E8D6}", "Nhạc", (0.72, 0.52, 1.0)),
-            Page::Todo => ("\u{E9D5}", "Việc cần làm", GREEN),
-            Page::Calendar => (ICON_CALENDAR, "Lịch hẹn", BLUE),
-            Page::Health => ("\u{E95E}", "Sức khỏe", (1.0, 0.42, 0.5)),
+            Page::Music => ("\u{E8D6}", tr("Nhạc", "Music"), (0.72, 0.52, 1.0)),
+            Page::Todo => ("\u{E9D5}", tr("Việc cần làm", "To-do"), GREEN),
+            Page::Calendar => (ICON_CALENDAR, tr("Lịch hẹn", "Appointments"), BLUE),
+            Page::Health => ("\u{E95E}", tr("Sức khỏe", "Health"), (1.0, 0.42, 0.5)),
         }
     }
 }
@@ -134,8 +135,8 @@ pub enum Button {
 impl Button {
     fn label(self) -> &'static str {
         match self {
-            Self::Previous => "Bài trước", Self::PlayPause => "Phát / Tạm dừng",
-            Self::Next => "Bài tiếp theo", Self::Seek => "Bấm để tua",
+            Self::Previous => tr("Bài trước", "Previous"), Self::PlayPause => tr("Phát / Tạm dừng", "Play / Pause"),
+            Self::Next => tr("Bài tiếp theo", "Next"), Self::Seek => tr("Bấm để tua", "Click to seek"),
             _ => "",
         }
     }
@@ -779,7 +780,7 @@ impl Renderer {
                         }
                         let tag_w = if edit_row.is_some() { 58.0 * s } else { 0.0 };
                         if edit_row.is_some() {
-                            text("Đang sửa", F_LABEL, rect(ib.right - tag_w - 8.0 * s, ib.top, ib.right - 10.0 * s, ib.bottom), trail, solid(YELLOW, a))?;
+                            text(tr("Đang sửa", "Editing"), F_LABEL, rect(ib.right - tag_w - 8.0 * s, ib.top, ib.right - 10.0 * s, ib.bottom), trail, solid(YELLOW, a))?;
                         }
                         let icon_box = rect(ib.left + 8.0 * s, ib.top, ib.left + 26.0 * s, ib.bottom);
                         text(ICON_ADD, F_SMALL_ICON, icon_box, center, grey(0.6, a))?;
@@ -843,16 +844,16 @@ impl Renderer {
                             let tl = cl + (COVER + 12.0) * s;
                             match v.music {
                                 Some(t) => {
-                                    let title = if t.title.is_empty() { "Đang phát" } else { &t.title };
+                                    let title = if t.title.is_empty() { tr("Đang phát", "Playing") } else { &t.title };
                                     text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
                                     text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, grey(0.65, a))?;
                                     let lyric = t.lyric_now().unwrap_or_else(|| hovered.map_or(
-                                        if t.duration_ms == 0 { "Trình phát chưa cung cấp thời gian" }
+                                        if t.duration_ms == 0 { tr("Trình phát chưa cung cấp thời gian", "The player gives no timeline") }
                                         else if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
                                     text(t.command_error.unwrap_or(lyric), F_BODY, rect(tl, top + 40.0 * s, cr, top + 58.0 * s), lead,
                                         if t.command_error.is_some() { color(1.0, 0.5, 0.4, a) } else { grey(0.95, a) })?;
                                 }
-                                None => text("Không có bài", F_TITLE, rect(tl, top, cr, top + COVER * s), lead, grey(1.0, a))?,
+                                None => text(tr("Không có bài", "Nothing playing"), F_TITLE, rect(tl, top, cr, top + COVER * s), lead, grey(1.0, a))?,
                             }
                             let pos = v.music.map_or(0, |t| t.position_ms());
                             let dur = v.music.map_or(0, |t| t.duration_ms);
@@ -883,15 +884,15 @@ impl Renderer {
                             }
                         }
                         Page::Todo => {
-                            draw_input("Thêm việc… (vd: Họp nhóm 20:00)")?;
+                            draw_input(tr("Thêm việc… (vd: Họp nhóm 20:00)", "Add a task… (e.g. Team call 20:00)"))?;
                             let (open, done_today) = if current { lv.counts } else { (v.todos.iter().filter(|i| i.done.is_none()).count(), 0) };
                             let cy = COUNT_Y * s;
-                            text(&format!("Chưa xong · {open}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
-                            text(&format!("✓ Xong hôm nay {done_today}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), trail,
+                            text(&format!("{} · {open}", tr("Chưa xong", "Open")), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
+                            text(&format!("✓ {} {done_today}", tr("Xong hôm nay", "Done today")), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), trail,
                                 if done_today > 0 { solid(GREEN, a) } else { grey(0.6, a) })?;
                             if v.todos.is_empty() {
                                 let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
-                                text("Chưa có việc nào", F_BODY, area, center, grey(0.55, a))?;
+                                text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, area, center, grey(0.55, a))?;
                             }
                             for (b, br) in btns.iter() {
                                 let Button::ListToggle(i) = *b else { continue };
@@ -916,7 +917,7 @@ impl Renderer {
                                 if let Some(due) = item.due {
                                     let (h, m) = (due / 100 % 100, due % 100);
                                     let tomorrow = due / 10_000 > lv.now / 10_000;
-                                    let label = if tomorrow { format!("Mai {h:02}:{m:02}") } else { format!("{h:02}:{m:02}") };
+                                    let label = if tomorrow { format!("{} {h:02}:{m:02}", tr("Mai", "Tmrw")) } else { format!("{h:02}:{m:02}") };
                                     let lw = if tomorrow { 60.0 } else { 40.0 } * s;
                                     text(&label, F_LABEL, rect(br.right - lw, br.top, br.right - 2.0 * s, br.bottom), trail, time_color(due, done))?;
                                     text_right = br.right - lw - 6.0 * s;
@@ -934,16 +935,16 @@ impl Renderer {
                             scrollbar(v.todos.len())?;
                         }
                         Page::Calendar => {
-                            draw_input("Thêm lịch hẹn… (vd: Khám răng 28/10 14:30)")?;
+                            draw_input(tr("Thêm lịch hẹn… (vd: Khám răng 28/10 14:30)", "Add an appointment… (e.g. Dentist 28/10 14:30)"))?;
                             let today = lv.now / 10_000;
                             let (upcoming, today_n) = if current { lv.counts } else { (v.appts.iter().filter(|x| x.at > lv.now).count(), 0) };
                             let cy = COUNT_Y * s;
-                            text(&format!("Sắp tới · {upcoming}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
-                            text(&format!("Hôm nay · {today_n}"), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), trail,
+                            text(&format!("{} · {upcoming}", tr("Sắp tới", "Upcoming")), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
+                            text(&format!("{} · {today_n}", tr("Hôm nay", "Today")), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), trail,
                                 if today_n > 0 { solid(BLUE, a) } else { grey(0.6, a) })?;
                             if v.appts.is_empty() {
                                 let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
-                                text("Chưa có lịch hẹn", F_BODY, area, center, grey(0.55, a))?;
+                                text(tr("Chưa có lịch hẹn", "No appointments"), F_BODY, area, center, grey(0.55, a))?;
                             }
                             for (b, br) in btns.iter() {
                                 // the first ListEdit of a row is its text area
@@ -959,8 +960,8 @@ impl Renderer {
                                 // Day on the left, time on the right.
                                 let day = ap.at / 10_000;
                                 let (d, mo) = (day % 100, day / 100 % 100);
-                                let day_label = if day == today { "Hôm nay".to_string() }
-                                    else if day == crate::todo::next_day(today as u32) as u64 { "Mai".to_string() }
+                                let day_label = if day == today { tr("Hôm nay", "Today").to_string() }
+                                    else if day == crate::todo::next_day(today as u32) as u64 { tr("Mai", "Tmrw").to_string() }
                                     else { format!("{d:02}/{mo:02}") };
                                 let past = ap.at <= lv.now;
                                 text(&day_label, F_LABEL, rect(br.left, br.top, br.left + 52.0 * s, br.bottom), lead,
@@ -988,7 +989,7 @@ impl Renderer {
                                 } else {
                                     text(ICON_WALK, F_ICON, ib, center, solid(accent, a))?;
                                 }
-                                let title = if card == Card::Water { "Uống nước" } else { "Đứng dậy" };
+                                let title = if card == Card::Water { tr("Uống nước", "Water") } else { tr("Đứng dậy", "Stand up") };
                                 text(title, F_TITLE, rect(ib.right + 4.0 * s, ty, x + CARD_W * s - 30.0 * s, ty + 22.0 * s), lead, grey(1.0, a))?;
                                 let open = settings == Some(card);
                                 if let Some(gb) = rect_of(Button::Gear(card)) {
@@ -1001,12 +1002,12 @@ impl Renderer {
                                         let y = (SET_Y + k as f32 * SET_ROW) * s;
                                         let row = rect(x + 12.0 * s, y, x + CARD_W * s - 12.0 * s, y + SET_ROW * s);
                                         let label = match set {
-                                            Setting::WaterOn | Setting::SitOn => "Nhắc",
-                                            Setting::Cup => "Mỗi lần",
-                                            Setting::Goal => "Mục tiêu",
-                                            Setting::From => "Từ",
-                                            Setting::To => "Đến",
-                                            Setting::SitEvery => "Mỗi",
+                                            Setting::WaterOn | Setting::SitOn => tr("Nhắc", "Remind"),
+                                            Setting::Cup => tr("Mỗi lần", "Per drink"),
+                                            Setting::Goal => tr("Mục tiêu", "Goal"),
+                                            Setting::From => tr("Từ", "From"),
+                                            Setting::To => tr("Đến", "To"),
+                                            Setting::SitEvery => tr("Mỗi", "Every"),
                                         };
                                         text(label, F_LABEL, row, lead, grey(0.65, a))?;
                                         if switch {
@@ -1024,7 +1025,7 @@ impl Renderer {
                                                 Setting::Goal => format!("{:.1} L", h.goal_ml as f32 / 1000.0),
                                                 Setting::From => health::hhmm(h.from_min),
                                                 Setting::To => health::hhmm(h.to_min),
-                                                _ => format!("{} phút", h.sit_every_min),
+                                                _ => format!("{} {}", h.sit_every_min, tr("phút", "min")),
                                             };
                                             if let (Some(mb), Some(pb)) = (rect_of(Button::Step(set, -1)), rect_of(Button::Step(set, 1))) {
                                                 for (bb, icon, dir) in [(mb, ICON_MINUS, -1), (pb, ICON_PLUS, 1)] {
@@ -1039,28 +1040,28 @@ impl Renderer {
                                     }
                                     if card == Card::Sit {
                                         let y = (SET_Y + 2.0 * SET_ROW) * s;
-                                        text("Rời máy ≥ 5 phút: tính lại", F_LABEL, rect(x + 12.0 * s, y, x + CARD_W * s - 8.0 * s, y + SET_ROW * s), lead, grey(0.5, a))?;
+                                        text(tr("Rời máy ≥ 5 phút: tính lại", "Away ≥ 5 min: starts over"), F_LABEL, rect(x + 12.0 * s, y, x + CARD_W * s - 8.0 * s, y + SET_ROW * s), lead, grey(0.5, a))?;
                                     }
                                     continue;
                                 }
                                 // Big number + unit, progress bar, status line, action button.
                                 let (big, unit, frac, status, action) = if card == Card::Water {
-                                    let status = if !h.water_on { "Đang tắt".to_string() }
-                                        else if h.taken_ml >= h.goal_ml { "Đạt mục tiêu hôm nay".to_string() }
-                                        else if hv.minute_of_day < h.from_min { format!("Bắt đầu nhắc lúc {}", health::hhmm(h.from_min)) }
+                                    let status = if !h.water_on { tr("Đang tắt", "Off").to_string() }
+                                        else if h.taken_ml >= h.goal_ml { tr("Đạt mục tiêu hôm nay", "Goal reached today").to_string() }
+                                        else if hv.minute_of_day < h.from_min { format!("{} {}", tr("Bắt đầu nhắc lúc", "Reminders start at"), health::hhmm(h.from_min)) }
                                         else {
                                             match h.next_drink(hv.now, hv.minute_of_day) {
-                                                Some(at) => format!("Nhắc lúc {}", health::hhmm((at - (hv.now - hv.minute_of_day as i64)).max(0) as u32)),
-                                                None => "Ngoài giờ nhắc".to_string(),
+                                                Some(at) => format!("{} {}", tr("Nhắc lúc", "Next at"), health::hhmm((at - (hv.now - hv.minute_of_day as i64)).max(0) as u32)),
+                                                None => tr("Ngoài giờ nhắc", "Outside reminder hours").to_string(),
                                             }
                                         };
                                     (h.taken_ml.to_string(), format!(" / {} ml", h.goal_ml), h.taken_ml as f32 / h.goal_ml.max(1) as f32, status, format!("+ {} ml", h.cup_ml))
                                 } else {
                                     let sat = h.sitting_minutes(hv.now);
-                                    let status = if !h.sit_on { "Đang tắt".to_string() }
-                                        else if h.sitting_since.is_none() { "Đang rời máy".to_string() }
-                                        else { format!("Nhắc sau {} phút", (h.sit_every_min as i64 - sat).max(0)) };
-                                    (sat.to_string(), " phút ngồi".to_string(), sat as f32 / h.sit_every_min.max(1) as f32, status, "Đã đứng dậy".to_string())
+                                    let status = if !h.sit_on { tr("Đang tắt", "Off").to_string() }
+                                        else if h.sitting_since.is_none() { tr("Đang rời máy", "Away from the PC").to_string() }
+                                        else { format!("{} {} {}", tr("Nhắc sau", "Reminder in"), (h.sit_every_min as i64 - sat).max(0), tr("phút", "min")) };
+                                    (sat.to_string(), format!(" {}", tr("phút ngồi", "min sitting")), sat as f32 / h.sit_every_min.max(1) as f32, status, tr("Đã đứng dậy", "I stood up").to_string())
                                 };
                                 let by = 60.0 * s;
                                 let bw = width(&big, F_BIG);
@@ -1082,7 +1083,7 @@ impl Renderer {
                                     if card == Card::Water {
                                         let hot = hovered == Some(Button::Snooze);
                                         rt.FillRoundedRectangle(&rounded(sb, 12.0 * s), &brush(grey(if hot { 0.3 } else { 0.2 }, a))?);
-                                        text("Để sau", F_LABEL, sb, center, grey(1.0, a))?;
+                                        text(tr("Để sau", "Later"), F_LABEL, sb, center, grey(1.0, a))?;
                                     }
                                 }
                             }

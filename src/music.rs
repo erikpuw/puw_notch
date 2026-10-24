@@ -153,7 +153,7 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
             };
             op.and_then(|o| o.get()) == Ok(true)
             } else { false };
-            if !accepted { command_error = Some("Trình phát chưa nhận lệnh. Hãy thử lại."); }
+            if !accepted { command_error = Some(crate::i18n::tr("Trình phát chưa nhận lệnh. Hãy thử lại.", "The player did not take the command. Try again.")); }
         }
         let standard = session.as_ref().and_then(read);
         let native = if cmd.is_none() || native_target { crate::itunes::read() } else { None };

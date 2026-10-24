@@ -8,6 +8,7 @@ use windows::Win32::System::Registry::*;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
 const WEEKDAYS: [&str; 7] = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+const WEEKDAYS_EN: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /// Local time as yyyymmddHHMM (to-do reminders).
 pub fn now_stamp() -> u64 {
@@ -21,10 +22,11 @@ pub fn today() -> u32 {
     t.wYear as u32 * 10_000 + t.wMonth as u32 * 100 + t.wDay as u32
 }
 
-/// ("16:04", "T7, 24/10"): time for the pill, short date for the panel header.
+/// ("16:04", "T7, 24/10" / "Sat, 24/10"): time for the pill, short date for the panel header.
 pub fn clock() -> (String, String) {
     let t = unsafe { GetLocalTime() };
-    let day = WEEKDAYS[t.wDayOfWeek as usize % 7];
+    let days = if crate::i18n::english() { WEEKDAYS_EN } else { WEEKDAYS };
+    let day = days[t.wDayOfWeek as usize % 7];
     (format!("{:02}:{:02}", t.wHour, t.wMinute), format!("{day}, {:02}/{:02}", t.wDay, t.wMonth))
 }
 
@@ -73,9 +75,9 @@ pub fn power_events(old: Battery, new: Battery) -> Vec<PowerEvent> {
 }
 
 impl Battery {
-    /// "Pin 80%" / "Đang sạc 80%"
+    /// "Pin 80%" / "Đang sạc 80%" (English: "Battery 80%" / "Charging 80%")
     pub fn label(&self) -> String {
-        let label = if self.charging { "Đang sạc" } else { "Pin" };
+        let label = if self.charging { crate::i18n::tr("Đang sạc", "Charging") } else { crate::i18n::tr("Pin", "Battery") };
         format!("{label} {}%", self.percent)
     }
 }
@@ -93,18 +95,35 @@ fn settings_path() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("APPDATA")?).join("PuwNotch").join("settings.txt"))
 }
 
-pub fn load_minimal() -> bool {
-    settings_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_some_and(|s| s.lines().any(|l| l.trim() == "minimal=1"))
+/// Tray choices kept in settings.txt.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct Settings {
+    pub minimal: bool,
+    pub english: bool,
 }
 
-pub fn save_minimal(on: bool) {
+fn parse_settings(text: &str) -> Settings {
+    let mut s = Settings::default();
+    for line in text.lines() {
+        match line.trim() {
+            "minimal=1" => s.minimal = true,
+            "lang=en" => s.english = true,
+            _ => {}
+        }
+    }
+    s
+}
+
+pub fn load_settings() -> Settings {
+    settings_path().and_then(|p| std::fs::read_to_string(p).ok()).map_or_else(Settings::default, |t| parse_settings(&t))
+}
+
+pub fn save_settings(s: Settings) {
     if let Some(p) = settings_path() {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, format!("minimal={}\n", on as u8));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\n", s.minimal as u8, if s.english { "en" } else { "vi" }));
     }
 }
 
@@ -134,6 +153,12 @@ mod tests {
 
     fn b(percent: u8, charging: bool, saver: bool) -> Battery {
         Battery { percent, charging, saver }
+    }
+
+    #[test]
+    fn settings_file() {
+        assert_eq!(parse_settings("minimal=1\nlang=en\n"), Settings { minimal: true, english: true });
+        assert_eq!(parse_settings("minimal=0\n"), Settings::default(), "old files without lang stay Vietnamese");
     }
 
     #[test]

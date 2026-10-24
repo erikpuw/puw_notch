@@ -69,7 +69,9 @@ chuyển trang có hiệu ứng morph: trang cũ trượt ra mờ dần, trang m
 
 **Icon app**: `assets/puw.ico` / `assets/puw.res` (vẽ bằng `assets/make_icon.py`), nhúng vào exe qua `build.rs`; dùng cho tray.
 
-**Khác**: tray (Notch tối giản, Khởi động cùng Windows, Thoát), chạy một bản duy nhất, cài đặt ở `%APPDATA%\PuwNotch\settings.txt`.
+**Ngôn ngữ**: tray → *Ngôn ngữ / Language* → Tiếng Việt / English. Đổi xong áp dụng ngay (tiêu đề trang, ngày "Sun, 25/10", banner, nhắc nhở, menu) và lưu `lang=vi|en`. Ô nhập lịch hẹn hiểu cả "today" / "tomorrow", việc cần làm hiểu "at 16:00".
+
+**Khác**: tray (Notch tối giản, Khởi động cùng Windows, Ngôn ngữ, Thoát), chạy một bản duy nhất, cài đặt ở `%APPDATA%\PuwNotch\settings.txt`.
 Chọn **Thoát** sẽ kết thúc tiến trình và gỡ biểu tượng tray.
 
 ### Lưu ý về thông báo
@@ -103,6 +105,7 @@ rồi tắt "Hiện banner thông báo" cho từng app.
 | `src/todo.rs` | Danh sách việc: thêm, tick, xóa, dọn theo ngày, đọc/ghi file (có test). |
 | `src/system.rs` | Giờ, pin (+ tiết kiệm pin) và sự kiện pin (có test), file cài đặt, khóa Run trong registry. |
 | `src/main.rs` | Cửa sổ, timer, chuột, tray, nối các phần. |
+| `src/i18n.rs` | Ngôn ngữ giao diện: `tr("vi", "en")`. |
 
 ## Kế hoạch
 
