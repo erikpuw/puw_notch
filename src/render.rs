@@ -887,8 +887,8 @@ impl Renderer {
                             draw_input(tr("Thêm việc… (vd: Họp nhóm 20:00)", "Add a task… (e.g. Team call 20:00)"))?;
                             let (open, done_today) = if current { lv.counts } else { (v.todos.iter().filter(|i| i.done.is_none()).count(), 0) };
                             let cy = COUNT_Y * s;
-                            text(&format!("{} · {open}", tr("Chưa xong", "Open")), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
-                            text(&format!("✓ {} {done_today}", tr("Xong hôm nay", "Done today")), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), trail,
+                            text(&format!("{} · {open}", tr("Chưa xong", "Open")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), lead, grey(0.6, a))?;
+                            text(&format!("✓ {} {done_today}", tr("Xong hôm nay", "Done today")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), trail,
                                 if done_today > 0 { solid(GREEN, a) } else { grey(0.6, a) })?;
                             if v.todos.is_empty() {
                                 let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
@@ -939,8 +939,8 @@ impl Renderer {
                             let today = lv.now / 10_000;
                             let (upcoming, today_n) = if current { lv.counts } else { (v.appts.iter().filter(|x| x.at > lv.now).count(), 0) };
                             let cy = COUNT_Y * s;
-                            text(&format!("{} · {upcoming}", tr("Sắp tới", "Upcoming")), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), lead, grey(0.6, a))?;
-                            text(&format!("{} · {today_n}", tr("Hôm nay", "Today")), F_LABEL, rect(cl, cy, cr, cy + 14.0 * s), trail,
+                            text(&format!("{} · {upcoming}", tr("Sắp tới", "Upcoming")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), lead, grey(0.6, a))?;
+                            text(&format!("{} · {today_n}", tr("Hôm nay", "Today")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), trail,
                                 if today_n > 0 { solid(BLUE, a) } else { grey(0.6, a) })?;
                             if v.appts.is_empty() {
                                 let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
