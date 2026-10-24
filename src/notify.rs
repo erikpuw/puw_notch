@@ -14,6 +14,8 @@ pub struct Toast {
     pub body: String,
     /// 0..1 bar for status banners (volume, brightness); None for notifications.
     pub level: Option<f32>,
+    /// Fluent icon glyph for the banner; None = notification bell.
+    pub icon: Option<&'static str>,
 }
 
 type Open = unsafe extern "system" fn(*const c_char, *mut *mut c_void, c_int, *const c_char) -> c_int;
@@ -97,7 +99,7 @@ impl Reader {
                 let aumid = self.text(stmt, 1);
                 let (title, body) = parse_payload(&self.text(stmt, 2));
                 if !title.is_empty() {
-                    out.push(Toast { app: app_name(&aumid), title, body, level: None });
+                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None });
                 }
             }
             (self.sql.finalize)(stmt);
@@ -200,7 +202,7 @@ mod tests {
                    INSERT INTO Notification VALUES(5,1,'toast','<toast><text>Cũ</text></toast>');";
         exec(&path, sql);
         let (mut r, history) = Reader::open_path(path.to_str().unwrap()).expect("open");
-        assert_eq!(history, vec![Toast { app: "MSTeams".into(), title: "Cũ".into(), body: String::new(), level: None }]);
+        assert_eq!(history, vec![Toast { app: "MSTeams".into(), title: "Cũ".into(), body: String::new(), level: None, icon: None }]);
         assert!(r.poll().is_empty());
         exec(&path, "INSERT INTO Notification VALUES(6,1,'toast','<toast><text>Mới</text><text>nội dung</text></toast>');\
                      INSERT INTO Notification VALUES(7,1,'tile','<tile><text>bỏ qua</text></tile>');");

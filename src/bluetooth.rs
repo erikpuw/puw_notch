@@ -19,10 +19,58 @@ pub const WM_BT: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 2;
 pub const WM_BT_DEVICE: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 6;
 const DEVICE_POLL: Duration = Duration::from_secs(2);
 
-/// (device name, true = connected / false = disconnected), filled by the watcher thread.
-static DEVICE_EVENTS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum DeviceKind {
+    Headphones,
+    Speaker,
+    Phone,
+    Mouse,
+    Keyboard,
+    Gamepad,
+    Other,
+}
 
-pub fn take_device_events() -> Vec<(String, bool)> {
+/// Kind from the Bluetooth class of device (major/minor numbers, 0 = unknown, e.g. LE devices)
+/// and, where the class says nothing useful (keyboards and mice share one class), the name.
+pub fn device_kind(major: i32, minor: i32, name: &str) -> DeviceKind {
+    use DeviceKind::*;
+    let n = name.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
+    match major {
+        // AudioVideo: loudspeaker, hi-fi, display+speaker -> speaker; the rest is worn
+        4 => return if matches!(minor, 5 | 10 | 15) { Speaker } else { Headphones },
+        2 => return Phone,
+        5 if matches!(minor, 1 | 2) => return Gamepad,
+        _ => {}
+    }
+    if has(&["mouse", "chuột", "mx master", "trackball"]) {
+        Mouse
+    } else if has(&["keyboard", "bàn phím", "keys"]) {
+        Keyboard
+    } else if has(&["buds", "airpods", "headphone", "headset", "tai nghe", "hitune", "wh-", "wf-", "earbud"]) {
+        Headphones
+    } else if has(&["speaker", "loa", "jbl", "soundlink"]) {
+        Speaker
+    } else if has(&["iphone", "phone", "galaxy", "pixel", "redmi", "oppo"]) {
+        Phone
+    } else if has(&["controller", "gamepad", "xbox", "dualsense", "dualshock"]) {
+        Gamepad
+    } else {
+        Other
+    }
+}
+
+/// Device type for an id from the classic selector; LE ids and failures give (0, 0).
+fn class_of(id: &str) -> (i32, i32) {
+    let Ok(dev) = BluetoothDevice::FromIdAsync(&id.into()).and_then(|op| op.get()) else { return (0, 0) };
+    let Ok(c) = dev.ClassOfDevice() else { return (0, 0) };
+    (c.MajorClass().map_or(0, |m| m.0), c.MinorClass().map_or(0, |m| m.0))
+}
+
+/// (device name, kind, true = connected / false = disconnected), filled by the watcher thread.
+static DEVICE_EVENTS: Mutex<Vec<(String, DeviceKind, bool)>> = Mutex::new(Vec::new());
+
+pub fn take_device_events() -> Vec<(String, DeviceKind, bool)> {
     DEVICE_EVENTS.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
 }
 
@@ -60,16 +108,34 @@ pub fn watch_devices(hwnd: HWND) {
     std::thread::spawn(move || {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
         let mut last = connected();
+        // Class lookups are a round trip each; remember them per device id.
+        let mut kinds: BTreeMap<String, DeviceKind> = BTreeMap::new();
         loop {
             std::thread::sleep(DEVICE_POLL);
             let now = connected();
             let events = diff(&last, &now);
-            last = now;
-            if events.is_empty() {
-                continue;
+            if !events.is_empty() {
+                let mut tagged = Vec::new();
+                for (name, up) in events {
+                    let source = if up { &now } else { &last };
+                    let kind = source
+                        .iter()
+                        .filter(|(_, n)| **n == name)
+                        .map(|(id, n)| *kinds.entry(id.clone()).or_insert_with(|| {
+                            let (major, minor) = class_of(id);
+                            device_kind(major, minor, n)
+                        }))
+                        .find(|k| *k != DeviceKind::Other)
+                        .unwrap_or(DeviceKind::Other);
+                    tagged.push((name, kind, up));
+                }
+                if let Ok(mut q) = DEVICE_EVENTS.lock() {
+                    q.extend(tagged);
+                }
             }
-            if let Ok(mut q) = DEVICE_EVENTS.lock() {
-                q.extend(events);
+            last = now;
+            if DEVICE_EVENTS.lock().map_or(true, |q| q.is_empty()) {
+                continue;
             }
             unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_BT_DEVICE, WPARAM(0), LPARAM(0)); }
         }
@@ -147,5 +213,18 @@ mod tests {
         assert!(diff(&before, &same).is_empty());
         let after = map(&[("b-le", "Tai nghe WH-1000"), ("c", "Loa JBL")]);
         assert_eq!(diff(&before, &after), vec![("Loa JBL".to_string(), true), ("Chuột MX".to_string(), false)]);
+    }
+
+    #[test]
+    fn kinds() {
+        use DeviceKind::*;
+        assert_eq!(device_kind(4, 6, "UGREEN HiTune Max5c"), Headphones);
+        assert_eq!(device_kind(4, 5, "Living room"), Speaker);
+        assert_eq!(device_kind(2, 3, "iPhone"), Phone);
+        assert_eq!(device_kind(5, 2, "Pad"), Gamepad);
+        assert_eq!(device_kind(5, 0, "MX Master 3S"), Mouse);
+        assert_eq!(device_kind(0, 0, "UGREEN HiTune Max5c"), Headphones);
+        assert_eq!(device_kind(0, 0, "Keychron K2 Keyboard"), Keyboard);
+        assert_eq!(device_kind(0, 0, "Thiết bị lạ"), Other);
     }
 }

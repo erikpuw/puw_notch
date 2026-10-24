@@ -231,7 +231,7 @@ impl App {
         let level = self.brightness.as_ref().and_then(|b| b.percent());
         if level.is_some() && self.last_brightness.is_some() && level != self.last_brightness {
             let p = level.unwrap_or(0);
-            self.show_banner(status_toast("Màn hình", format!("Độ sáng {p}%"), "", Some(p as f32 / 100.0)), STATUS_MS);
+            self.show_banner(status_toast("Màn hình", format!("Độ sáng {p}%"), "", Some(p as f32 / 100.0), render::ICON_BRIGHTNESS), STATUS_MS);
         }
         self.last_brightness = level.or(self.last_brightness);
 
@@ -361,7 +361,7 @@ impl App {
                     if let Some((level, muted)) = self.volume {
                         let pct = (level * 100.0).round();
                         let title = if muted { "Đã tắt tiếng".to_string() } else { format!("Âm lượng {pct}%") };
-                        self.show_banner(status_toast("Loa", title, "", Some(if muted { 0.0 } else { level })), STATUS_MS);
+                        self.show_banner(status_toast("Loa", title, "", Some(if muted { 0.0 } else { level }), if muted { render::ICON_MUTE } else { render::ICON_VOLUME }), STATUS_MS);
                     }
                     if !self.animating {
                         self.redraw();
@@ -406,7 +406,7 @@ impl App {
             }
             WM_LOCKKEY => {
                 let (name, on) = status::lock_state(wp.0);
-                self.show_banner(status_toast("Bàn phím", name.to_string(), if on { "Bật" } else { "Tắt" }, None), STATUS_MS);
+                self.show_banner(status_toast("Bàn phím", name.to_string(), if on { "Bật" } else { "Tắt" }, None, render::ICON_KEYBOARD), STATUS_MS);
             }
             // Windows applies the key after the hook returns; read the level a moment later.
             WM_VOLKEY => unsafe {
@@ -419,9 +419,9 @@ impl App {
                 }
             }
             WM_BT_DEVICE => {
-                for (name, up) in bluetooth::take_device_events() {
+                for (name, kind, up) in bluetooth::take_device_events() {
                     let state = if up { "Đã kết nối" } else { "Đã ngắt kết nối" };
-                    self.show_banner(status_toast("Bluetooth", name, state, None), ALERT_MS);
+                    self.show_banner(status_toast("Bluetooth", name, state, None, render::device_icon(kind)), ALERT_MS);
                 }
             }
             WM_BT => {
@@ -451,8 +451,8 @@ impl App {
     }
 }
 
-fn status_toast(source: &str, title: String, body: &str, level: Option<f32>) -> Toast {
-    Toast { app: source.to_string(), title, body: body.to_string(), level }
+fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
+    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon) }
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {

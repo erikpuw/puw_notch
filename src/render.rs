@@ -120,12 +120,12 @@ const F_ICON: usize = 3;
 const F_TITLE: usize = 4;
 const F_LABEL_ICON: usize = 5;
 
-const ICON_VOLUME: &str = "\u{E767}";
-const ICON_MUTE: &str = "\u{E74F}";
+pub const ICON_VOLUME: &str = "\u{E767}";
+pub const ICON_MUTE: &str = "\u{E74F}";
 const ICON_MINUS: &str = "\u{E738}";
 const ICON_PLUS: &str = "\u{E710}";
 const ICON_MIC: &str = "\u{E720}";
-const ICON_BT: &str = "\u{E702}";
+pub const ICON_BT: &str = "\u{E702}";
 const ICON_PREV: &str = "\u{E892}";
 const ICON_PLAY: &str = "\u{E768}";
 const ICON_PAUSE: &str = "\u{E769}";
@@ -133,6 +133,23 @@ const ICON_NEXT: &str = "\u{E893}";
 const ICON_NOTE: &str = "\u{E8D6}";
 const ICON_LEFT: &str = "\u{E76B}";
 const ICON_RIGHT: &str = "\u{E76C}";
+const ICON_BELL: &str = "\u{EA8F}";
+pub const ICON_BRIGHTNESS: &str = "\u{E706}";
+pub const ICON_KEYBOARD: &str = "\u{E765}";
+
+/// Banner icon for a Bluetooth device.
+pub fn device_icon(kind: crate::bluetooth::DeviceKind) -> &'static str {
+    use crate::bluetooth::DeviceKind::*;
+    match kind {
+        Headphones => "\u{E7F6}",
+        Speaker => "\u{E7F5}",
+        Phone => "\u{E8EA}",
+        Mouse => "\u{E962}",
+        Keyboard => ICON_KEYBOARD,
+        Gamepad => "\u{E7FC}",
+        Other => ICON_BT,
+    }
+}
 
 pub struct Renderer {
     factory: ID2D1Factory,
@@ -367,7 +384,13 @@ impl Renderer {
             if v.mode == Mode::Alert {
                 if let Some(t) = v.banner {
                     let a = fade(44.0, 18.0);
-                    let (tl, tr) = (l + 22.0 * s, r - 22.0 * s);
+                    // Icon in a circle on the left, text beside it.
+                    let d = 36.0 * s;
+                    let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + 2.0 * s);
+                    let circle = D2D1_ELLIPSE { point: Vector2 { X: ix + d / 2.0, Y: iy + d / 2.0 }, radiusX: d / 2.0, radiusY: d / 2.0 };
+                    rt.FillEllipse(&circle, &brush(grey(0.2, a))?);
+                    text(t.icon.unwrap_or(ICON_BELL), F_ICON, rect(ix, iy, ix + d, iy + d), center, grey(1.0, a))?;
+                    let (tl, tr) = (ix + d + 12.0 * s, r - 22.0 * s);
                     text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
                     text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
                     match t.level {

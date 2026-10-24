@@ -31,7 +31,9 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - Phím âm lượng / tắt tiếng: "Âm lượng 72%" + thanh mức.
 - Độ sáng màn hình laptop thay đổi: "Độ sáng 90%" + thanh mức.
 - Caps Lock / Num Lock: Bật / Tắt.
-- Thiết bị Bluetooth kết nối / ngắt: "Bluetooth · Tai nghe … · Đã kết nối" (kiểm tra mỗi 2 giây, cả Bluetooth thường và BLE).
+- Thiết bị Bluetooth kết nối / ngắt: "Bluetooth · Tai nghe … · Đã kết nối" (kiểm tra mỗi 2 giây, cả Bluetooth thường và BLE),
+  icon theo loại: tai nghe, loa, điện thoại, chuột, bàn phím, tay cầm (theo class Bluetooth, thiếu thì đoán theo tên).
+- Mỗi banner có icon bên trái (chuông cho thông báo app, loa, độ sáng, bàn phím, thiết bị).
 
 **Nhạc** (mọi app báo lên điều khiển media của Windows: Spotify, Chrome/Edge, Media Player, foobar2000...)
 - Notch thường khi có nhạc: ảnh bìa bên trái, giờ ở giữa, cột sóng nhạc bên phải.
