@@ -2,6 +2,7 @@
 
 mod audio;
 mod bluetooth;
+mod music;
 mod notch;
 mod notify;
 mod render;
@@ -25,6 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use bluetooth::{Bt, WM_BT};
 use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_MS};
+use music::WM_MUSIC;
 use status::{WM_LOCKKEY, WM_VOLKEY};
 use notify::Toast;
 use render::{Button, Renderer, View};
@@ -70,7 +72,16 @@ struct App {
     volume: Option<(f32, bool)>,
     mic_muted: Option<bool>,
     bt: Bt,
+    music: music::Music,
+    track: Option<music::Track>,
+    started: Instant,
+    /// Current T_ANIM interval: fast while the spring moves, slower for the equaliser alone.
+    frame_ms: u32,
 }
+
+/// Animation frame intervals.
+const FRAME_MS: u32 = 15;
+const BARS_FRAME_MS: u32 = 40;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -107,16 +118,30 @@ impl App {
             volume: self.volume,
             mic_muted: self.mic_muted,
             bt: self.bt,
+            music: self.track.as_ref(),
+            phase: self.started.elapsed().as_secs_f32(),
         };
         let _ = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view);
+    }
+
+    fn set_frame_interval(&mut self, ms: u32) {
+        if self.frame_ms != ms {
+            self.frame_ms = ms;
+            unsafe { SetTimer(Some(self.hwnd), T_ANIM, ms, None) };
+        }
     }
 
     fn kick(&mut self) {
         if !self.animating {
             self.animating = true;
             self.last_frame = Instant::now();
-            unsafe { SetTimer(Some(self.hwnd), T_ANIM, 15, None) };
         }
+        self.set_frame_interval(FRAME_MS);
+    }
+
+    /// The equaliser in the resting pill keeps frames coming while music plays.
+    fn bars_active(&self) -> bool {
+        !self.hidden && self.track.as_ref().is_some_and(|t| t.playing) && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek)
     }
 
     fn frame(&mut self) {
@@ -125,9 +150,22 @@ impl App {
         self.last_frame = now;
         let moving = self.notch.step(dt);
         self.redraw();
-        if !moving {
+        if moving {
+            self.set_frame_interval(FRAME_MS);
+        } else if self.bars_active() {
+            self.set_frame_interval(BARS_FRAME_MS);
+        } else {
             self.animating = false;
+            self.frame_ms = 0;
             unsafe { let _ = KillTimer(Some(self.hwnd), T_ANIM); }
+        }
+    }
+
+    /// Pull the latest now-playing snapshot; music starting/stopping resizes the pill.
+    fn refresh_music(&mut self) {
+        self.track = self.music.snapshot();
+        if self.notch.set_live(self.track.is_some()) || self.bars_active() {
+            self.kick();
         }
     }
 
@@ -159,20 +197,21 @@ impl App {
         let mut changed = (&time, &date, &battery) != (&self.time, &self.date, &self.battery);
         (self.time, self.date, self.battery) = (time, date, battery);
         changed |= self.refresh_audio();
+        self.refresh_music();
+        // Progress bar and lyric line move on their own while the panel is open.
+        changed |= self.notch.mode == Mode::Expanded && self.track.as_ref().is_some_and(|t| t.playing);
 
-        // While wide the notch covers the sampled strips; keep the last verdict.
-        let wide = self.notch.is_wide();
+        // The window is layered, so the screen sample never contains the notch itself.
         let cx = self.win.0 + self.win.2 / 2;
-        match screen::check(self.hwnd, cx, self.monitor, self.scale, !wide) {
+        let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
+        match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w) {
             screen::Check::Fullscreen => self.set_hidden(true),
             screen::Check::Busy(busy) => {
                 self.set_hidden(false);
-                if !wide {
-                    let before = self.notch.mode;
-                    self.notch.report_busy(busy);
-                    if self.notch.mode != before {
-                        self.kick();
-                    }
+                let before = self.notch.mode;
+                self.notch.report_busy(busy);
+                if self.notch.mode != before {
+                    self.kick();
                 }
             }
         }
@@ -211,11 +250,17 @@ impl App {
             return;
         }
         let cx = self.win.2 as f32 / 2.0;
-        let hit = render::buttons(cx, self.scale).into_iter().find(|(_, r)| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+        let hit = render::buttons(cx, self.scale, self.notch.live).into_iter().find(|(_, r)| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
         let Some((button, r)) = hit else { return };
-        if button == Button::Bluetooth {
-            bluetooth::request(self.hwnd, true);
-            return;
+        let media = match button {
+            Button::Bluetooth => return bluetooth::request(self.hwnd, true),
+            Button::Previous => Some(music::Cmd::Previous),
+            Button::PlayPause => Some(music::Cmd::PlayPause),
+            Button::Next => Some(music::Cmd::Next),
+            _ => None,
+        };
+        if let Some(cmd) = media {
+            return self.music.send(cmd);
         }
         let Some(a) = &self.audio else { return };
         let level = self.volume.map_or(0.0, |(l, _)| l);
@@ -225,7 +270,7 @@ impl App {
             Button::VolUp => a.set_volume(level + VOLUME_STEP),
             Button::VolBar => a.set_volume((x - r.left) / (r.right - r.left)),
             Button::Mic => a.toggle_mic(),
-            Button::Bluetooth => {}
+            _ => {}
         }
         self.refresh_audio();
         self.redraw();
@@ -350,6 +395,12 @@ impl App {
             WM_VOLKEY => unsafe {
                 SetTimer(Some(self.hwnd), T_VOLKEY, 60, None);
             },
+            WM_MUSIC => {
+                self.refresh_music();
+                if !self.animating {
+                    self.redraw();
+                }
+            }
             WM_BT => {
                 self.bt = Bt::from_wparam(wp.0);
                 if !self.animating {
@@ -448,6 +499,10 @@ fn main() -> windows::core::Result<()> {
             volume: None,
             mic_muted: None,
             bt: Bt::Unknown,
+            music: music::Music::start(hwnd),
+            track: None,
+            started: Instant::now(),
+            frame_ms: 0,
         };
         app.refresh_audio();
         bluetooth::request(hwnd, false);

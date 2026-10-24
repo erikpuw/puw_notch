@@ -18,28 +18,30 @@ pub enum Mode {
 }
 
 /// (width, height, corner radius) the notch animates towards in each mode.
-pub fn target(mode: Mode) -> [f32; 3] {
-    match mode {
-        Mode::Collapsed => [150.0, 30.0, 10.0],
-        Mode::Mini => [44.0, 4.0, 2.0],
-        Mode::Peek => [166.0, 34.0, 12.0],
-        Mode::PeekMini => [72.0, 8.0, 4.0],
-        Mode::Expanded => [440.0, 200.0, 28.0],
-        Mode::Alert => [360.0, 64.0, 22.0],
+/// `live` = music is playing: wider pill (cover + bars) and a music card in the panel.
+pub fn target(mode: Mode, live: bool) -> [f32; 3] {
+    match (mode, live) {
+        (Mode::Collapsed, false) => [150.0, 30.0, 14.0],
+        (Mode::Collapsed, true) => [190.0, 30.0, 14.0],
+        (Mode::Mini, _) => [44.0, 4.0, 2.0],
+        (Mode::Peek, false) => [166.0, 34.0, 15.0],
+        (Mode::Peek, true) => [206.0, 34.0, 15.0],
+        (Mode::PeekMini, _) => [72.0, 8.0, 4.0],
+        (Mode::Expanded, false) => [440.0, 200.0, 28.0],
+        (Mode::Expanded, true) => [440.0, 286.0, 28.0],
+        (Mode::Alert, _) => [360.0, 64.0, 22.0],
     }
 }
 
 /// Window must fit the largest target plus the hover margin.
 pub const MAX_W: f32 = 460.0;
-pub const MAX_H: f32 = 220.0;
+pub const MAX_H: f32 = 300.0;
 /// How long a notification banner stays.
 pub const ALERT_MS: u32 = 5000;
 /// How long a status banner (Caps Lock, brightness) stays.
 pub const STATUS_MS: u32 = 1500;
 /// Invisible hover margin around the pill (not used in mini: only the line itself reacts).
 pub const HOVER_MARGIN: f32 = 4.0;
-/// Notch wider than this would cover the side strips the obstruction check samples.
-pub const WIDE: f32 = 180.0;
 /// How long the mouse must stay before Peek turns into Expanded.
 pub const DWELL_MS: u32 = 200;
 
@@ -69,6 +71,7 @@ impl Spring {
 pub struct Notch {
     pub mode: Mode,
     pub minimal: bool,
+    pub live: bool,
     obstructed: bool,
     clear_checks: u8,
     size: [Spring; 3],
@@ -76,9 +79,9 @@ pub struct Notch {
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
-        for (s, t) in n.size.iter_mut().zip(target(n.mode)) {
+        for (s, t) in n.size.iter_mut().zip(target(n.mode, false)) {
             s.pos = t;
         }
         n
@@ -97,8 +100,11 @@ impl Notch {
         [self.size[0].pos, self.size[1].pos, self.size[2].pos]
     }
 
-    pub fn is_wide(&self) -> bool {
-        self.size[0].pos > WIDE
+    /// Music started/stopped. Returns true if the target size changed (caller animates).
+    pub fn set_live(&mut self, live: bool) -> bool {
+        let changed = self.live != live;
+        self.live = live;
+        changed
     }
 
     /// Mouse entered the drawn shape. Returns true if a dwell timer should start.
@@ -170,7 +176,7 @@ impl Notch {
 
     /// Advance the animation. Returns true while still moving.
     pub fn step(&mut self, dt: f32) -> bool {
-        let t = target(self.mode);
+        let t = target(self.mode, self.live);
         let mut moving = false;
         for (s, t) in self.size.iter_mut().zip(t) {
             moving |= s.step(t, dt);
@@ -201,11 +207,16 @@ mod tests {
         n.on_dwell(true);
         assert_eq!(n.mode, Mode::Expanded);
         settle(&mut n);
-        assert!(n.is_wide());
+        assert_eq!(n.size(), target(Mode::Expanded, false));
         n.on_leave();
         assert_eq!(n.mode, Mode::Collapsed);
         settle(&mut n);
-        assert_eq!(n.size(), target(Mode::Collapsed));
+        assert_eq!(n.size(), target(Mode::Collapsed, false));
+        // music starting widens the resting pill
+        assert!(n.set_live(true));
+        assert!(!n.set_live(true));
+        settle(&mut n);
+        assert_eq!(n.size(), target(Mode::Collapsed, true));
     }
 
     #[test]

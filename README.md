@@ -9,12 +9,12 @@ cargo build --release
 target/release/puw_notch.exe
 ```
 
-Test: `cargo test`
+Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCLIB thật và liệt kê phiên media trên máy)
 
 ## Tính năng
 
 **Notch**
-- Dính mép trên màn hình chính, viền "tai thỏ" kiểu iPhone (hai góc trên loe cong), co giãn kiểu lò xo.
+- Dính mép trên màn hình chính, viền "tai thỏ" kiểu iPhone (hai góc trên loe cong, to dần theo chiều cao), co giãn kiểu lò xo.
 - **Thường** (150×30): giờ. **Hover** 200 ms thì bung (440×200).
 - **Mini** (44×4): khi cửa sổ phía dưới có nội dung lởm chởm sát notch (nhiều tab), hoặc bật "Notch tối giản".
   Ở mini chỉ chính vạch 44×4 nhận chuột.
@@ -30,6 +30,11 @@ Test: `cargo test`
 - Phím âm lượng / tắt tiếng: "Âm lượng 72%" + thanh mức.
 - Độ sáng màn hình laptop thay đổi: "Độ sáng 90%" + thanh mức.
 - Caps Lock / Num Lock: Bật / Tắt.
+
+**Nhạc** (mọi app báo lên điều khiển media của Windows: Spotify, Chrome/Edge, Media Player, foobar2000...)
+- Notch thường khi có nhạc: ảnh bìa bên trái, giờ ở giữa, cột sóng nhạc bên phải.
+- Bảng mở rộng có thẻ nhạc: ảnh bìa, tên bài, ca sĩ, câu lời đang hát (LRCLIB), thanh tiến độ `00:33 / -03:26`, ⏮ ⏯ ⏭.
+- App không gửi vị trí bài (ví dụ foobar2000 mặc định) thì không có thanh tiến độ và lời không chạy theo được.
 
 **Khác**: tray (Notch tối giản, Khởi động cùng Windows, Thoát), chạy một bản duy nhất, cài đặt ở `%APPDATA%\PuwNotch\settings.txt`.
 
@@ -56,10 +61,10 @@ rồi tắt "Hiện banner thông báo" cho từng app.
 | `src/audio.rs` | Âm lượng, tắt tiếng loa, mic (Core Audio, thiết bị mặc định). |
 | `src/bluetooth.rs` | Radio Bluetooth (Windows.Devices.Radios) trên luồng phụ. |
 | `src/status.rs` | Hook bàn phím cấp thấp (chỉ phím khóa + âm lượng), độ sáng qua WMI. |
+| `src/music.rs` | Luồng phụ đọc phiên media (GlobalSystemMediaTransportControls) mỗi 500 ms, lệnh ⏮⏯⏭, tải lời LRCLIB (WinRT HttpClient + JSON), tách LRC. |
 | `src/system.rs` | Giờ, pin, file cài đặt, khóa Run trong registry. |
 | `src/main.rs` | Cửa sổ, timer, chuột, tray, nối các phần. |
 
 ## Kế hoạch
 
-3. Nhạc + lời bài hát (LRCLIB).
 4. Pomodoro, nhắc uống nước, to-do, kệ file.

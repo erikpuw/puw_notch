@@ -38,6 +38,13 @@ features = [
     "Foundation",
     "Foundation_Collections",
     "Devices_Radios",
+    "Media_Control",
+    "Storage_Streams",
+    "Web_Http",
+    "Web_Http_Headers",
+    "Data_Json",
+    "Win32_Graphics_Imaging",
+    "Win32_Graphics_Imaging_D2D",
 ]
 
 [profile.release]

@@ -8,9 +8,13 @@ use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::Graphics::Imaging::*;
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::bluetooth::Bt;
+use crate::music::Track;
 use crate::notch::{target, Mode, HOVER_MARGIN};
 use crate::notify::Toast;
 
@@ -28,6 +32,10 @@ pub struct View<'a> {
     pub volume: Option<(f32, bool)>,
     pub mic_muted: Option<bool>,
     pub bt: Bt,
+    /// Now playing; Some = "live" layout (cover in the pill, music card in the panel).
+    pub music: Option<&'a Track>,
+    /// Seconds, drives the equaliser bars.
+    pub phase: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -38,30 +46,56 @@ pub enum Button {
     VolUp,
     Mic,
     Bluetooth,
+    Previous,
+    PlayPause,
+    Next,
 }
 
 const PAD: f32 = 24.0;
-/// Radius of the concave flares joining the notch sides to the screen edge.
-const EAR: f32 = 7.0;
+/// Concave flares joining the notch sides to the screen edge: grow with the notch, capped.
+const EAR_RATIO: f32 = 0.35;
+const EAR_MAX: f32 = 14.0;
 const BTN: f32 = 36.0;
-const CONTROLS_TOP: f32 = 146.0;
+const MEDIA_BTN: f32 = 32.0;
+/// Panel rows (logical px from the top). The music card only exists while live.
+const MUSIC_TOP: f32 = 66.0;
+const MUSIC_H: f32 = 86.0;
+const CARD_H: f32 = 64.0;
+const COVER: f32 = 70.0;
+
+fn card_top(live: bool) -> f32 {
+    if live { MUSIC_TOP + MUSIC_H + 8.0 } else { 68.0 }
+}
+
+fn controls_top(live: bool) -> f32 {
+    card_top(live) + CARD_H + 14.0
+}
 
 /// Control rects in window px for the settled Expanded panel centred at `cx`.
-pub fn buttons(cx: f32, scale: f32) -> [(Button, D2D_RECT_F); 6] {
-    let w = target(Mode::Expanded)[0];
+pub fn buttons(cx: f32, scale: f32, live: bool) -> Vec<(Button, D2D_RECT_F)> {
+    let w = target(Mode::Expanded, live)[0];
     let x0 = cx / scale - w / 2.0 + PAD;
     let inner = w - 2.0 * PAD;
-    let r = |a: f32, b: f32| rect((x0 + a) * scale, CONTROLS_TOP * scale, (x0 + b) * scale, (CONTROLS_TOP + BTN) * scale);
+    let r = |a: f32, b: f32, top: f32, size: f32| rect((x0 + a) * scale, top * scale, (x0 + b) * scale, (top + size) * scale);
     let gap = 8.0;
+    let ct = controls_top(live);
     let right = |i: f32| inner - BTN * (i + 1.0) - gap * i;
-    [
-        (Button::SpeakerMute, r(0.0, BTN)),
-        (Button::VolDown, r(BTN + gap, 2.0 * BTN + gap)),
-        (Button::VolBar, r(2.0 * (BTN + gap), right(2.0) - gap)),
-        (Button::VolUp, r(right(2.0), right(2.0) + BTN)),
-        (Button::Mic, r(right(1.0), right(1.0) + BTN)),
-        (Button::Bluetooth, r(right(0.0), right(0.0) + BTN)),
-    ]
+    let mut out = vec![
+        (Button::SpeakerMute, r(0.0, BTN, ct, BTN)),
+        (Button::VolDown, r(BTN + gap, 2.0 * BTN + gap, ct, BTN)),
+        (Button::VolBar, r(2.0 * (BTN + gap), right(2.0) - gap, ct, BTN)),
+        (Button::VolUp, r(right(2.0), right(2.0) + BTN, ct, BTN)),
+        (Button::Mic, r(right(1.0), right(1.0) + BTN, ct, BTN)),
+        (Button::Bluetooth, r(right(0.0), right(0.0) + BTN, ct, BTN)),
+    ];
+    if live {
+        let top = MUSIC_TOP + 8.0;
+        let m = |i: f32| inner - 10.0 - MEDIA_BTN * (i + 1.0) - 6.0 * i;
+        out.push((Button::Previous, r(m(2.0), m(2.0) + MEDIA_BTN, top, MEDIA_BTN)));
+        out.push((Button::PlayPause, r(m(1.0), m(1.0) + MEDIA_BTN, top, MEDIA_BTN)));
+        out.push((Button::Next, r(m(0.0), m(0.0) + MEDIA_BTN, top, MEDIA_BTN)));
+    }
+    out
 }
 
 /// Text styles, indexed by these constants.
@@ -78,17 +112,25 @@ const ICON_MINUS: &str = "\u{E738}";
 const ICON_PLUS: &str = "\u{E710}";
 const ICON_MIC: &str = "\u{E720}";
 const ICON_BT: &str = "\u{E702}";
+const ICON_PREV: &str = "\u{E892}";
+const ICON_PLAY: &str = "\u{E768}";
+const ICON_PAUSE: &str = "\u{E769}";
+const ICON_NEXT: &str = "\u{E893}";
+const ICON_NOTE: &str = "\u{E8D6}";
 
 pub struct Renderer {
     factory: ID2D1Factory,
     rt: ID2D1DCRenderTarget,
     dw: IDWriteFactory,
+    wic: Option<IWICImagingFactory>,
     mem: HDC,
     bmp: HBITMAP,
     old: HGDIOBJ,
     w: i32,
     h: i32,
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
+    /// Decoded cover of the current track (keyed by Track::art_key).
+    cover: Option<(u64, Option<ID2D1Bitmap>)>,
 }
 
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
@@ -101,6 +143,16 @@ fn grey(v: f32, a: f32) -> D2D1_COLOR_F {
 
 fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {
     D2D_RECT_F { left: l, top: t, right: r, bottom: b }
+}
+
+/// 83_000 ms -> "01:23"
+fn clock(ms: u64) -> String {
+    let s = ms / 1000;
+    format!("{:02}:{:02}", s / 60, s % 60)
+}
+
+fn rounded(r: D2D_RECT_F, radius: f32) -> D2D1_ROUNDED_RECT {
+    D2D1_ROUNDED_RECT { rect: r, radiusX: radius, radiusY: radius }
 }
 
 impl Renderer {
@@ -118,8 +170,9 @@ impl Renderer {
             let rt = factory.CreateDCRenderTarget(&props)?;
             rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            let wic = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
             let mem = CreateCompatibleDC(None);
-            Ok(Renderer { factory, rt, dw, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None })
         }
     }
 
@@ -175,12 +228,30 @@ impl Renderer {
         Ok(self.fonts.as_ref().unwrap().1.clone())
     }
 
+    /// Decode the cover once per track (WIC → premultiplied BGRA → D2D bitmap).
+    fn cover(&mut self, t: &Track) -> Option<ID2D1Bitmap> {
+        if self.cover.as_ref().map(|c| c.0) != Some(t.art_key) {
+            let decoded = t.art.as_ref().and_then(|bytes| unsafe {
+                let wic = self.wic.as_ref()?;
+                let stream = wic.CreateStream().ok()?;
+                stream.InitializeFromMemory(bytes).ok()?;
+                let decoder = wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand).ok()?;
+                let frame = decoder.GetFrame(0).ok()?;
+                let conv = wic.CreateFormatConverter().ok()?;
+                conv.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
+                self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()
+            });
+            self.cover = Some((t.art_key, decoded));
+        }
+        self.cover.as_ref().and_then(|c| c.1.clone())
+    }
+
     /// iPhone-style notch: flat top on the screen edge, concave "ears" flaring into it,
     /// straight sides, round bottom corners.
     fn notch_shape(&self, l: f32, r: f32, h: f32, radius: f32, ear: f32) -> Result<ID2D1PathGeometry> {
-        let p = |x: f32, y: f32| windows_numerics::Vector2 { X: x, Y: y };
+        let p = |x: f32, y: f32| Vector2 { X: x, Y: y };
         let rad = radius.min(h - ear).min((r - l) / 2.0).max(0.0);
-        let arc = |to: windows_numerics::Vector2, size: f32, dir: D2D1_SWEEP_DIRECTION| D2D1_ARC_SEGMENT {
+        let arc = |to: Vector2, size: f32, dir: D2D1_SWEEP_DIRECTION| D2D1_ARC_SEGMENT {
             point: to,
             size: D2D_SIZE_F { width: size, height: size },
             rotationAngle: 0.0,
@@ -208,8 +279,10 @@ impl Renderer {
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<()> {
         self.ensure_surface(w, h)?;
         let fonts = self.fonts(scale)?;
+        let cover = v.music.and_then(|t| self.cover(t));
         let rt = &self.rt;
         let s = scale;
+        let live = v.music.is_some();
         let [nw, nh, nr] = v.size.map(|d| d * s);
         let cx = w as f32 / 2.0;
         let (l, r) = (cx - nw / 2.0, cx + nw / 2.0);
@@ -221,6 +294,24 @@ impl Renderer {
                 rt.DrawText(&t, &fonts[f], &b, &brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
                 Ok(())
             };
+            // Cover art clipped to a rounded square, or a note glyph when there is none.
+            let draw_cover = |box_: D2D_RECT_F, radius: f32, a: f32| -> Result<()> {
+                match &cover {
+                    Some(bmp) => {
+                        let size = bmp.GetSize();
+                        let b = rt.CreateBitmapBrush(bmp, None, None)?;
+                        let (sx, sy) = ((box_.right - box_.left) / size.width, (box_.bottom - box_.top) / size.height);
+                        b.SetTransform(&Matrix3x2 { M11: sx, M12: 0.0, M21: 0.0, M22: sy, M31: box_.left, M32: box_.top });
+                        b.SetOpacity(a);
+                        rt.FillRoundedRectangle(&rounded(box_, radius), &b);
+                    }
+                    None => {
+                        rt.FillRoundedRectangle(&rounded(box_, radius), &brush(grey(0.2, a))?);
+                        text(ICON_NOTE, F_ICON, box_, DWRITE_TEXT_ALIGNMENT_CENTER, grey(1.0, a * 0.8))?;
+                    }
+                }
+                Ok(())
+            };
             let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
             let center = DWRITE_TEXT_ALIGNMENT_CENTER;
             let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
@@ -228,7 +319,7 @@ impl Renderer {
             rt.BeginDraw();
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
-            let ear = (EAR * s).min(nh / 2.0);
+            let ear = (nh * EAR_RATIO).min(EAR_MAX * s);
             if !matches!(v.mode, Mode::Mini | Mode::PeekMini) {
                 // Alpha 1/255: invisible but still catches the mouse.
                 let m = HOVER_MARGIN * s;
@@ -241,6 +332,21 @@ impl Renderer {
             let small_a = 1.0 - fade(39.0, 20.0);
             if nh >= 20.0 * s && small_a > 0.0 && v.mode != Mode::Alert {
                 text(v.time, F_SMALL, rect(l, 0.0, r, nh), center, grey(1.0, small_a))?;
+                if let Some(t) = v.music {
+                    // Live pill: cover on the left, equaliser on the right.
+                    let c = 20.0 * s;
+                    let top = (nh - c) / 2.0;
+                    draw_cover(rect(l + 10.0 * s, top, l + 10.0 * s + c, top + c), 5.0 * s, small_a)?;
+                    let bw = 3.0 * s;
+                    for i in 0..4 {
+                        let k = i as f32;
+                        let amp = if t.playing { 0.5 + 0.5 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin() } else { 0.0 };
+                        let bh = (4.0 + 10.0 * amp) * s;
+                        let bx = r - 14.0 * s - (4.0 - k) * (bw + 2.0 * s);
+                        let my = nh / 2.0;
+                        rt.FillRoundedRectangle(&rounded(rect(bx, my - bh / 2.0, bx + bw, my + bh / 2.0), bw / 2.0), &brush(grey(1.0, small_a * 0.9))?);
+                    }
+                }
             }
 
             if v.mode == Mode::Alert {
@@ -253,7 +359,7 @@ impl Renderer {
                         Some(level) => {
                             let th = 5.0 * s;
                             let my = 50.0 * s;
-                            let bar = |right: f32| D2D1_ROUNDED_RECT { rect: rect(tl, my - th / 2.0, right, my + th / 2.0), radiusX: th / 2.0, radiusY: th / 2.0 };
+                            let bar = |right: f32| rounded(rect(tl, my - th / 2.0, right, my + th / 2.0), th / 2.0);
                             rt.FillRoundedRectangle(&bar(tr), &brush(grey(0.25, a))?);
                             rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &brush(grey(1.0, a))?);
                         }
@@ -269,28 +375,62 @@ impl Renderer {
                 text(v.date, F_BODY, rect(pl, 16.0 * s, pr, 36.0 * s), trail, grey(0.75, a))?;
                 text(v.battery, F_BODY, rect(pl, 36.0 * s, pr, 56.0 * s), trail, grey(0.75, a))?;
 
-                let card = D2D1_ROUNDED_RECT { rect: rect(pl, 68.0 * s, pr, 132.0 * s), radiusX: 14.0 * s, radiusY: 14.0 * s };
+                let btns = buttons(cx, s, live);
+                if let Some(t) = v.music {
+                    let card = rect(pl, MUSIC_TOP * s, pr, (MUSIC_TOP + MUSIC_H) * s);
+                    rt.FillRoundedRectangle(&rounded(card, 14.0 * s), &brush(grey(0.11, a))?);
+                    let ct = card.top + 8.0 * s;
+                    draw_cover(rect(pl + 8.0 * s, ct, pl + (8.0 + COVER) * s, ct + COVER * s), 10.0 * s, a)?;
+                    let tl = pl + (COVER + 20.0) * s;
+                    let first_btn = btns.iter().find(|b| b.0 == Button::Previous).map_or(pr, |b| b.1.left);
+                    let title = if t.title.is_empty() { "Đang phát" } else { &t.title };
+                    text(title, F_TITLE, rect(tl, ct, first_btn - 6.0 * s, ct + 18.0 * s), lead, grey(1.0, a))?;
+                    text(&t.artist, F_BODY, rect(tl, ct + 18.0 * s, first_btn - 6.0 * s, ct + 34.0 * s), lead, grey(0.65, a))?;
+                    let lyric = t.lyric_now().unwrap_or(if t.lyrics.is_empty() { "" } else { "♪" });
+                    text(lyric, F_BODY, rect(tl, ct + 38.0 * s, pr - 12.0 * s, ct + 56.0 * s), lead, grey(0.95, a))?;
+                    if t.duration_ms > 0 {
+                        let pos = t.position_ms();
+                        let th = 4.0 * s;
+                        let by = ct + 64.0 * s;
+                        let label_w = 40.0 * s;
+                        let (bl, brr) = (tl + label_w, pr - 12.0 * s - label_w);
+                        text(&clock(pos), F_LABEL, rect(tl, by - 8.0 * s, bl - 6.0 * s, by + 12.0 * s), lead, grey(0.6, a))?;
+                        text(&format!("-{}", clock(t.duration_ms - pos)), F_LABEL, rect(brr + 6.0 * s, by - 8.0 * s, pr - 12.0 * s, by + 12.0 * s), trail, grey(0.6, a))?;
+                        let bar = |right: f32| rounded(rect(bl, by, right, by + th), th / 2.0);
+                        let p = pos as f32 / t.duration_ms as f32;
+                        rt.FillRoundedRectangle(&bar(brr), &brush(grey(0.25, a))?);
+                        rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p.clamp(0.0, 1.0)), &brush(grey(1.0, a))?);
+                    }
+                }
+
+                let card = rounded(rect(pl, card_top(live) * s, pr, (card_top(live) + CARD_H) * s), 14.0 * s);
                 rt.FillRoundedRectangle(&card, &brush(grey(0.11, a))?);
                 let (tl, tr) = (pl + 14.0 * s, pr - 14.0 * s);
+                let top = card.rect.top;
                 match v.toast {
                     Some(t) => {
-                        text(&t.app, F_LABEL, rect(tl, 74.0 * s, tr, 90.0 * s), lead, grey(0.6, a))?;
-                        text(&t.title, F_TITLE, rect(tl, 90.0 * s, tr, 108.0 * s), lead, grey(1.0, a))?;
-                        text(&t.body, F_BODY, rect(tl, 108.0 * s, tr, 126.0 * s), lead, grey(0.75, a))?;
+                        text(&t.app, F_LABEL, rect(tl, top + 6.0 * s, tr, top + 22.0 * s), lead, grey(0.6, a))?;
+                        text(&t.title, F_TITLE, rect(tl, top + 22.0 * s, tr, top + 40.0 * s), lead, grey(1.0, a))?;
+                        text(&t.body, F_BODY, rect(tl, top + 40.0 * s, tr, top + 58.0 * s), lead, grey(0.75, a))?;
                     }
                     None => text("Không có thông báo", F_BODY, card.rect, center, grey(0.55, a))?,
                 }
 
-                for (b, br) in buttons(cx, s) {
+                for &(b, br) in &btns {
                     if b == Button::VolBar {
                         let level = v.volume.map_or(0.0, |(lv, _)| lv);
                         let track_h = 6.0 * s;
                         let my = (br.top + br.bottom) / 2.0;
-                        let track = |right: f32| D2D1_ROUNDED_RECT { rect: rect(br.left, my - track_h / 2.0, right, my + track_h / 2.0), radiusX: track_h / 2.0, radiusY: track_h / 2.0 };
+                        let track = |right: f32| rounded(rect(br.left, my - track_h / 2.0, right, my + track_h / 2.0), track_h / 2.0);
                         rt.FillRoundedRectangle(&track(br.right), &brush(grey(0.25, a))?);
                         rt.FillRoundedRectangle(&track(br.left + (br.right - br.left) * level), &brush(grey(1.0, a))?);
+                        if let Some((level, _)) = v.volume {
+                            let label = format!("{}%", (level * 100.0).round());
+                            text(&label, F_LABEL, rect(br.left, br.top - 14.0 * s, br.right, br.top + 4.0 * s), center, grey(0.6, a))?;
+                        }
                         continue;
                     }
+                    let playing = v.music.is_some_and(|t| t.playing);
                     // (icon, lit = white button with black icon, warn = red)
                     let (icon, lit, warn) = match b {
                         Button::SpeakerMute => match v.volume {
@@ -301,23 +441,21 @@ impl Renderer {
                         Button::VolUp => (ICON_PLUS, false, false),
                         Button::Mic => (ICON_MIC, false, v.mic_muted == Some(true)),
                         Button::Bluetooth => (ICON_BT, v.bt == Bt::On, false),
+                        Button::Previous => (ICON_PREV, false, false),
+                        Button::PlayPause => (if playing { ICON_PAUSE } else { ICON_PLAY }, true, false),
+                        Button::Next => (ICON_NEXT, false, false),
                         Button::VolBar => unreachable!(),
                     };
                     let missing = (b == Button::Mic && v.mic_muted.is_none()) || (b == Button::Bluetooth && v.bt == Bt::Missing);
                     let bg = if warn { color(1.0, 0.27, 0.23, a) } else if lit { grey(1.0, a) } else { grey(0.17, a) };
                     let fg = if lit { grey(0.0, a) } else { grey(1.0, if missing { a * 0.35 } else { a }) };
                     let circle = D2D1_ELLIPSE {
-                        point: windows_numerics::Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
+                        point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
                         radiusX: (br.right - br.left) / 2.0,
                         radiusY: (br.bottom - br.top) / 2.0,
                     };
                     rt.FillEllipse(&circle, &brush(bg)?);
                     text(icon, F_ICON, br, center, fg)?;
-                }
-                if let Some((level, _)) = v.volume {
-                    let bar = buttons(cx, s)[2].1;
-                    let label = format!("{}%", (level * 100.0).round());
-                    text(&label, F_LABEL, rect(bar.left, bar.top - 14.0 * s, bar.right, bar.top + 4.0 * s), center, grey(0.6, a))?;
                 }
             }
             rt.EndDraw(None, None)?;

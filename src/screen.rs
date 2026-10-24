@@ -8,7 +8,6 @@ pub enum Check {
     /// A fullscreen app (game, video) owns the notch's monitor: hide the notch.
     Fullscreen,
     /// Normal desktop; `true` when the window under the notch has busy pixels beside the pill.
-    /// Not sampled → `false`, and the caller ignores it.
     Busy(bool),
 }
 
@@ -43,9 +42,9 @@ fn class_name(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n])
 }
 
-/// `own` = notch window, `center_x` = notch centre in screen px, `monitor` = notch monitor rect.
-/// `sample` = false skips the pixel strips (the notch is wide and would cover them).
-pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, sample: bool) -> Check {
+/// `own` = notch window, `center_x` = notch centre in screen px, `monitor` = notch monitor rect,
+/// `pill_w` = resting pill width (logical px); the strips sit just outside it.
+pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32) -> Check {
     unsafe {
         let fg = GetForegroundWindow();
         if fg.is_invalid() || fg == own || !IsWindowVisible(fg).as_bool() || IsIconic(fg).as_bool() {
@@ -62,11 +61,7 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, sample: bool) 
         if near(r.left, monitor.left) && near(r.top, monitor.top) && near(r.right, monitor.right) && near(r.bottom, monitor.bottom) {
             return Check::Fullscreen;
         }
-        if !sample {
-            return Check::Busy(false);
-        }
-
-        let half = (crate::notch::target(crate::notch::Mode::Collapsed)[0] / 2.0 * scale) as i32;
+        let half = (pill_w / 2.0 * scale) as i32;
         let gap = (STRIP_GAP * scale) as i32;
         let sw = (STRIP_W * scale) as i32;
         let sh = (STRIP_H * scale) as i32;
