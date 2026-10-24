@@ -29,7 +29,7 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - Trang **Nhạc**: ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26` (bấm để tua), ⏮ ⏯ ⏭.
 - Trang **Việc cần làm**: ô "Thêm việc…" (bấm để gõ, Enter lưu và gõ tiếp, Esc hủy), tick vòng tròn để xong
   (chữ gạch ngang, xuống cuối), ✕ để xóa (hiện khi rê chuột), "Xong hôm nay", lăn chuột để cuộn khi > 3 việc.
-  Lưu ở `%APPDATA%\PuwNotch	odo.txt`; sang ngày mới thì việc đã xong hôm trước tự dọn.
+  Lưu ở `%APPDATA%\PuwNotch\todo.txt`; sang ngày mới thì việc đã xong hôm trước tự dọn.
 - Đọc thông báo: dùng trung tâm thông báo của Windows; notch chỉ báo khi có thông báo mới.
 
 **Banner tự giãn ra**
