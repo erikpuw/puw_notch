@@ -16,7 +16,7 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 **Notch**
 - Dính mép trên màn hình chính, viền "tai thỏ" kiểu iPhone (hai góc trên loe cong, to dần theo chiều cao).
 - Co giãn kiểu lò xo nhẹ (giảm chấn ~0,78): mở và thu mượt, độ nảy vượt đích dưới 2%.
-- **Thường** (150×30): giờ (chữ đậm 15 px). **Hover** 200 ms thì mở bảng (440×180).
+- **Thường** (150×30): giờ (chữ đậm 15 px). **Hover** 80 ms thì mở bảng (440×180).
 - **Pin** (laptop): vòng tròn mức pin cạnh giờ — xanh lá + tia sét khi đang sạc, đỏ khi ≤ 20%, trắng khi bình thường.
   PC không có pin thì không hiện gì. Khi có nhạc vòng pin nằm trước cột sóng.
 - **Mini** (44×4): khi cửa sổ phía dưới có nội dung lởm chởm sát notch (nhiều tab), hoặc bật "Notch tối giản".

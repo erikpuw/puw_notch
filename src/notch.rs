@@ -46,7 +46,7 @@ pub const STATUS_MS: u32 = 1500;
 /// Invisible hover margin around the pill (not used in mini: only the line itself reacts).
 pub const HOVER_MARGIN: f32 = 4.0;
 /// How long the mouse must stay before Peek turns into Expanded.
-pub const DWELL_MS: u32 = 200;
+pub const DWELL_MS: u32 = 80;
 
 #[derive(Clone, Copy, Default)]
 struct Spring {
