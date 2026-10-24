@@ -170,7 +170,9 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
             }
             continue;
         };
-        let new_key = format!("{}\u{1}{}\u{1}{}\u{1}{}", t.source_id, t.title, t.artist, t.duration_ms);
+        // Duration stays out: some players report it only on some polls, and a flapping key
+        // would drop the lyrics and fetch them again every time.
+        let new_key = format!("{}\u{1}{}\u{1}{}", t.source_id, t.title, t.artist);
         let changed_track = new_key != key;
         let prev = shared.lock().ok().and_then(|g| g.clone());
         if changed_track {
@@ -302,21 +304,82 @@ fn read_stream(r: &IRandomAccessStreamReference) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// LRCLIB: exact match first (title + artist + duration), then a search.
+/// LRCLIB, most precise first: exact (title + artist + duration), field search, then free text.
+/// Names are cleaned first: video titles carry "| Official MV", channel names "Official" etc.
 fn fetch_lyrics(title: &str, artist: &str, duration_s: u64) -> Vec<(u64, String)> {
     let base = "https://lrclib.net/api";
-    let q = format!("track_name={}&artist_name={}", url_encode(title), url_encode(artist));
-    if duration_s > 0 {
-        if let Some(body) = http_get(&format!("{base}/get?{q}&duration={duration_s}")) {
+    let (title, artist) = clean_names(title, artist);
+    if title.is_empty() {
+        return Vec::new();
+    }
+    let fields = format!("track_name={}&artist_name={}", url_encode(&title), url_encode(&artist));
+    if duration_s > 0 && !artist.is_empty() {
+        if let Some(body) = http_get(&format!("{base}/get?{fields}&duration={duration_s}")) {
             if let Some(lines) = JsonObject::Parse(&HSTRING::from(body)).ok().and_then(|o| synced(&o)) {
                 return lines;
             }
         }
     }
-    let Some(body) = http_get(&format!("{base}/search?{q}")) else { return Vec::new() };
-    let Ok(items) = JsonArray::Parse(&HSTRING::from(body)) else { return Vec::new() };
-    let n = items.Size().unwrap_or(0);
-    (0..n).filter_map(|i| items.GetObjectAt(i).ok()).find_map(|o| synced(&o)).unwrap_or_default()
+    let mut searches = Vec::new();
+    if !artist.is_empty() {
+        searches.push(format!("{base}/search?{fields}"));
+        searches.push(format!("{base}/search?q={}", url_encode(&format!("{artist} {title}"))));
+    }
+    searches.push(format!("{base}/search?q={}", url_encode(&title)));
+    for url in searches {
+        let Some(body) = http_get(&url) else { continue };
+        let Ok(items) = JsonArray::Parse(&HSTRING::from(body)) else { continue };
+        let n = items.Size().unwrap_or(0);
+        if let Some(lines) = (0..n).filter_map(|i| items.GetObjectAt(i).ok()).find_map(|o| synced(&o)) {
+            return lines;
+        }
+    }
+    Vec::new()
+}
+
+/// Clean player names for a lyrics lookup.
+/// "SƠN TÙNG M-TP | LẠC TRÔI | OFFICIAL MUSIC VIDEO" by "Sơn Tùng M-TP Official" -> ("LẠC TRÔI", "Sơn Tùng M-TP").
+pub fn clean_names(title: &str, artist: &str) -> (String, String) {
+    let lower_has = |s: &str, words: &[&str]| { let l = s.to_lowercase(); words.iter().any(|w| l.contains(w)) };
+    const NOISE: [&str; 14] = ["official", "music video", " mv", "mv ", "lyric", "audio", "video", "visualizer", "karaoke", "live", "remaster", "4k", "hd", "m/v"];
+    // Drop bracketed parts: (Official MV), [Lyrics], 【...】
+    let mut t = String::new();
+    let mut depth = 0;
+    for c in title.chars() {
+        match c {
+            '(' | '[' | '【' | '「' => depth += 1,
+            ')' | ']' | '】' | '」' => depth = (depth - 1).max(0),
+            _ if depth == 0 => t.push(c),
+            _ => {}
+        }
+    }
+    let mut artist = artist.trim().to_string();
+    for suffix in [" - Topic", "VEVO", " Official", " official", " OFFICIAL"] {
+        if let Some(stripped) = artist.strip_suffix(suffix) {
+            artist = stripped.trim().to_string();
+        }
+    }
+    // "A | B | Official MV": keep the parts that are not noise; the part equal to the artist goes.
+    let parts: Vec<String> = t.split(['|', '｜', '•']).map(|p| p.trim().to_string()).filter(|p| !p.is_empty() && !lower_has(p, &NOISE)).collect();
+    let mut t = match parts.as_slice() {
+        [] => t.trim().to_string(),
+        [one] => one.clone(),
+        many => many.iter().find(|p| !p.eq_ignore_ascii_case(&artist) && p.to_lowercase() != artist.to_lowercase()).cloned().unwrap_or_else(|| many[0].clone()),
+    };
+    // "Artist - Title": take the artist from the title when the channel is not a person's name.
+    if let Some((a, rest)) = t.split_once(" - ") {
+        if artist.is_empty() || a.to_lowercase().contains(&artist.to_lowercase()) || artist.to_lowercase().contains(&a.to_lowercase()) {
+            artist = a.trim().to_string();
+        }
+        t = rest.trim().to_string();
+    }
+    // Featured artists confuse the lookup.
+    for sep in [" ft.", " ft ", " feat.", " feat ", " x "] {
+        if let Some(i) = t.to_lowercase().find(sep) {
+            t.truncate(i);
+        }
+    }
+    (t.trim().to_string(), artist)
 }
 
 fn synced(o: &JsonObject) -> Option<Vec<(u64, String)>> {
@@ -509,6 +572,24 @@ mod tests {
         let lines = fetch_lyrics("Lạc Trôi", "Sơn Tùng M-TP", 0);
         assert!(lines.len() > 10, "got {} lines", lines.len());
         eprintln!("first: {:?}", &lines[..3]);
+    }
+
+    #[test]
+    fn names_are_cleaned() {
+        assert_eq!(clean_names("SƠN TÙNG M-TP | LẠC TRÔI | OFFICIAL MUSIC VIDEO", "Sơn Tùng M-TP Official"), ("LẠC TRÔI".into(), "Sơn Tùng M-TP".into()));
+        assert_eq!(clean_names("Đen - Mang Tiền Về Cho Mẹ ft. Nguyên Thảo (M/V)", "Đen Vâu Official"), ("Mang Tiền Về Cho Mẹ".into(), "Đen".into()));
+        assert_eq!(clean_names("Shape of You [Official Video]", "Ed Sheeran"), ("Shape of You".into(), "Ed Sheeran".into()));
+        assert_eq!(clean_names("Blinding Lights", "The Weeknd - Topic"), ("Blinding Lights".into(), "The Weeknd".into()));
+        assert_eq!(clean_names("Lạc Trôi", "Sơn Tùng M-TP"), ("Lạc Trôi".into(), "Sơn Tùng M-TP".into()));
+    }
+
+    /// Network: `cargo test lrclib_video_title -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn lrclib_video_title() {
+        unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
+        let lines = fetch_lyrics("SƠN TÙNG M-TP | LẠC TRÔI | OFFICIAL MUSIC VIDEO", "Sơn Tùng M-TP Official", 0);
+        assert!(lines.len() > 10, "got {} lines", lines.len());
     }
 
     #[test]
