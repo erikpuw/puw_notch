@@ -16,6 +16,8 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 **Notch**
 - Dính mép trên màn hình chính, viền "tai thỏ" kiểu iPhone (hai góc trên loe cong, to dần theo chiều cao), co giãn kiểu lò xo.
 - **Thường** (150×30): giờ (chữ đậm 15 px). **Hover** 200 ms thì mở bảng (440×180).
+- **Pin** (laptop): vòng tròn mức pin cạnh giờ — xanh lá + tia sét khi đang sạc, đỏ khi ≤ 20%, trắng khi bình thường.
+  PC không có pin thì không hiện gì. Khi có nhạc vòng pin nằm trước cột sóng.
 - **Mini** (44×4): khi cửa sổ phía dưới có nội dung lởm chởm sát notch (nhiều tab), hoặc bật "Notch tối giản".
   Ở mini chỉ chính vạch 44×4 nhận chuột.
 - **Ẩn khi fullscreen** (game, video) trên màn hình có notch; desktop/taskbar không tính. Không hiện banner khi đang ẩn.
@@ -36,7 +38,7 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - Mỗi banner có icon bên trái (chuông cho thông báo app, loa, độ sáng, bàn phím, thiết bị).
 
 **Nhạc** (mọi app báo lên điều khiển media của Windows: Spotify, Chrome/Edge, Media Player, foobar2000...)
-- Notch thường khi có nhạc: ảnh bìa bên trái, giờ ở giữa, cột sóng nhạc bên phải.
+- Notch thường khi có nhạc: ảnh bìa bên trái, giờ ở giữa, (pin), cột sóng nhạc bên phải.
 - Lời bài hát lấy từ LRCLIB, chạy theo vị trí bài.
 - App không gửi vị trí bài (ví dụ foobar2000 mặc định) thì không có thanh tiến độ và lời không chạy theo được.
 

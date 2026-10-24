@@ -16,14 +16,27 @@ pub fn clock() -> (String, String) {
     (format!("{:02}:{:02}", t.wHour, t.wMinute), format!("{day}, {} tháng {}", t.wDay, t.wMonth))
 }
 
-/// "Pin 80%" / "Đang sạc 80%" / "" when there is no battery.
-pub fn battery() -> String {
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Battery {
+    pub percent: u8,
+    pub charging: bool,
+}
+
+impl Battery {
+    /// "Pin 80%" / "Đang sạc 80%"
+    pub fn label(&self) -> String {
+        let label = if self.charging { "Đang sạc" } else { "Pin" };
+        format!("{label} {}%", self.percent)
+    }
+}
+
+/// None on a desktop PC (no system battery): nothing battery-related is shown then.
+pub fn battery() -> Option<Battery> {
     let mut s = SYSTEM_POWER_STATUS::default();
     if unsafe { GetSystemPowerStatus(&mut s) }.is_err() || s.BatteryLifePercent == 255 || s.BatteryFlag & 128 != 0 {
-        return String::new();
+        return None;
     }
-    let label = if s.ACLineStatus == 1 { "Đang sạc" } else { "Pin" };
-    format!("{label} {}%", s.BatteryLifePercent)
+    Some(Battery { percent: s.BatteryLifePercent.min(100), charging: s.ACLineStatus == 1 })
 }
 
 fn settings_path() -> Option<PathBuf> {

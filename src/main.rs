@@ -60,7 +60,7 @@ struct App {
     taskbar_created: u32,
     time: String,
     date: String,
-    battery: String,
+    battery: Option<system::Battery>,
     notifications: Option<notify::Reader>,
     /// What the Alert banner shows right now.
     banner: Option<Toast>,
@@ -113,7 +113,7 @@ impl App {
             size: self.notch.size(),
             time: &self.time,
             date: &self.date,
-            battery: &self.battery,
+            battery: self.battery,
             banner: self.banner.as_ref(),
             toast: self.toast.as_ref(),
             volume: self.volume,
@@ -196,7 +196,7 @@ impl App {
     fn tick(&mut self) {
         let (time, date) = system::clock();
         let battery = system::battery();
-        let mut changed = (&time, &date, &battery) != (&self.time, &self.date, &self.battery);
+        let mut changed = (&time, &date, battery) != (&self.time, &self.date, self.battery);
         (self.time, self.date, self.battery) = (time, date, battery);
         changed |= self.refresh_audio();
         self.refresh_music();

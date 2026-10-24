@@ -22,10 +22,10 @@ pub enum Mode {
 pub fn target(mode: Mode, live: bool) -> [f32; 3] {
     match (mode, live) {
         (Mode::Collapsed, false) => [150.0, 30.0, 14.0],
-        (Mode::Collapsed, true) => [190.0, 30.0, 14.0],
+        (Mode::Collapsed, true) => [216.0, 30.0, 14.0],
         (Mode::Mini, _) => [44.0, 4.0, 2.0],
         (Mode::Peek, false) => [166.0, 34.0, 15.0],
-        (Mode::Peek, true) => [206.0, 34.0, 15.0],
+        (Mode::Peek, true) => [232.0, 34.0, 15.0],
         (Mode::PeekMini, _) => [72.0, 8.0, 4.0],
         (Mode::Expanded, _) => [440.0, 180.0, 28.0],
         (Mode::Alert, _) => [360.0, 64.0, 22.0],

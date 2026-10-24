@@ -17,6 +17,7 @@ use crate::bluetooth::Bt;
 use crate::music::Track;
 use crate::notch::{target, Mode, HOVER_MARGIN};
 use crate::notify::Toast;
+use crate::system::Battery;
 
 /// Everything the painter needs for one frame (logical px).
 pub struct View<'a> {
@@ -24,7 +25,8 @@ pub struct View<'a> {
     pub size: [f32; 3],
     pub time: &'a str,
     pub date: &'a str,
-    pub battery: &'a str,
+    /// None on a desktop PC: no ring, no label.
+    pub battery: Option<Battery>,
     /// Banner content while in Alert (a notification or a status like Caps Lock).
     pub banner: Option<&'a Toast>,
     /// Newest notification, shown in the panel.
@@ -134,6 +136,7 @@ const ICON_NOTE: &str = "\u{E8D6}";
 const ICON_LEFT: &str = "\u{E76B}";
 const ICON_RIGHT: &str = "\u{E76C}";
 const ICON_BELL: &str = "\u{EA8F}";
+const ICON_BOLT: &str = "\u{E945}";
 pub const ICON_BRIGHTNESS: &str = "\u{E706}";
 pub const ICON_KEYBOARD: &str = "\u{E765}";
 
@@ -308,6 +311,27 @@ impl Renderer {
         }
     }
 
+    /// Open arc from 12 o'clock clockwise covering `frac` of the circle (battery ring).
+    fn ring(&self, cx: f32, cy: f32, r: f32, frac: f32) -> Result<ID2D1PathGeometry> {
+        let frac = frac.clamp(0.0, 0.9999);
+        let angle = frac * std::f32::consts::TAU;
+        unsafe {
+            let geo = self.factory.CreatePathGeometry()?;
+            let sink = geo.Open()?;
+            sink.BeginFigure(Vector2 { X: cx, Y: cy - r }, D2D1_FIGURE_BEGIN_HOLLOW);
+            sink.AddArc(&D2D1_ARC_SEGMENT {
+                point: Vector2 { X: cx + r * angle.sin(), Y: cy - r * angle.cos() },
+                size: D2D_SIZE_F { width: r, height: r },
+                rotationAngle: 0.0,
+                sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                arcSize: if frac > 0.5 { D2D1_ARC_SIZE_LARGE } else { D2D1_ARC_SIZE_SMALL },
+            });
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            sink.Close()?;
+            Ok(geo)
+        }
+    }
+
     /// Draw one frame and push it to `hwnd` placed at screen (x, y), window size (w, h) device px.
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<()> {
         self.ensure_surface(w, h)?;
@@ -364,6 +388,27 @@ impl Renderer {
             let small_a = 1.0 - fade(39.0, 20.0);
             if nh >= 20.0 * s && small_a > 0.0 && v.mode != Mode::Alert {
                 text(v.time, F_SMALL, rect(l, 0.0, r, nh), center, grey(1.0, small_a))?;
+                if let Some(b) = v.battery {
+                    let d = 18.0 * s;
+                    // Left of the time; with music the cover takes that spot, so sit before the bars.
+                    let bx = if v.music.is_some() { r - 60.0 * s } else { l + 14.0 * s };
+                    let by = (nh - d) / 2.0;
+                    let ring_c = if b.charging {
+                        color(0.2, 0.84, 0.29, small_a)
+                    } else if b.percent <= 20 {
+                        color(1.0, 0.27, 0.23, small_a)
+                    } else {
+                        grey(1.0, small_a)
+                    };
+                    let stroke = 2.2 * s;
+                    let (rcx, rcy, rr) = (bx + d / 2.0, by + d / 2.0, d / 2.0 - stroke / 2.0);
+                    let track = D2D1_ELLIPSE { point: Vector2 { X: rcx, Y: rcy }, radiusX: rr, radiusY: rr };
+                    rt.DrawEllipse(&track, &brush(grey(0.3, small_a))?, stroke, None);
+                    rt.DrawGeometry(&self.ring(rcx, rcy, rr, b.percent as f32 / 100.0)?, &brush(ring_c)?, stroke, None);
+                    if b.charging {
+                        text(ICON_BOLT, F_LABEL_ICON, rect(bx, by, bx + d, by + d), center, ring_c)?;
+                    }
+                }
                 if let Some(t) = v.music {
                     // Live pill: cover on the left, equaliser on the right.
                     let c = 20.0 * s;
@@ -410,7 +455,9 @@ impl Renderer {
             if a > 0.0 && v.mode != Mode::Alert {
                 let (cl, cr) = (l + SIDE * s, r - SIDE * s);
                 // Header shared by every page: battery · date · time.
-                text(v.battery, F_LABEL, rect(l + PAD * s, 6.0 * s, cl + 60.0 * s, 28.0 * s), lead, grey(0.6, a))?;
+                if let Some(b) = v.battery {
+                    text(&b.label(), F_LABEL, rect(l + PAD * s, 6.0 * s, cl + 60.0 * s, 28.0 * s), lead, grey(0.6, a))?;
+                }
                 text(&format!("{}   {}", v.date, v.time), F_SMALL, rect(cl, 6.0 * s, cr, 28.0 * s), center, grey(1.0, a))?;
 
                 let btns = buttons(cx, s, v.page);
