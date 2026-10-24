@@ -27,14 +27,14 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
         (Mode::Peek, false) => [166.0, 34.0, 15.0],
         (Mode::Peek, true) => [232.0, 34.0, 15.0],
         (Mode::PeekMini, _) => [72.0, 8.0, 4.0],
-        (Mode::Expanded, _) => [440.0, 180.0, 28.0],
+        (Mode::Expanded, _) => [440.0, 170.0, 28.0],
         (Mode::Alert, _) => [360.0, 64.0, 22.0],
     }
 }
 
 /// Window must fit the largest target plus the hover margin.
 pub const MAX_W: f32 = 460.0;
-pub const MAX_H: f32 = 200.0;
+pub const MAX_H: f32 = 190.0;
 /// How long a notification banner stays.
 pub const ALERT_MS: u32 = 5000;
 /// How long a status banner (Caps Lock, brightness) stays.

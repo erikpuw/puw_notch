@@ -22,11 +22,10 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
   Ở mini chỉ chính vạch 44×4 nhận chuột.
 - **Ẩn khi fullscreen** (game, video) trên màn hình có notch; desktop/taskbar không tính. Không hiện banner khi đang ẩn.
 
-**Bảng mở rộng** (chia trang như Nusa: mũi tên ‹ › hai bên, chấm trang ở dưới, hoặc lăn chuột)
-- Dòng đầu mọi trang: pin · thứ/ngày · giờ.
-- Trang **Nhạc**: ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26`, ⏮ ⏯ ⏭ ("Không có bài" khi không phát).
-- Trang **Thông báo**: thông báo Windows mới nhất.
-- Trang **Điều khiển**: loa (bật/tắt tiếng), − / thanh âm lượng (bấm để đặt mức) / +, Mic: Bật/Tắt, Bluetooth: Bật/Tắt.
+**Bảng mở rộng** (chỉ nhạc; notch không điều khiển gì khác, chỉ báo khi có thứ bật/tắt)
+- Dòng đầu: thứ/ngày · giờ, pin bên phải.
+- Ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26`, ⏮ ⏯ ⏭ ("Không có bài" khi không phát).
+- Đọc thông báo: dùng trung tâm thông báo của Windows; notch chỉ báo khi có thông báo mới.
 
 **Banner tự giãn ra**
 - Thông báo Windows mới: 5 giây (tên app, tiêu đề, nội dung). Để chuột lên banner thì mở bảng.
@@ -34,6 +33,9 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - Độ sáng màn hình laptop thay đổi: "Độ sáng 90%" + thanh mức.
 - Caps Lock / Num Lock: Bật / Tắt.
 - Mic bật / tắt từ bất kỳ đâu (nút trên notch, phím mic laptop, Cài đặt Windows, app gọi): "Đã tắt mic" / "Đã bật mic".
+- Wi-Fi / Bluetooth / mạng di động bật-tắt, chế độ máy bay, mạng: "Đã kết nối <tên Wi-Fi>", "Không có internet",
+  "Mất kết nối mạng". Bật chế độ máy bay chỉ báo một lần (không kèm Wi-Fi tắt, mất mạng, thiết bị ngắt).
+- Pin: cắm / rút sạc, tiết kiệm pin bật-tắt (vòng pin chuyển vàng), pin yếu 20%, rất yếu 10%, sạc đầy.
 - Thiết bị Bluetooth kết nối / ngắt: "Bluetooth · Tai nghe … · Đã kết nối" (kiểm tra mỗi 2 giây, cả Bluetooth thường và BLE),
   icon theo loại: tai nghe, loa, điện thoại, chuột, bàn phím, tay cầm (theo class Bluetooth, thiếu thì đoán theo tên).
 - Mỗi banner có icon bên trái (chuông cho thông báo app, loa, độ sáng, bàn phím, thiết bị).
@@ -65,11 +67,11 @@ rồi tắt "Hiện banner thông báo" cho từng app.
 | `src/screen.rs` | Mỗi 500 ms: fullscreen, hoặc đếm điểm ảnh "cạnh" ở hai dải 60 px cạnh notch (≥12 = bận). Ảnh chụp có dính chính notch, nên chỉ lấy mẫu khi notch đang nghỉ đúng cỡ (không hover/mở/banner/co giãn). |
 | `src/render.rs` | Direct2D vẽ vào DIB 32-bit, `UpdateLayeredWindow` per-pixel alpha; vị trí các nút. |
 | `src/notify.rs` | Đọc thông báo qua winsqlite3 (nạp động), tách XML toast, tên app. Có test với SQLite thật. |
-| `src/audio.rs` | Âm lượng, tắt tiếng loa, mic (Core Audio, thiết bị mặc định). |
-| `src/bluetooth.rs` | Radio Bluetooth (Windows.Devices.Radios) trên luồng phụ. |
+| `src/audio.rs` | Đọc âm lượng / tắt tiếng loa, mic (Core Audio, thiết bị mặc định). |
+| `src/connectivity.rs` | Luồng phụ mỗi 2 giây: radio Wi-Fi/Bluetooth/di động, chế độ máy bay (registry), mạng (NetworkInformation), thiết bị Bluetooth; so sánh trạng thái → sự kiện (có test). |
 | `src/status.rs` | Hook bàn phím cấp thấp (chỉ phím khóa + âm lượng), độ sáng qua WMI. |
 | `src/music.rs` | Luồng phụ đọc phiên media (GlobalSystemMediaTransportControls) mỗi 500 ms, lệnh ⏮⏯⏭, tải lời LRCLIB (WinRT HttpClient + JSON), tách LRC. |
-| `src/system.rs` | Giờ, pin, file cài đặt, khóa Run trong registry. |
+| `src/system.rs` | Giờ, pin (+ tiết kiệm pin) và sự kiện pin (có test), file cài đặt, khóa Run trong registry. |
 | `src/main.rs` | Cửa sổ, timer, chuột, tray, nối các phần. |
 
 ## Kế hoạch

@@ -51,13 +51,13 @@ macro_rules! proc {
 }
 
 impl Reader {
-    /// Opens the database; existing notifications become the history, only newer ones are "new".
-    pub fn open() -> Option<(Self, Vec<Toast>)> {
+    /// Opens the database; what is already there is skipped, only newer toasts are reported.
+    pub fn open() -> Option<Self> {
         let path = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Microsoft\\Windows\\Notifications\\wpndatabase.db");
         Self::open_path(path.to_str()?)
     }
 
-    fn open_path(path: &str) -> Option<(Self, Vec<Toast>)> {
+    fn open_path(path: &str) -> Option<Self> {
         unsafe {
             let lib = LoadLibraryW(w!("winsqlite3.dll")).ok()?;
             let open: Open = proc!(lib, s!("sqlite3_open_v2"));
@@ -75,8 +75,8 @@ impl Reader {
                 return None;
             }
             let mut r = Reader { sql, db, last_id: -1 };
-            let history = r.poll();
-            Some((r, history))
+            r.poll();
+            Some(r)
         }
     }
 
@@ -201,9 +201,8 @@ mod tests {
                    INSERT INTO NotificationHandler VALUES(1,'MSTeams_8wekyb3d8bbwe!MSTeams');\
                    INSERT INTO Notification VALUES(5,1,'toast','<toast><text>Cũ</text></toast>');";
         exec(&path, sql);
-        let (mut r, history) = Reader::open_path(path.to_str().unwrap()).expect("open");
-        assert_eq!(history, vec![Toast { app: "MSTeams".into(), title: "Cũ".into(), body: String::new(), level: None, icon: None }]);
-        assert!(r.poll().is_empty());
+        let mut r = Reader::open_path(path.to_str().unwrap()).expect("open");
+        assert!(r.poll().is_empty(), "what was there at start is not new");
         exec(&path, "INSERT INTO Notification VALUES(6,1,'toast','<toast><text>Mới</text><text>nội dung</text></toast>');\
                      INSERT INTO Notification VALUES(7,1,'tile','<tile><text>bỏ qua</text></tile>');");
         let new = r.poll();

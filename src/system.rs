@@ -20,6 +20,44 @@ pub fn clock() -> (String, String) {
 pub struct Battery {
     pub percent: u8,
     pub charging: bool,
+    /// Windows battery saver / energy saver is on.
+    pub saver: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PowerEvent {
+    Plugged,
+    Unplugged,
+    SaverOn,
+    SaverOff,
+    Low(u8),
+    Critical(u8),
+    Full,
+}
+
+const LOW: u8 = 20;
+const CRITICAL: u8 = 10;
+
+/// Battery changes worth a banner between two readings.
+pub fn power_events(old: Battery, new: Battery) -> Vec<PowerEvent> {
+    let mut out = Vec::new();
+    if old.charging != new.charging {
+        out.push(if new.charging { PowerEvent::Plugged } else { PowerEvent::Unplugged });
+    }
+    if old.saver != new.saver {
+        out.push(if new.saver { PowerEvent::SaverOn } else { PowerEvent::SaverOff });
+    }
+    if !new.charging {
+        if old.percent > CRITICAL && new.percent <= CRITICAL {
+            out.push(PowerEvent::Critical(new.percent));
+        } else if old.percent > LOW && new.percent <= LOW {
+            out.push(PowerEvent::Low(new.percent));
+        }
+    }
+    if new.charging && new.percent == 100 && old.percent < 100 {
+        out.push(PowerEvent::Full);
+    }
+    out
 }
 
 impl Battery {
@@ -36,7 +74,7 @@ pub fn battery() -> Option<Battery> {
     if unsafe { GetSystemPowerStatus(&mut s) }.is_err() || s.BatteryLifePercent == 255 || s.BatteryFlag & 128 != 0 {
         return None;
     }
-    Some(Battery { percent: s.BatteryLifePercent.min(100), charging: s.ACLineStatus == 1 })
+    Some(Battery { percent: s.BatteryLifePercent.min(100), charging: s.ACLineStatus == 1, saver: s.SystemStatusFlag == 1 })
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -75,5 +113,27 @@ pub fn set_autostart(on: bool) {
         let Ok(exe) = std::env::current_exe() else { return };
         let value: Vec<u16> = format!("\"{}\"", exe.display()).encode_utf16().chain([0]).collect();
         let _ = RegSetKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, REG_SZ.0, Some(value.as_ptr().cast()), (value.len() * 2) as u32);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn b(percent: u8, charging: bool, saver: bool) -> Battery {
+        Battery { percent, charging, saver }
+    }
+
+    #[test]
+    fn power_changes() {
+        assert!(power_events(b(50, false, false), b(49, false, false)).is_empty());
+        assert_eq!(power_events(b(50, false, false), b(50, true, false)), vec![PowerEvent::Plugged]);
+        assert_eq!(power_events(b(50, true, false), b(50, false, false)), vec![PowerEvent::Unplugged]);
+        assert_eq!(power_events(b(50, false, false), b(50, false, true)), vec![PowerEvent::SaverOn]);
+        assert_eq!(power_events(b(21, false, false), b(20, false, false)), vec![PowerEvent::Low(20)]);
+        assert!(power_events(b(20, false, false), b(19, false, false)).is_empty(), "only when crossing");
+        assert_eq!(power_events(b(11, false, false), b(10, false, false)), vec![PowerEvent::Critical(10)]);
+        assert!(power_events(b(21, true, false), b(20, true, false)).is_empty(), "charging: not low");
+        assert_eq!(power_events(b(99, true, false), b(100, true, false)), vec![PowerEvent::Full]);
     }
 }

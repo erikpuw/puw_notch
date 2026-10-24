@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod audio;
-mod bluetooth;
+mod connectivity;
 mod music;
 mod notch;
 mod notify;
@@ -24,12 +24,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use bluetooth::{Bt, WM_BT, WM_BT_DEVICE};
+use connectivity::{Event, Net, RadioType, WM_CONN};
 use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_MS};
 use music::WM_MUSIC;
 use status::{WM_LOCKKEY, WM_VOLKEY};
 use notify::Toast;
-use render::{Button, Page, Renderer, View, PAGES};
+use render::{Button, Renderer, View};
 
 const WM_TRAY: u32 = WM_APP + 1;
 /// Lives in the commctrl headers; not worth a crate feature for one constant.
@@ -40,7 +40,6 @@ const T_DWELL: usize = 3;
 const T_ALERT: usize = 4;
 const T_VOLKEY: usize = 5;
 const CHECK_MS: u32 = 500;
-const VOLUME_STEP: f32 = 0.05;
 const MENU_MINIMAL: usize = 10;
 const MENU_AUTOSTART: usize = 11;
 const MENU_QUIT: usize = 12;
@@ -64,20 +63,16 @@ struct App {
     notifications: Option<notify::Reader>,
     /// What the Alert banner shows right now.
     banner: Option<Toast>,
-    /// Newest notification, the card in the panel.
-    toast: Option<Toast>,
     brightness: Option<status::Brightness>,
     last_brightness: Option<u8>,
     audio: Option<audio::Audio>,
     volume: Option<(f32, bool)>,
     mic_muted: Option<bool>,
-    bt: Bt,
     music: music::Music,
     track: Option<music::Track>,
     started: Instant,
     /// Current T_ANIM interval: fast while the spring moves, slower for the equaliser alone.
     frame_ms: u32,
-    page: Page,
 }
 
 /// Animation frame intervals.
@@ -115,13 +110,8 @@ impl App {
             date: &self.date,
             battery: self.battery,
             banner: self.banner.as_ref(),
-            toast: self.toast.as_ref(),
-            volume: self.volume,
-            mic_muted: self.mic_muted,
-            bt: self.bt,
             music: self.track.as_ref(),
             phase: self.started.elapsed().as_secs_f32(),
-            page: self.page,
         };
         let _ = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view);
     }
@@ -184,12 +174,11 @@ impl App {
         x >= cx - nw / 2.0 - m && x <= cx + nw / 2.0 + m && y >= 0.0 && y <= nh + m
     }
 
-    /// Re-read speaker/mic; true if anything shown changed. A mic mute change from anywhere
-    /// (notch button, laptop mic key, Windows settings, a call app) gets a banner.
-    fn refresh_audio(&mut self) -> bool {
-        let Some(a) = &self.audio else { return false };
+    /// Re-read speaker/mic. A mic mute change from anywhere (laptop mic key, Windows settings,
+    /// a call app) gets a banner.
+    fn refresh_audio(&mut self) {
+        let Some(a) = &self.audio else { return };
         let now = (a.volume(), a.mic_muted());
-        let changed = now != (self.volume, self.mic_muted);
         let mic_flip = match (self.mic_muted, now.1) {
             (Some(before), Some(after)) if before != after => Some(after),
             _ => None,
@@ -199,15 +188,19 @@ impl App {
             let (title, icon) = if muted { ("Đã tắt mic", render::ICON_MIC_OFF) } else { ("Đã bật mic", render::ICON_MIC) };
             self.show_banner(status_toast("Mic", title.to_string(), "", None, icon), STATUS_MS);
         }
-        changed
     }
 
     fn tick(&mut self) {
         let (time, date) = system::clock();
         let battery = system::battery();
         let mut changed = (&time, &date, battery) != (&self.time, &self.date, self.battery);
+        if let (Some(old), Some(new)) = (self.battery, battery) {
+            for e in system::power_events(old, new) {
+                self.show_banner(power_toast(e, new), STATUS_MS * 2);
+            }
+        }
         (self.time, self.date, self.battery) = (time, date, battery);
-        changed |= self.refresh_audio();
+        self.refresh_audio();
         self.refresh_music();
         // Progress bar and lyric line move on their own while the panel is open.
         changed |= self.notch.mode == Mode::Expanded && self.track.as_ref().is_some_and(|t| t.playing);
@@ -230,11 +223,10 @@ impl App {
             }
         }
 
+        // Reading them is the Windows notification centre's job; the notch only announces new ones.
         let new = self.notifications.as_mut().map(|r| r.poll()).unwrap_or_default();
         if let Some(t) = new.into_iter().last() {
-            self.toast = Some(t.clone());
             self.show_banner(t, ALERT_MS);
-            changed = true;
         }
 
         let level = self.brightness.as_ref().and_then(|b| b.percent());
@@ -259,43 +251,20 @@ impl App {
         self.kick();
     }
 
+    /// The panel's only controls are the media buttons.
     fn click(&mut self, x: f32, y: f32) {
         if self.notch.mode != Mode::Expanded {
             return;
         }
         let cx = self.win.2 as f32 / 2.0;
-        let hit = render::buttons(cx, self.scale, self.page).into_iter().find(|(_, r)| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
-        let Some((button, r)) = hit else { return };
-        let media = match button {
-            Button::Bluetooth => return bluetooth::request(self.hwnd, true),
-            Button::PagePrev => return self.turn_page(-1),
-            Button::PageNext => return self.turn_page(1),
-            Button::Previous => Some(music::Cmd::Previous),
-            Button::PlayPause => Some(music::Cmd::PlayPause),
-            Button::Next => Some(music::Cmd::Next),
-            _ => None,
-        };
-        if let Some(cmd) = media {
-            return self.music.send(cmd);
+        let hit = render::buttons(cx, self.scale).into_iter().find(|(_, r)| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+        if let Some((button, _)) = hit {
+            self.music.send(match button {
+                Button::Previous => music::Cmd::Previous,
+                Button::PlayPause => music::Cmd::PlayPause,
+                Button::Next => music::Cmd::Next,
+            });
         }
-        let Some(a) = &self.audio else { return };
-        let level = self.volume.map_or(0.0, |(l, _)| l);
-        match button {
-            Button::SpeakerMute => a.toggle_speaker_mute(),
-            Button::VolDown => a.set_volume(level - VOLUME_STEP),
-            Button::VolUp => a.set_volume(level + VOLUME_STEP),
-            Button::VolBar => a.set_volume((x - r.left) / (r.right - r.left)),
-            Button::Mic => a.toggle_mic(),
-            _ => {}
-        }
-        self.refresh_audio();
-        self.redraw();
-    }
-
-    fn turn_page(&mut self, step: isize) {
-        let i = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as isize;
-        self.page = PAGES[(i + step).rem_euclid(PAGES.len() as isize) as usize];
-        self.redraw();
     }
 
     fn set_hidden(&mut self, hide: bool) {
@@ -357,11 +326,6 @@ impl App {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
                     let inside = self.cursor_inside();
                     self.notch.on_dwell(inside);
-                    if self.notch.mode == Mode::Expanded {
-                        // Radio state can change from Windows settings; re-read when the panel opens.
-                        bluetooth::request(self.hwnd, false);
-                        self.refresh_audio();
-                    }
                     self.kick();
                 }
                 T_VOLKEY => {
@@ -409,10 +373,6 @@ impl App {
                 self.click(x, y);
             }
             WM_RBUTTONUP => self.menu(),
-            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded => {
-                let delta = ((wp.0 >> 16) & 0xffff) as i16;
-                self.turn_page(if delta > 0 { -1 } else { 1 });
-            }
             WM_LOCKKEY => {
                 let (name, on) = status::lock_state(wp.0);
                 self.show_banner(status_toast("Bàn phím", name.to_string(), if on { "Bật" } else { "Tắt" }, None, render::ICON_KEYBOARD), STATUS_MS);
@@ -427,16 +387,9 @@ impl App {
                     self.redraw();
                 }
             }
-            WM_BT_DEVICE => {
-                for (name, kind, up) in bluetooth::take_device_events() {
-                    let state = if up { "Đã kết nối" } else { "Đã ngắt kết nối" };
-                    self.show_banner(status_toast("Bluetooth", name, state, None, render::device_icon(kind)), ALERT_MS);
-                }
-            }
-            WM_BT => {
-                self.bt = Bt::from_wparam(wp.0);
-                if !self.animating {
-                    self.redraw();
+            WM_CONN => {
+                for e in connectivity::take_events() {
+                    self.show_banner(connection_toast(e), ALERT_MS);
                 }
             }
             WM_TRAY => {
@@ -462,6 +415,42 @@ impl App {
 
 fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
     Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon) }
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "Bật" } else { "Tắt" }
+}
+
+/// Banner text for a connectivity change.
+fn connection_toast(e: Event) -> Toast {
+    match e {
+        Event::Radio(RadioType::Wifi, on) => status_toast("Wi-Fi", format!("Đã {} Wi-Fi", if on { "bật" } else { "tắt" }), "", None, if on { render::ICON_WIFI } else { render::ICON_WIFI_OFF }),
+        Event::Radio(RadioType::Bluetooth, on) => status_toast("Bluetooth", format!("Đã {} Bluetooth", if on { "bật" } else { "tắt" }), "", None, render::ICON_BT),
+        Event::Radio(RadioType::Mobile, on) => status_toast("Mạng di động", on_off(on).to_string(), "", None, render::ICON_MOBILE),
+        Event::Airplane(on) => status_toast("Chế độ máy bay", on_off(on).to_string(), "", None, render::ICON_AIRPLANE),
+        Event::Net(Net::Online { name, wifi }) => {
+            let (source, icon) = if wifi { ("Wi-Fi", render::ICON_WIFI) } else { ("Mạng", render::ICON_ETHERNET) };
+            status_toast(source, format!("Đã kết nối {name}"), "", None, icon)
+        }
+        Event::Net(Net::Limited { name, .. }) => status_toast("Mạng", "Không có internet".to_string(), &name, None, render::ICON_NO_INTERNET),
+        Event::Net(Net::Offline) => status_toast("Mạng", "Mất kết nối mạng".to_string(), "", None, render::ICON_NO_INTERNET),
+        Event::Device { name, kind, up } => status_toast("Bluetooth", name, if up { "Đã kết nối" } else { "Đã ngắt kết nối" }, None, render::device_icon(kind)),
+    }
+}
+
+/// Banner text for a battery change.
+fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
+    use system::PowerEvent::*;
+    let level = Some(b.percent as f32 / 100.0);
+    match e {
+        Plugged => status_toast("Pin", format!("Đang sạc {}%", b.percent), "", level, render::ICON_PLUG),
+        Unplugged => status_toast("Pin", format!("Đã rút sạc · {}%", b.percent), "", level, render::ICON_BATTERY),
+        SaverOn => status_toast("Tiết kiệm pin", "Bật".to_string(), "", None, render::ICON_SAVER),
+        SaverOff => status_toast("Tiết kiệm pin", "Tắt".to_string(), "", None, render::ICON_SAVER),
+        Low(p) => status_toast("Pin yếu", format!("Còn {p}% · nên cắm sạc"), "", level, render::ICON_BATTERY_LOW),
+        Critical(p) => status_toast("Pin rất yếu", format!("Còn {p}% · cắm sạc ngay"), "", level, render::ICON_BATTERY_LOW),
+        Full => status_toast("Pin", "Đã sạc đầy".to_string(), "", level, render::ICON_BATTERY),
+    }
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -506,7 +495,6 @@ fn main() -> windows::core::Result<()> {
         )?;
 
         let (time, date) = system::clock();
-        let (notifications, history) = notify::Reader::open().map_or((None, Vec::new()), |(r, h)| (Some(r), h));
         let mut app = App {
             hwnd,
             notch: Notch::new(system::load_minimal()),
@@ -522,25 +510,21 @@ fn main() -> windows::core::Result<()> {
             time,
             date,
             battery: system::battery(),
-            notifications,
+            notifications: notify::Reader::open(),
             banner: None,
-            toast: history.into_iter().last(),
             brightness: status::Brightness::new(),
             last_brightness: None,
             audio: audio::Audio::new(),
             volume: None,
             mic_muted: None,
-            bt: Bt::Unknown,
             music: music::Music::start(hwnd),
             track: None,
             started: Instant::now(),
             frame_ms: 0,
-            page: Page::Music,
         };
         app.refresh_audio();
-        bluetooth::request(hwnd, false);
         status::watch_lock_keys(hwnd);
-        bluetooth::watch_devices(hwnd);
+        connectivity::watch(hwnd);
         app.layout();
         app.redraw();
         app.tray(NIM_ADD);

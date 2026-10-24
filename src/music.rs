@@ -37,13 +37,16 @@ pub struct Track {
 }
 
 impl Track {
+    /// 0 when the player reports no timeline (e.g. foobar2000): nothing to extrapolate from.
     pub fn position_ms(&self) -> u64 {
+        if self.duration_ms == 0 {
+            return 0;
+        }
         let extra = match (self.playing, self.at) {
             (true, Some(at)) => at.elapsed().as_millis() as u64,
             _ => 0,
         };
-        let p = self.position_ms + extra;
-        if self.duration_ms > 0 { p.min(self.duration_ms) } else { p }
+        (self.position_ms + extra).min(self.duration_ms)
     }
 
     pub fn lyric_now(&self) -> Option<&str> {
