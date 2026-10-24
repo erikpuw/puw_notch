@@ -127,7 +127,8 @@ pub const ICON_VOLUME: &str = "\u{E767}";
 pub const ICON_MUTE: &str = "\u{E74F}";
 const ICON_MINUS: &str = "\u{E738}";
 const ICON_PLUS: &str = "\u{E710}";
-const ICON_MIC: &str = "\u{E720}";
+pub const ICON_MIC: &str = "\u{E720}";
+pub const ICON_MIC_OFF: &str = "\u{F781}";
 pub const ICON_BT: &str = "\u{E702}";
 const ICON_PREV: &str = "\u{E892}";
 const ICON_PLAY: &str = "\u{E768}";
@@ -542,7 +543,7 @@ impl Renderer {
                         Button::Mic | Button::Bluetooth => {
                             // Wide pill: icon + label + state.
                             let (icon, label, on, missing) = if b == Button::Mic {
-                                (ICON_MIC, "Mic", v.mic_muted == Some(false), v.mic_muted.is_none())
+                                (if v.mic_muted == Some(true) { ICON_MIC_OFF } else { ICON_MIC }, "Mic", v.mic_muted == Some(false), v.mic_muted.is_none())
                             } else {
                                 (ICON_BT, "Bluetooth", v.bt == Bt::On, v.bt == Bt::Missing)
                             };

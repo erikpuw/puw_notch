@@ -184,12 +184,21 @@ impl App {
         x >= cx - nw / 2.0 - m && x <= cx + nw / 2.0 + m && y >= 0.0 && y <= nh + m
     }
 
-    /// Re-read speaker/mic; true if anything shown changed.
+    /// Re-read speaker/mic; true if anything shown changed. A mic mute change from anywhere
+    /// (notch button, laptop mic key, Windows settings, a call app) gets a banner.
     fn refresh_audio(&mut self) -> bool {
         let Some(a) = &self.audio else { return false };
         let now = (a.volume(), a.mic_muted());
         let changed = now != (self.volume, self.mic_muted);
+        let mic_flip = match (self.mic_muted, now.1) {
+            (Some(before), Some(after)) if before != after => Some(after),
+            _ => None,
+        };
         (self.volume, self.mic_muted) = now;
+        if let Some(muted) = mic_flip {
+            let (title, icon) = if muted { ("Đã tắt mic", render::ICON_MIC_OFF) } else { ("Đã bật mic", render::ICON_MIC) };
+            self.show_banner(status_toast("Mic", title.to_string(), "", None, icon), STATUS_MS);
+        }
         changed
     }
 
