@@ -73,6 +73,7 @@ struct App {
     started: Instant,
     /// Current T_ANIM interval: fast while the spring moves, slower for the equaliser alone.
     frame_ms: u32,
+    hovered_button: Option<Button>,
 }
 
 /// Animation frame intervals.
@@ -112,6 +113,7 @@ impl App {
             banner: self.banner.as_ref(),
             music: self.track.as_ref(),
             phase: self.started.elapsed().as_secs_f32(),
+            hovered: self.hovered_button,
         };
         let _ = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view);
     }
@@ -259,12 +261,12 @@ impl App {
             return;
         }
         let cx = self.win.2 as f32 / 2.0;
-        let hit = render::buttons(cx, self.scale).into_iter().find(|(_, r)| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
-        if let Some((button, _)) = hit {
+        if let Some(button) = render::hit_button(cx, self.scale, x, y, self.track.as_ref()) {
             self.music.send(match button {
                 Button::Previous => music::Cmd::Previous,
                 Button::PlayPause => music::Cmd::PlayPause,
                 Button::Next => music::Cmd::Next,
+                Button::Seek => music::Cmd::Seek(render::seek_at(cx, self.scale, x, self.track.as_ref().map_or(0, |t| t.duration_ms))),
             });
         }
     }
@@ -362,8 +364,19 @@ impl App {
                     }
                     self.kick();
                 }
+                let hover = if self.notch.mode == Mode::Expanded {
+                    let x = (lp.0 & 0xffff) as i16 as f32;
+                    let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+                    render::hit_button(self.win.2 as f32 / 2.0, self.scale, x, y, self.track.as_ref())
+                } else { None };
+                if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
+            }
+            WM_SETCURSOR if self.hovered_button.is_some_and(|b| b.enabled(self.track.as_ref())) => {
+                unsafe { let _ = SetCursor(LoadCursorW(None, IDC_HAND).ok()); }
+                return Some(LRESULT(1));
             }
             WM_MOUSELEAVE => {
+                self.hovered_button = None;
                 self.tracking = false;
                 unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
                 self.notch.on_leave();
@@ -524,6 +537,7 @@ fn main() -> windows::core::Result<()> {
             track: None,
             started: Instant::now(),
             frame_ms: 0,
+            hovered_button: None,
         };
         app.refresh_audio();
         status::watch_lock_keys(hwnd);

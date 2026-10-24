@@ -44,6 +44,9 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 **Nhạc** (mọi app báo lên điều khiển media của Windows: Spotify, Chrome/Edge, Media Player, foobar2000...)
 - Notch thường khi có nhạc: ảnh bìa bên trái, giờ ở giữa, (pin), cột sóng nhạc bên phải.
 - Lời bài hát lấy từ LRCLIB, chạy theo vị trí bài.
+- Các nút ⏮ ⏯ ⏭ chỉ hiện icon, không có nền tròn; rê chuột đổi màu và hiện con trỏ tay. Nút trình phát không hỗ trợ sẽ mờ và không nhận bấm.
+- Bấm thanh tiến độ để tua khi trình phát cho phép. Thời gian tính theo điểm bắt đầu timeline, mốc cập nhật và tốc độ phát; không tự chạy đến cuối khi ứng dụng gửi mốc giờ rỗng.
+- Tải ảnh bìa/lời chạy riêng, không giữ luồng nhận lệnh phát/dừng/chuyển bài. Lệnh gửi đúng phiên media đang hiển thị; nếu trình phát từ chối sẽ có dòng báo trong bảng.
 - App không gửi vị trí bài (ví dụ foobar2000 mặc định) thì không có thanh tiến độ và lời không chạy theo được.
 
 **Khác**: tray (Notch tối giản, Khởi động cùng Windows, Thoát), chạy một bản duy nhất, cài đặt ở `%APPDATA%\PuwNotch\settings.txt`.

@@ -22,11 +22,21 @@ const POLL: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Default)]
 pub struct Track {
+    pub source_id: String,
     pub title: String,
     pub artist: String,
     pub playing: bool,
     pub duration_ms: u64,
     position_ms: u64,
+    start_ticks: i64,
+    rate: f64,
+    reported_position: i64,
+    updated_ticks: i64,
+    pub can_toggle: bool,
+    pub can_next: bool,
+    pub can_previous: bool,
+    pub can_seek: bool,
+    pub command_error: Option<&'static str>,
     /// When `position_ms` was read; the UI extrapolates from here while playing.
     at: Option<Instant>,
     /// Encoded cover image (PNG/JPEG), decoded by the renderer; `art_key` changes with the track.
@@ -39,14 +49,28 @@ pub struct Track {
 impl Track {
     /// 0 when the player reports no timeline (e.g. foobar2000): nothing to extrapolate from.
     pub fn position_ms(&self) -> u64 {
+        self.position_after(self.at.map_or(Duration::ZERO, |at| at.elapsed()))
+    }
+
+    fn position_after(&self, elapsed: Duration) -> u64 {
         if self.duration_ms == 0 {
             return 0;
         }
-        let extra = match (self.playing, self.at) {
-            (true, Some(at)) => at.elapsed().as_millis() as u64,
-            _ => 0,
-        };
-        (self.position_ms + extra).min(self.duration_ms)
+        let extra = if self.playing { (elapsed.as_millis() as f64 * self.rate) as u64 } else { 0 };
+        self.position_ms.saturating_add(extra).min(self.duration_ms)
+    }
+
+    fn seek_ticks(&self, position_ms: u64) -> i64 {
+        self.start_ticks.saturating_add((position_ms.min(self.duration_ms) as i64).saturating_mul(10_000))
+    }
+
+    fn inherit_cached(&mut self, previous: &Track) {
+        if self.updated_ticks <= 0 && previous.updated_ticks <= 0 && self.reported_position == previous.reported_position {
+            self.position_ms = previous.position_ms();
+        }
+        self.art = previous.art.clone();
+        self.lyrics = previous.lyrics.clone();
+        self.command_error = previous.command_error;
     }
 
     pub fn lyric_now(&self) -> Option<&str> {
@@ -58,11 +82,12 @@ pub enum Cmd {
     PlayPause,
     Next,
     Previous,
+    Seek(u64),
 }
 
 pub struct Music {
     pub now: Arc<Mutex<Option<Track>>>,
-    cmds: Sender<Cmd>,
+    cmds: Sender<(Cmd, Track)>,
 }
 
 impl Music {
@@ -76,7 +101,7 @@ impl Music {
     }
 
     pub fn send(&self, c: Cmd) {
-        let _ = self.cmds.send(c);
+        if let Some(track) = self.snapshot() { let _ = self.cmds.send((c, track)); }
     }
 
     pub fn snapshot(&self) -> Option<Track> {
@@ -84,26 +109,45 @@ impl Music {
     }
 }
 
-fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Cmd>, target: isize) {
+fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target: isize) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); };
     let Ok(manager) = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().and_then(|op| op.get()) else { return };
     let mut key = String::new();
     let mut art_key = 0u64;
+    let (assets, jobs) = channel();
+    let asset_shared = shared.clone();
+    std::thread::spawn(move || asset_worker(asset_shared, jobs, target));
     loop {
         let cmd = match rx.recv_timeout(POLL) {
             Ok(c) => Some(c),
             Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => None,
         };
-        let session = manager.GetCurrentSession().ok();
-        if let (Some(cmd), Some(s)) = (cmd, &session) {
+        let session = match &cmd {
+            Some((_, track)) => manager.GetSessions().ok().and_then(|sessions|
+                sessions.into_iter().find(|s| s.SourceAppUserModelId().is_ok_and(|id| id == track.source_id.as_str()))),
+            None => manager.GetCurrentSession().ok(),
+        };
+        let had_command = cmd.is_some();
+        let mut command_error = None;
+        if let (Some((cmd, track)), Some(s)) = (cmd, &session) {
             let op = match cmd {
-                Cmd::PlayPause => s.TryTogglePlayPauseAsync(),
+                Cmd::PlayPause => {
+                    let info = s.GetPlaybackInfo().ok();
+                    if info.as_ref().and_then(|i| i.Controls().ok()).is_some_and(|c| c.IsPlayPauseToggleEnabled().unwrap_or(false)) {
+                        s.TryTogglePlayPauseAsync()
+                    } else if info.and_then(|i| i.PlaybackStatus().ok()) == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
+                        s.TryPauseAsync()
+                    } else { s.TryPlayAsync() }
+                }
                 Cmd::Next => s.TrySkipNextAsync(),
                 Cmd::Previous => s.TrySkipPreviousAsync(),
+                Cmd::Seek(position) => {
+                    s.TryChangePlaybackPositionAsync(track.seek_ticks(position))
+                }
             };
-            let _ = op.and_then(|o| o.get());
+            if op.and_then(|o| o.get()) != Ok(true) { command_error = Some("Trình phát chưa nhận lệnh. Hãy thử lại."); }
         }
         let Some(session) = session else {
             let had = shared.lock().map(|mut g| g.take().is_some()).unwrap_or(false);
@@ -114,62 +158,94 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Cmd>, target: isize) {
             continue;
         };
         let Some(mut t) = read(&session) else { continue };
-        let new_key = format!("{}\u{1}{}", t.title, t.artist);
+        let new_key = format!("{}\u{1}{}\u{1}{}\u{1}{}", t.source_id, t.title, t.artist, t.duration_ms);
         let changed_track = new_key != key;
         let prev = shared.lock().ok().and_then(|g| g.clone());
         if changed_track {
             key = new_key;
             art_key += 1;
-            t.art = session.TryGetMediaPropertiesAsync().and_then(|o| o.get()).and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)).map(Arc::new);
-        } else if let Some(p) = &prev {
-            t.art = p.art.clone();
-            t.lyrics = p.lyrics.clone();
         }
         t.art_key = art_key;
-        let visible_change = prev.as_ref().map_or(true, |p| changed_track || p.playing != t.playing || p.duration_ms != t.duration_ms);
+        let visible_change = had_command || prev.as_ref().is_none_or(|p| changed_track || p.playing != t.playing || p.duration_ms != t.duration_ms);
         if let Ok(mut g) = shared.lock() {
+            if let Some(p) = g.as_ref().filter(|p| !changed_track && p.art_key == art_key) {
+                t.inherit_cached(p);
+            }
+            if had_command { t.command_error = command_error; }
             *g = Some(t.clone());
         }
         if visible_change {
             notify();
         }
-        if changed_track && !t.title.is_empty() {
-            let lines = fetch_lyrics(&t.title, &t.artist, t.duration_ms / 1000);
-            if !lines.is_empty() {
-                if let Ok(mut g) = shared.lock() {
-                    if let Some(cur) = g.as_mut().filter(|c| c.art_key == art_key) {
-                        cur.lyrics = Arc::new(lines);
-                    }
-                }
-                notify();
-            }
+        if changed_track { let _ = assets.send((t, session)); }
+    }
+}
+
+fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, GlobalSystemMediaTransportControlsSession)>, target: isize) {
+    unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
+    while let Ok(mut job) = rx.recv() {
+        for newer in rx.try_iter() { job = newer; }
+        let (t, session) = job;
+        if !shared.lock().is_ok_and(|g| g.as_ref().is_some_and(|c| c.art_key == t.art_key)) { continue; }
+        let art = session.TryGetMediaPropertiesAsync().and_then(|o| o.get())
+            .and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)).map(Arc::new);
+        if let Ok(mut g) = shared.lock() {
+            if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) { cur.art = art; }
         }
+        unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
+        if t.title.is_empty() { continue; }
+        let lines = fetch_lyrics(&t.title, &t.artist, t.duration_ms / 1000);
+        if let Ok(mut g) = shared.lock() {
+            if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) { cur.lyrics = Arc::new(lines); }
+        }
+        unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
     }
 }
 
 fn read(s: &GlobalSystemMediaTransportControlsSession) -> Option<Track> {
     let props = s.TryGetMediaPropertiesAsync().ok()?.get().ok()?;
-    let playing = s.GetPlaybackInfo().and_then(|i| i.PlaybackStatus()).ok() == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+    let info = s.GetPlaybackInfo().ok()?;
+    let playing = info.PlaybackStatus().ok() == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+    let controls = info.Controls().ok();
+    let rate = info.PlaybackRate().and_then(|r| r.Value()).ok().filter(|r| r.is_finite() && *r >= 0.0).unwrap_or(1.0);
     let tl = s.GetTimelineProperties().ok();
-    // TimeSpan / DateTime are 100 ns ticks.
-    let ms = |ticks: i64| (ticks.max(0) / 10_000) as u64;
-    let duration_ms = tl.as_ref().and_then(|t| Some(ms(t.EndTime().ok()?.Duration - t.StartTime().ok()?.Duration))).unwrap_or(0);
-    let mut position_ms = tl.as_ref().and_then(|t| t.Position().ok()).map_or(0, |p| ms(p.Duration));
-    // Position is as of LastUpdatedTime; players only refresh it now and then.
-    if playing {
-        if let Some(updated) = tl.as_ref().and_then(|t| t.LastUpdatedTime().ok()) {
-            position_ms += ms(now_ticks() - updated.UniversalTime);
-        }
-    }
+    let start_ticks = tl.as_ref().and_then(|t| t.StartTime().ok()).map_or(0, |t| t.Duration);
+    let reported_position = tl.as_ref().and_then(|t| t.Position().ok()).map_or(0, |t| t.Duration);
+    let updated_ticks = tl.as_ref().and_then(|t| t.LastUpdatedTime().ok()).map_or(0, |t| t.UniversalTime);
+    let (duration_ms, position_ms) = tl.as_ref().and_then(|t| Some(timeline_position(start_ticks,
+        t.EndTime().ok()?.Duration, reported_position, updated_ticks,
+        now_ticks(), playing, rate))).unwrap_or((0, 0));
     Some(Track {
+        source_id: s.SourceAppUserModelId().ok()?.to_string(),
         title: props.Title().ok()?.to_string(),
         artist: props.Artist().map(|a| a.to_string()).unwrap_or_default(),
         playing,
         duration_ms,
         position_ms,
+        start_ticks,
+        rate,
+        reported_position,
+        updated_ticks,
+        can_toggle: controls.as_ref().is_some_and(|c| c.IsPlayPauseToggleEnabled().unwrap_or(false)
+            || if playing { c.IsPauseEnabled().unwrap_or(false) } else { c.IsPlayEnabled().unwrap_or(false) }),
+        can_next: controls.as_ref().is_some_and(|c| c.IsNextEnabled().unwrap_or(false)),
+        can_previous: controls.as_ref().is_some_and(|c| c.IsPreviousEnabled().unwrap_or(false)),
+        can_seek: duration_ms > 0 && controls.as_ref().is_some_and(|c| c.IsPlaybackPositionEnabled().unwrap_or(false)),
         at: Some(Instant::now()),
         ..Default::default()
     })
+}
+
+fn timeline_position(start: i64, end: i64, position: i64, updated: i64, now: i64, playing: bool, rate: f64) -> (u64, u64) {
+    let duration = end.saturating_sub(start).max(0);
+    let mut position = position.saturating_sub(start).max(0) as u64 / 10_000;
+    let age = now.saturating_sub(updated);
+    // Empty, future or implausibly old timestamps must not send the bar straight to the end.
+    if playing && updated > 0 && now >= updated && age <= duration {
+        position = position.saturating_add((age as f64 / 10_000.0 * rate) as u64);
+    }
+    let duration = duration as u64 / 10_000;
+    (duration, position.min(duration))
 }
 
 fn now_ticks() -> i64 {
@@ -278,6 +354,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn timeline_uses_relative_position_and_valid_update_time() {
+        let now = 1_340_000_000_000_000i64;
+        assert_eq!(timeline_position(100_000_000, 700_000_000, 250_000_000, now - 20_000_000, now, true, 1.0), (60_000, 17_000));
+        assert_eq!(timeline_position(0, 600_000_000, 150_000_000, 0, now, true, 1.0), (60_000, 15_000));
+        assert_eq!(timeline_position(0, 600_000_000, 150_000_000, now + 10, now, true, 1.0), (60_000, 15_000));
+        assert_eq!(timeline_position(0, 600_000_000, 150_000_000, now - 20_000_000, now, false, 1.0), (60_000, 15_000));
+    }
+
+    #[test]
+    fn timeline_and_ui_follow_playback_rate_and_clamp() {
+        assert_eq!(timeline_position(0, 600_000_000, 150_000_000, 100_000_000, 120_000_000, true, 2.0), (60_000, 19_000));
+        let mut t = Track { playing: true, duration_ms: 60_000, position_ms: 15_000, rate: 2.0, ..Default::default() };
+        assert_eq!(t.position_after(Duration::from_secs(2)), 19_000);
+        assert_eq!(t.position_after(Duration::from_secs(100)), 60_000);
+        t.playing = false;
+        assert_eq!(t.position_after(Duration::from_secs(2)), 15_000);
+        t.duration_ms = 0;
+        assert_eq!(t.position_after(Duration::from_secs(2)), 0);
+    }
+
+    #[test]
+    fn seek_time_includes_timeline_start_and_stays_in_bounds() {
+        let t = Track { duration_ms: 60_000, start_ticks: 100_000_000, ..Default::default() };
+        assert_eq!(t.seek_ticks(15_000), 250_000_000);
+        assert_eq!(t.seek_ticks(u64::MAX), 700_000_000);
+    }
+
+    #[test]
+    fn missing_update_time_does_not_restart_the_clock_each_poll() {
+        let previous = Track { playing: false, rate: 1.0, duration_ms: 60_000,
+            position_ms: 12_000, reported_position: 100_000_000, ..Default::default() };
+        let mut next = Track { duration_ms: 60_000, reported_position: 100_000_000,
+            position_ms: 10_000, ..Default::default() };
+        next.inherit_cached(&previous);
+        assert_eq!(next.position_ms(), 12_000, "pause must freeze the extrapolated position");
+        next.playing = true;
+        next.rate = 1.0;
+        assert_eq!(next.position_after(Duration::from_secs(1)), 13_000);
+    }
+
+    #[test]
     fn lrc_lines() {
         let lrc = "[ar:Ca sĩ]\n[00:01.00]Câu một\n[00:03.50][00:10.00]Điệp khúc\n[00:05.00]\n";
         let l = parse_lrc(lrc);
@@ -299,7 +416,7 @@ mod tests {
         eprintln!("current: {cur:?}");
         for s in m.GetSessions().unwrap() {
             let t = read(&s);
-            eprintln!("{:?} title={:?} playing={:?} dur={:?}", s.SourceAppUserModelId().ok(), t.as_ref().map(|t| &t.title), t.as_ref().map(|t| t.playing), t.as_ref().map(|t| t.duration_ms));
+            eprintln!("{:?} title={:?} playing={:?} dur={:?} pos={:?} seek={:?}", s.SourceAppUserModelId().ok(), t.as_ref().map(|t| &t.title), t.as_ref().map(|t| t.playing), t.as_ref().map(|t| t.duration_ms), t.as_ref().map(|t| t.position_ms()), t.as_ref().map(|t| t.can_seek));
         }
     }
 

@@ -33,6 +33,7 @@ pub struct View<'a> {
     pub music: Option<&'a Track>,
     /// Seconds, drives the equaliser bars.
     pub phase: f32,
+    pub hovered: Option<Button>,
 }
 
 /// Media buttons of the open panel (the notch only reports; these are the only controls).
@@ -41,22 +42,51 @@ pub enum Button {
     Previous,
     PlayPause,
     Next,
+    Seek,
+}
+
+impl Button {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Previous => "Bài trước", Self::PlayPause => "Phát / Tạm dừng",
+            Self::Next => "Bài tiếp theo", Self::Seek => "Bấm để tua",
+        }
+    }
+    pub fn enabled(self, track: Option<&Track>) -> bool {
+        track.is_some_and(|t| match self {
+            Self::Previous => t.can_previous,
+            Self::PlayPause => t.can_toggle,
+            Self::Next => t.can_next,
+            Self::Seek => t.can_seek && t.duration_ms > 0,
+        })
+    }
 }
 
 const PAD: f32 = 24.0;
 /// Concave flares joining the notch sides to the screen edge: grow with the notch, capped.
 const EAR_RATIO: f32 = 0.35;
 const EAR_MAX: f32 = 14.0;
-const MEDIA_BTN: f32 = 32.0;
+const MEDIA_BTN: f32 = 40.0;
 const COVER: f32 = 64.0;
 
 /// Clickable rects in window px for the settled panel centred at `cx`.
-pub fn buttons(cx: f32, scale: f32) -> [(Button, D2D_RECT_F); 3] {
+pub fn buttons(cx: f32, scale: f32) -> [(Button, D2D_RECT_F); 4] {
     let w = target(Mode::Expanded, false)[0];
     let left = cx / scale - w / 2.0;
     let (y, c) = (124.0, w / 2.0 - MEDIA_BTN / 2.0);
     let r = |x: f32| rect((left + x) * scale, y * scale, (left + x + MEDIA_BTN) * scale, (y + MEDIA_BTN) * scale);
-    [(Button::Previous, r(c - 48.0)), (Button::PlayPause, r(c)), (Button::Next, r(c + 48.0))]
+    let seek = rect((left + PAD + 40.0) * scale, 102.0 * scale, (left + w - PAD - 40.0) * scale, 122.0 * scale);
+    [(Button::Previous, r(c - 48.0)), (Button::PlayPause, r(c)), (Button::Next, r(c + 48.0)), (Button::Seek, seek)]
+}
+
+pub fn seek_at(cx: f32, scale: f32, x: f32, duration: u64) -> u64 {
+    let (_, r) = buttons(cx, scale)[3];
+    (((x - r.left) / (r.right - r.left)).clamp(0.0, 1.0) as f64 * duration as f64) as u64
+}
+
+pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>) -> Option<Button> {
+    buttons(cx, scale).into_iter().find(|(b, r)| b.enabled(track)
+        && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom).map(|(b, _)| b)
 }
 
 /// Text styles, indexed by these constants.
@@ -436,8 +466,9 @@ impl Renderer {
                         let title = if t.title.is_empty() { "Đang phát" } else { &t.title };
                         text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
                         text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, grey(0.65, a))?;
-                        let lyric = t.lyric_now().unwrap_or(if t.lyrics.is_empty() { "" } else { "♪" });
-                        text(lyric, F_BODY, rect(tl, top + 40.0 * s, cr, top + 58.0 * s), lead, grey(0.95, a))?;
+                        let lyric = t.lyric_now().unwrap_or_else(|| v.hovered.map_or(if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
+                        text(t.command_error.unwrap_or(lyric), F_BODY, rect(tl, top + 40.0 * s, cr, top + 58.0 * s), lead,
+                            if t.command_error.is_some() { color(1.0, 0.5, 0.4, a) } else { grey(0.95, a) })?;
                     }
                     None => text("Không có bài", F_TITLE, rect(tl, top, cr, top + COVER * s), lead, grey(1.0, a))?,
                 }
@@ -446,8 +477,8 @@ impl Renderer {
                 let by = 112.0 * s;
                 let lw = 40.0 * s;
                 let (bl, brr) = (cl + lw, cr - lw);
-                text(&clock(pos), F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, grey(0.6, a))?;
-                text(&format!("-{}", clock(dur.saturating_sub(pos))), F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, grey(0.6, a))?;
+                text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, grey(0.6, a))?;
+                text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, grey(0.6, a))?;
                 let th = 4.0 * s;
                 let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
                 rt.FillRoundedRectangle(&bar(brr), &brush(grey(0.25, a))?);
@@ -458,18 +489,15 @@ impl Renderer {
 
                 let playing = v.music.is_some_and(|t| t.playing);
                 for (b, br) in buttons(cx, s) {
-                    let (icon, lit) = match b {
-                        Button::Previous => (ICON_PREV, false),
-                        Button::PlayPause => (if playing { ICON_PAUSE } else { ICON_PLAY }, true),
-                        Button::Next => (ICON_NEXT, false),
+                    let icon = match b {
+                        Button::Previous => ICON_PREV,
+                        Button::PlayPause => if playing { ICON_PAUSE } else { ICON_PLAY },
+                        Button::Next => ICON_NEXT,
+                        Button::Seek => continue,
                     };
-                    let circle = D2D1_ELLIPSE {
-                        point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
-                        radiusX: (br.right - br.left) / 2.0,
-                        radiusY: (br.bottom - br.top) / 2.0,
-                    };
-                    rt.FillEllipse(&circle, &brush(if lit { grey(1.0, a) } else { grey(0.17, a) })?);
-                    text(icon, F_ICON, br, center, if lit { grey(0.0, a) } else { grey(1.0, a) })?;
+                    let c = if !b.enabled(v.music) { grey(0.3, a) }
+                        else if v.hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
+                    text(icon, F_ICON, br, center, c)?;
                 }
             }
             rt.EndDraw(None, None)?;
@@ -488,5 +516,60 @@ impl Renderer {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seek_and_icon_hit_areas_follow_dpi_and_capabilities() {
+        let mut track = Track::default();
+        track.duration_ms = 120_000;
+        track.can_seek = true;
+        track.can_toggle = true;
+        for scale in [1.0, 1.5, 2.0] {
+            let cx = 265.0 * scale;
+            let (_, seek) = buttons(cx, scale)[3];
+            assert_eq!(seek_at(cx, scale, seek.left - 100.0, track.duration_ms), 0);
+            assert_eq!(seek_at(cx, scale, seek.right + 100.0, track.duration_ms), 120_000);
+            assert_eq!(seek_at(cx, scale, (seek.left + seek.right) / 2.0, track.duration_ms), 60_000);
+            assert_eq!(hit_button(cx, scale, cx, 140.0 * scale, Some(&track)), Some(Button::PlayPause));
+            assert_eq!(hit_button(cx, scale, cx, 112.0 * scale, Some(&track)), Some(Button::Seek));
+            assert_eq!(hit_button(cx, scale, cx, 140.0 * scale, None), None);
+            assert!(buttons(cx, scale).iter().all(|(_, r)| r.bottom <= 170.0 * scale));
+        }
+    }
+
+    #[test]
+    #[ignore = "writes a Direct2D preview for visual review"]
+    fn media_preview() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Media preview"), WS_POPUP,
+                0, 0, 530, 210, None, None, None, None).unwrap();
+            let mut track = Track::default();
+            track.title = "Bản nhạc đang phát".into(); track.artist = "YouTube / foobar2000".into();
+            track.duration_ms = 210_000; track.playing = true;
+            track.can_toggle = true; track.can_next = true; track.can_previous = true; track.can_seek = true;
+            let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
+                date: "Thứ Bảy, 24 tháng 10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
+                banner: None, music: Some(&track), phase: 0.0, hovered: Some(Button::PlayPause) };
+            let mut renderer = Renderer::new().unwrap();
+            renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
+            let mut dib = DIBSECTION::default();
+            assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
+            let pixels = std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, 530 * 210 * 4);
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&530i32.to_le_bytes()); bytes.extend_from_slice(&(-210i32).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(pixels);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/media-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
     }
 }
