@@ -404,10 +404,6 @@ impl App {
                 self.layout();
                 self.redraw();
             }
-            WM_DESTROY => {
-                self.tray(NIM_DELETE);
-                unsafe { PostQuitMessage(0) };
-            }
             m if m == self.taskbar_created && m != 0 => self.tray(NIM_ADD),
             _ => return None,
         }
@@ -456,6 +452,11 @@ fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    // DestroyWindow re-enters here while the tray menu still holds APP's mutable borrow.
+    if msg == WM_DESTROY {
+        unsafe { PostQuitMessage(0) };
+        return LRESULT(0);
+    }
     // Win32 calls made while handling a message can re-enter here; those fall back to the default.
     let handled = APP.with(|a| a.try_borrow_mut().ok().and_then(|mut g| g.as_mut().and_then(|app| app.handle(msg, wp, lp))));
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
@@ -540,6 +541,43 @@ fn main() -> windows::core::Result<()> {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        let app = APP.with(|a| a.borrow_mut().take());
+        if let Some(app) = app {
+            app.tray(NIM_DELETE);
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destroy_posts_quit_while_app_is_borrowed() {
+        unsafe {
+            let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
+            let class = w!("PuwNotchShutdownTest");
+            let wc = WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(wndproc),
+                hInstance: instance,
+                lpszClassName: class,
+                ..Default::default()
+            };
+            assert_ne!(RegisterClassExW(&wc), 0);
+            let hwnd = CreateWindowExW(WINDOW_EX_STYLE::default(), class, w!(""),
+                WS_POPUP, 0, 0, 1, 1, None, None, Some(instance), None).unwrap();
+            APP.with(|app| {
+                let _busy = app.borrow_mut();
+                DestroyWindow(hwnd).unwrap();
+            });
+            assert!(!IsWindow(Some(hwnd)).as_bool());
+            let mut msg = MSG::default();
+            let quit = PeekMessageW(&mut msg, None, WM_QUIT, WM_QUIT, PM_REMOVE).as_bool();
+            UnregisterClassW(class, Some(instance)).unwrap();
+            assert!(quit, "destroying the window must stop the message loop");
+            assert_eq!(msg.wParam.0, 0);
+        }
+    }
 }

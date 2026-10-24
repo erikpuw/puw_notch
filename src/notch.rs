@@ -36,7 +36,7 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
 pub const ALERT_TALL: [f32; 3] = [420.0, 86.0, 24.0];
 
 /// Window must fit the largest target plus the hover margin.
-/// Includes room for the spring overshoot (~15% of the travel) and the ears.
+/// Includes room for the spring overshoot and the ears.
 pub const MAX_W: f32 = 530.0;
 pub const MAX_H: f32 = 210.0;
 /// How long a notification banner stays.
@@ -55,10 +55,9 @@ struct Spring {
 }
 
 impl Spring {
-    /// Stiffness and damping: damping ratio C / (2 * sqrt(K)) ~ 0.47, so the notch overshoots by
-    /// about 15% and settles back, the springy grow / shrink of a Dynamic Island.
+    /// Damping ratio ~0.78 keeps a subtle bounce (under 2% of the travel) in both directions.
     const K: f32 = 320.0;
-    const C: f32 = 17.0;
+    const C: f32 = 28.0;
     /// Integrate in small slices so a late frame does not change the motion.
     const SLICE: f32 = 0.004;
 
@@ -250,23 +249,27 @@ mod tests {
     }
 
     #[test]
-    fn springy_overshoot_and_never_negative() {
-        let mut n = Notch::new(false);
-        n.on_enter();
-        n.on_dwell(true);
-        let goal = target(Mode::Expanded, false);
-        let mut peak = 0.0f32;
-        for _ in 0..120 {
-            n.step(1.0 / 60.0);
-            peak = peak.max(n.size()[1]);
-        }
-        assert!(peak > goal[1] * 1.05, "bounces past the target: {peak}");
-        // shrink hard to the mini line: the undershoot is clamped at 0
-        n.set_minimal(true);
-        n.on_leave();
-        for _ in 0..120 {
-            n.step(1.0 / 60.0);
-            assert!(n.size().iter().all(|v| *v >= 0.0));
+    fn spring_stays_within_two_percent_on_open_and_close() {
+        let sizes = [target(Mode::Collapsed, false), target(Mode::Expanded, false),
+            target(Mode::Mini, false), ALERT_TALL];
+        for from in sizes {
+            for to in sizes {
+                for dt in [1.0 / 120.0, 1.0 / 60.0, 0.05] {
+                    for (start, goal) in from.into_iter().zip(to) {
+                        let mut spring = Spring { pos: start, vel: 0.0 };
+                        let margin = (goal - start).abs() * 0.02 + 0.001;
+                        for _ in 0..(2.0 / dt) as usize {
+                            spring.step(goal, dt);
+                            assert!(spring.pos >= start.min(goal) - margin
+                                && spring.pos <= start.max(goal) + margin,
+                                "{start} -> {goal}, dt={dt}: {}", spring.pos);
+                            assert!(spring.pos >= 0.0);
+                        }
+                        assert_eq!(spring.pos, goal);
+                        assert_eq!(spring.vel, 0.0);
+                    }
+                }
+            }
         }
     }
 
