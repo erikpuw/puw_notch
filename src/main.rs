@@ -24,7 +24,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use bluetooth::{Bt, WM_BT};
+use bluetooth::{Bt, WM_BT, WM_BT_DEVICE};
 use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_MS};
 use music::WM_MUSIC;
 use status::{WM_LOCKKEY, WM_VOLKEY};
@@ -418,6 +418,12 @@ impl App {
                     self.redraw();
                 }
             }
+            WM_BT_DEVICE => {
+                for (name, up) in bluetooth::take_device_events() {
+                    let state = if up { "Đã kết nối" } else { "Đã ngắt kết nối" };
+                    self.show_banner(status_toast("Bluetooth", name, state, None), ALERT_MS);
+                }
+            }
             WM_BT => {
                 self.bt = Bt::from_wparam(wp.0);
                 if !self.animating {
@@ -525,6 +531,7 @@ fn main() -> windows::core::Result<()> {
         app.refresh_audio();
         bluetooth::request(hwnd, false);
         status::watch_lock_keys(hwnd);
+        bluetooth::watch_devices(hwnd);
         app.layout();
         app.redraw();
         app.tray(NIM_ADD);
