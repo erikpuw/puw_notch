@@ -72,6 +72,8 @@ struct App {
     win: (i32, i32, i32, i32),
     hidden: bool,
     tracking: bool,
+    /// Cursor reached the pill body this visit (ears alone do not count, see `notch::hover_area`).
+    hover_in: bool,
     animating: bool,
     last_frame: Instant,
     taskbar_created: u32,
@@ -251,7 +253,7 @@ impl App {
         if unsafe { GetCursorPos(&mut p) }.is_err() {
             return false;
         }
-        let (half, h) = notch::hover_area(self.notch.mode, self.notch.size());
+        let (half, h) = notch::hover_area(self.notch.size());
         let (half, h) = (half * self.scale, h * self.scale);
         let cx = (self.win.0 + self.win.2 / 2) as f32;
         let (x, y) = (p.x as f32, (p.y - self.win.1) as f32);
@@ -643,6 +645,8 @@ impl App {
                 T_DWELL => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
                     let inside = self.cursor_inside();
+                    // Slid off the body onto an ear before the dwell: entering again needs the body.
+                    self.hover_in &= inside;
                     self.notch.on_dwell(inside);
                     self.kick();
                 }
@@ -654,7 +658,7 @@ impl App {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_ALERT); }
                     self.notch.on_alert_end();
                     // Mouse resting on the banner when it ends: treat as a fresh visit.
-                    if self.tracking && self.notch.on_enter() {
+                    if self.hover_in && self.notch.on_enter() {
                         unsafe { SetTimer(Some(self.hwnd), T_DWELL, DWELL_MS, None) };
                     }
                     self.kick();
@@ -665,6 +669,10 @@ impl App {
                 if !self.tracking {
                     let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: self.hwnd, dwHoverTime: 0 };
                     self.tracking = unsafe { TrackMouseEvent(&mut tme) }.is_ok();
+                }
+                // The ears report the mouse too (they are drawn); only the pill body counts.
+                if !self.hover_in && self.cursor_inside() {
+                    self.hover_in = true;
                     if self.notch.on_enter() {
                         unsafe { SetTimer(Some(self.hwnd), T_DWELL, DWELL_MS, None) };
                     }
@@ -685,6 +693,7 @@ impl App {
             WM_MOUSELEAVE => {
                 self.hovered_button = None;
                 self.tracking = false;
+                self.hover_in = false;
                 unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
                 // Typing keeps the panel open; it closes when the box lets go of the keyboard.
                 if !self.editing {
@@ -933,6 +942,7 @@ fn main() -> windows::core::Result<()> {
             win: (0, 0, 1, 1),
             hidden: false,
             tracking: false,
+            hover_in: false,
             animating: false,
             last_frame: Instant::now(),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),

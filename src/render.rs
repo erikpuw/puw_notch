@@ -628,11 +628,6 @@ impl Renderer {
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
             let ear = notch::ear(v.size[1]) * s;
-            if !matches!(v.mode, Mode::Mini | Mode::PeekMini) {
-                // Alpha 1/255: invisible but still catches the mouse; same area as the dwell check.
-                let (half, h) = notch::hover_area(v.mode, v.size);
-                rt.FillRectangle(&rect(cx - half * s, 0.0, cx + half * s, h * s), &brush(color(0.0, 0.0, 0.0, 1.0 / 255.0))?);
-            }
             rt.FillGeometry(&self.notch_shape(l, r, nh, nr, ear)?, &brush(grey(0.0, 1.0))?, None);
 
             // Each layout fades in as the pill reaches its size.
