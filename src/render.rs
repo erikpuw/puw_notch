@@ -717,7 +717,7 @@ impl Renderer {
             if a > 0.0 && v.mode != Mode::Alert {
                 let (hl, hr) = (l + PAD * s, r - PAD * s);
                 // Header: the page's icon and name on the left (they morph with the page),
-                // short date · time and battery on the right.
+                // short date · time in the centre, battery on the right.
                 let (ht, hb) = (6.0 * s, 28.0 * s);
                 let draw_title = |page: Page, dx: f32, ta: f32| -> Result<()> {
                     if ta <= 0.01 {
@@ -735,12 +735,11 @@ impl Renderer {
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
-                let battery_w = if v.battery.is_some() { 92.0 * s } else { 0.0 };
                 if let Some(b) = v.battery {
-                    text(&b.label(), F_LABEL, rect(hr - battery_w, ht, hr, hb), trail, grey(0.6, a))?;
+                    text(&b.label(), F_LABEL, rect(hr - 92.0 * s, ht, hr, hb), trail, grey(0.6, a))?;
                 }
-                let when_right = hr - battery_w - if v.battery.is_some() { 10.0 * s } else { 0.0 };
-                text(&format!("{} · {}", v.date, v.time), F_LABEL, rect(hl + 170.0 * s, ht, when_right, hb), trail, grey(0.85, a))?;
+                // Date · time in the middle of the header.
+                text(&format!("{} · {}", v.date, v.time), F_LABEL, rect(cx - 80.0 * s, ht, cx + 80.0 * s, hb), center, grey(0.85, a))?;
                 // Page content sits between the side arrows.
                 let (cl, cr) = (l + SIDE * s, r - SIDE * s);
                 let lv = &v.list;

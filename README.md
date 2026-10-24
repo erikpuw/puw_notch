@@ -27,7 +27,7 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 **Bảng mở rộng** (4 trang: Nhạc → Việc cần làm → Lịch hẹn → Sức khỏe; mũi tên ‹ › hai bên, chấm trang ở dưới;
 chuyển trang có hiệu ứng morph: trang cũ trượt ra mờ dần, trang mới trượt vào nảy nhẹ)
 - Dòng đầu: icon + tên trang bên trái (♪ Nhạc, ☑ Việc cần làm, 📅 Lịch hẹn, ♥ Sức khỏe; morph theo trang),
-  "CN, 25/10 · 01:32" và pin bên phải.
+  "CN, 25/10 · 01:32" ở giữa, pin bên phải.
 - Trang **Nhạc**: ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26` (bấm để tua), ⏮ ⏯ ⏭.
 - Trang **Việc cần làm**: ô "Thêm việc…" (bấm để gõ, Enter lưu và gõ tiếp, Esc hủy), tick vòng tròn để xong
   (chữ gạch ngang, xuống cuối), ✎ sửa / ✕ xóa (hiện khi rê chuột), "Xong hôm nay", lăn chuột để cuộn khi > 3 việc.
