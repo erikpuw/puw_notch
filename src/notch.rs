@@ -95,7 +95,8 @@ impl Notch {
     pub fn new(minimal: bool) -> Self {
         let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, tall_alert: false, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
-        for (s, t) in n.size.iter_mut().zip(target(n.mode, false)) {
+        // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
+        for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
             s.pos = t;
         }
         n
@@ -228,6 +229,18 @@ mod tests {
             }
         }
         panic!("spring did not settle");
+    }
+
+    #[test]
+    fn starts_as_the_mini_line_and_grows_into_the_pill() {
+        let mut n = Notch::new(false);
+        assert_eq!(n.size(), target(Mode::Mini, false), "appears from the thin line, like Nusa");
+        assert!(!n.is_settled_rest());
+        for _ in 0..120 {
+            n.step(1.0 / 120.0);
+        }
+        assert!(n.is_settled_rest());
+        assert_eq!(n.size(), target(Mode::Collapsed, false));
     }
 
     #[test]

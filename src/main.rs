@@ -974,6 +974,8 @@ fn main() -> windows::core::Result<()> {
         connectivity::watch(hwnd);
         app.layout();
         app.redraw();
+        // Grow from the mini line into the pill (see Notch::new).
+        app.kick();
         app.tray(NIM_ADD);
         APP.with(|a| *a.borrow_mut() = Some(app));
 
