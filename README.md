@@ -28,7 +28,10 @@ Test: `cargo test` (thêm `cargo test -- --ignored --nocapture` để gọi LRCL
 - Dòng đầu: thứ/ngày · giờ, pin bên phải.
 - Trang **Nhạc**: ảnh bìa, tên bài, ca sĩ, câu lời đang hát, `00:33 ━━ -03:26` (bấm để tua), ⏮ ⏯ ⏭.
 - Trang **Việc cần làm**: ô "Thêm việc…" (bấm để gõ, Enter lưu và gõ tiếp, Esc hủy), tick vòng tròn để xong
-  (chữ gạch ngang, xuống cuối), ✕ để xóa (hiện khi rê chuột), "Xong hôm nay", lăn chuột để cuộn khi > 3 việc.
+  (chữ gạch ngang, xuống cuối), ✎ sửa / ✕ xóa (hiện khi rê chuột), "Xong hôm nay", lăn chuột để cuộn khi > 3 việc.
+- **Nhắc giờ (24h)**: gõ giờ trong nội dung ("Họp nhóm 20:00", "8h30 gửi báo cáo", "17h"). Giờ còn tới hôm nay thì nhắc
+  hôm nay, đã qua thì ngày mai ("Mai 08:30"). Nhãn giờ xám / cam (≤ 15 phút) / đỏ (quá giờ). Đến giờ: banner
+  "Nhắc việc"; đang chơi game fullscreen hoặc đang mở bảng thì chờ và hiện khi có thể.
   Lưu ở `%APPDATA%\PuwNotch\todo.txt`; sang ngày mới thì việc đã xong hôm trước tự dọn.
 - Đọc thông báo: dùng trung tâm thông báo của Windows; notch chỉ báo khi có thông báo mới.
 

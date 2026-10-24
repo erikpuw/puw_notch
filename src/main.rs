@@ -88,6 +88,8 @@ struct App {
     draft: String,
     /// The add box has the keyboard (window activated for it).
     editing: bool,
+    /// Task being edited in the box; None = the box adds.
+    edit_item: Option<usize>,
     caret: bool,
     todo_scroll: usize,
     /// Window that had the keyboard before typing started; it gets it back after.
@@ -139,8 +141,10 @@ impl App {
                 items: &self.todo.items,
                 open: self.todo.open_count(),
                 done_today: self.todo.done_today(self.today),
+                now: system::now_stamp(),
                 draft: &self.draft,
                 editing: self.editing,
+                edit_item: self.edit_item,
                 caret: self.caret,
                 scroll: self.todo_scroll,
             },
@@ -264,6 +268,8 @@ impl App {
             }
         }
 
+        self.remind();
+
         // Reading them is the Windows notification centre's job; the notch only announces new ones.
         let new = self.notifications.as_mut().map(|r| r.poll()).unwrap_or_default();
         if let Some(t) = new.into_iter().last() {
@@ -283,15 +289,32 @@ impl App {
     }
 
     /// Short banner on the notch; skipped over a fullscreen game or while the panel is open.
-    fn show_banner(&mut self, t: Toast, ms: u32) {
+    /// Returns whether it is showing.
+    fn show_banner(&mut self, t: Toast, ms: u32) -> bool {
         // Notifications (no status icon) with text get the taller two-line banner.
         let tall = t.icon.is_none() && !t.body.is_empty();
         if self.hidden || !self.notch.on_alert(tall) {
-            return;
+            return false;
         }
         self.banner = Some(t);
         unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
         self.kick();
+        true
+    }
+
+    /// To-do reminders whose time has come. One that cannot show now (fullscreen game, panel open)
+    /// stays pending and rings at the next chance.
+    fn remind(&mut self) {
+        let now = system::now_stamp();
+        for i in self.todo.due(now) {
+            let Some(item) = self.todo.items.get(i) else { continue };
+            let at = item.due.map_or(String::new(), |d| format!("{:02}:{:02}", d / 100 % 100, d % 100));
+            let toast = status_toast("Nhắc việc", item.text.clone(), &format!("Đến giờ · {at}"), None, render::ICON_REMINDER);
+            if !self.show_banner(toast, ALERT_MS * 2) {
+                break;
+            }
+            self.todo.mark_notified(i);
+        }
     }
 
     fn hit(&self, x: f32, y: f32) -> Option<Button> {
@@ -311,18 +334,50 @@ impl App {
             Button::Next => self.music.send(music::Cmd::Next),
             Button::Seek => self.music.send(music::Cmd::Seek(render::seek_at(cx, self.scale, x, duration))),
             Button::PagePrev | Button::PageNext => {
-                self.end_edit(false);
+                self.cancel_task_edit();
+                self.end_edit();
                 self.page = if self.page == Page::Music { Page::Todo } else { Page::Music };
             }
             Button::TodoInput => self.begin_edit(),
-            Button::TodoToggle(i) => self.todo.toggle(i, self.today),
+            Button::TodoEdit(i) => {
+                self.draft = self.todo.edit_text(i);
+                self.edit_item = Some(i);
+                self.begin_edit();
+            }
+            // Ticking or deleting reorders the list: an edit in progress would point at the wrong task.
+            Button::TodoToggle(i) => {
+                self.cancel_task_edit();
+                self.todo.toggle(i, self.today);
+            }
             Button::TodoDelete(i) => {
+                self.cancel_task_edit();
                 self.todo.remove(i);
                 self.clamp_scroll();
             }
         }
         self.hovered_button = self.hit(x, y);
         self.redraw();
+    }
+
+    fn cancel_task_edit(&mut self) {
+        if self.edit_item.take().is_some() {
+            self.draft.clear();
+        }
+    }
+
+    /// Enter in the box: save the edited task, or add a new one. The box stays for the next task.
+    fn submit(&mut self) {
+        let now = system::now_stamp();
+        let saved = match self.edit_item {
+            Some(i) => self.todo.update(i, &self.draft, now),
+            None => self.todo.add(&self.draft, now),
+        };
+        if saved {
+            if self.edit_item.take().is_none() {
+                self.todo_scroll = 0;
+            }
+            self.draft.clear();
+        }
     }
 
     fn clamp_scroll(&mut self) {
@@ -346,12 +401,8 @@ impl App {
         self.caret = true;
     }
 
-    /// Stop typing (`commit` adds the draft) and hand the keyboard back.
-    fn end_edit(&mut self, commit: bool) {
-        if commit && self.todo.add(&self.draft) {
-            self.draft.clear();
-            self.todo_scroll = 0;
-        }
+    /// Stop typing (the draft stays in the box) and hand the keyboard back.
+    fn end_edit(&mut self) {
         if !self.editing {
             return;
         }
@@ -376,16 +427,12 @@ impl App {
     /// One WM_CHAR unit while typing in the add box.
     fn type_char(&mut self, unit: u16) {
         match unit {
-            0x0D => {
-                // Enter: save and stay in the box for the next task.
-                if self.todo.add(&self.draft) {
-                    self.draft.clear();
-                    self.todo_scroll = 0;
-                }
-            }
+            // Enter: save and stay in the box for the next task.
+            0x0D => self.submit(),
             0x1B => {
                 self.draft.clear();
-                self.end_edit(false);
+                self.edit_item = None;
+                self.end_edit();
             }
             0x08 => {
                 self.draft.pop();
@@ -536,7 +583,7 @@ impl App {
             }
             WM_CHAR if self.editing => self.type_char(wp.0 as u16),
             // Lost the keyboard (clicked elsewhere): stop typing, keep the draft.
-            WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => self.end_edit(false),
+            WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => self.end_edit(),
             // The wheel only scrolls a long to-do list; pages switch with the arrows.
             WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && self.page == Page::Todo => {
                 let delta = ((wp.0 >> 16) & 0xffff) as i16;
@@ -702,10 +749,11 @@ fn main() -> windows::core::Result<()> {
             hovered_button: None,
             last_foreground: None,
             page: Page::Music,
-            todo: todo::Todo::load(system::today()),
+            todo: todo::Todo::load(system::today(), system::now_stamp()),
             today: system::today(),
             draft: String::new(),
             editing: false,
+            edit_item: None,
             caret: false,
             todo_scroll: 0,
             prev_foreground: HWND::default(),

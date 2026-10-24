@@ -10,6 +10,12 @@ use windows::Win32::System::SystemInformation::GetLocalTime;
 const WEEKDAYS: [&str; 7] = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
 
 /// ("16:04", "Thứ Bảy, 24 tháng 10")
+/// Local time as yyyymmddHHMM (to-do reminders).
+pub fn now_stamp() -> u64 {
+    let t = unsafe { GetLocalTime() };
+    crate::todo::stamp(t.wYear as u32 * 10_000 + t.wMonth as u32 * 100 + t.wDay as u32, t.wHour as u32, t.wMinute as u32)
+}
+
 /// Local date as yyyymmdd (to-do "done today").
 pub fn today() -> u32 {
     let t = unsafe { GetLocalTime() };

@@ -53,9 +53,13 @@ pub struct TodoView<'a> {
     /// Open tasks, and tasks ticked today.
     pub open: usize,
     pub done_today: usize,
+    /// Local time yyyymmddHHMM, for the reminder labels.
+    pub now: u64,
     /// Text being typed (kept when the box loses focus).
     pub draft: &'a str,
     pub editing: bool,
+    /// Task being edited in the box (None = the box adds a new one).
+    pub edit_item: Option<usize>,
     /// Caret blink phase.
     pub caret: bool,
     /// First visible row.
@@ -74,6 +78,7 @@ pub enum Button {
     TodoInput,
     /// Tick / untick task at this index (the whole row, text included).
     TodoToggle(usize),
+    TodoEdit(usize),
     TodoDelete(usize),
 }
 
@@ -138,7 +143,8 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, todo_len: usize, scroll: us
             out.push((Button::TodoInput, r(cl, INPUT_Y, cw, INPUT_H)));
             for (row, i) in (scroll..todo_len.min(scroll + TODO_ROWS)).enumerate() {
                 let y = ROW_Y + row as f32 * ROW_H;
-                out.push((Button::TodoToggle(i), r(cl, y, cw - 24.0, ROW_H)));
+                out.push((Button::TodoToggle(i), r(cl, y, cw - 48.0, ROW_H)));
+                out.push((Button::TodoEdit(i), r(cl + cw - 46.0, y, 22.0, ROW_H)));
                 out.push((Button::TodoDelete(i), r(cl + cw - 22.0, y, 22.0, ROW_H)));
             }
         }
@@ -183,6 +189,7 @@ pub const ICON_PLUG: &str = "\u{EBB3}";
 pub const ICON_BATTERY: &str = "\u{E83F}";
 pub const ICON_BATTERY_LOW: &str = "\u{E850}";
 pub const ICON_SAVER: &str = "\u{EBA6}";
+pub const ICON_REMINDER: &str = "\u{EC92}";
 const ICON_PREV: &str = "\u{E892}";
 const ICON_PLAY: &str = "\u{E768}";
 const ICON_PAUSE: &str = "\u{E769}";
@@ -195,6 +202,8 @@ const ICON_RIGHT: &str = "\u{E76C}";
 const ICON_ADD: &str = "\u{E710}";
 const ICON_CHECK: &str = "\u{E73E}";
 const ICON_CLOSE: &str = "\u{E711}";
+const ICON_EDIT: &str = "\u{E70F}";
+const YELLOW: (f32, f32, f32) = (1.0, 0.8, 0.2);
 const GREEN: (f32, f32, f32) = (0.2, 0.84, 0.29);
 
 /// Banner icon for a Bluetooth device.
@@ -606,15 +615,22 @@ impl Renderer {
                         if let Some(ib) = rect_of(Button::TodoInput) {
                             let focus = td.editing || v.hovered == Some(Button::TodoInput);
                             rt.FillRoundedRectangle(&rounded(ib, 13.0 * s), &brush(grey(if focus { 0.16 } else { 0.12 }, a))?);
-                            if td.editing {
+                            let editing_task = td.edit_item.is_some();
+                            if td.editing || editing_task {
                                 let inner = rect(ib.left + 0.5, ib.top + 0.5, ib.right - 0.5, ib.bottom - 0.5);
-                                rt.DrawRoundedRectangle(&rounded(inner, 13.0 * s), &brush(grey(1.0, a * 0.35))?, 1.0 * s, None);
+                                let c = if editing_task { color(YELLOW.0, YELLOW.1, YELLOW.2, a * 0.8) } else { grey(1.0, a * 0.35) };
+                                rt.DrawRoundedRectangle(&rounded(inner, 13.0 * s), &brush(c)?, 1.0 * s, None);
+                            }
+                            // "Đang sửa" tag on the right while an existing task is in the box.
+                            let tag_w = if editing_task { 58.0 * s } else { 0.0 };
+                            if editing_task {
+                                text("Đang sửa", F_LABEL, rect(ib.right - tag_w - 8.0 * s, ib.top, ib.right - 10.0 * s, ib.bottom), trail, color(YELLOW.0, YELLOW.1, YELLOW.2, a))?;
                             }
                             let icon_box = rect(ib.left + 8.0 * s, ib.top, ib.left + 26.0 * s, ib.bottom);
                             text(ICON_ADD, F_SMALL_ICON, icon_box, center, grey(0.6, a))?;
-                            let tb = rect(icon_box.right + 4.0 * s, ib.top, ib.right - 12.0 * s, ib.bottom);
+                            let tb = rect(icon_box.right + 4.0 * s, ib.top, ib.right - 12.0 * s - tag_w, ib.bottom);
                             if td.draft.is_empty() && !td.editing {
-                                text("Thêm việc… (Enter để lưu)", F_BODY, tb, lead, grey(0.55, a))?;
+                                text("Thêm việc… (vd: Họp nhóm 20:00)", F_BODY, tb, lead, grey(0.55, a))?;
                             } else {
                                 // Long drafts keep their end in view.
                                 let tw = width(td.draft, F_BODY);
@@ -642,7 +658,8 @@ impl Renderer {
                         for (b, br) in btns.iter() {
                             let Button::TodoToggle(i) = *b else { continue };
                             let Some(item) = td.items.get(i) else { continue };
-                            let hover_row = matches!(v.hovered, Some(Button::TodoToggle(j)) | Some(Button::TodoDelete(j)) if j == i);
+                            let hover_row = matches!(v.hovered, Some(Button::TodoToggle(j)) | Some(Button::TodoEdit(j)) | Some(Button::TodoDelete(j)) if j == i)
+                                || td.edit_item == Some(i);
                             let row = rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s);
                             if hover_row {
                                 rt.FillRoundedRectangle(&rounded(row, 8.0 * s), &brush(grey(0.1, a))?);
@@ -658,16 +675,36 @@ impl Renderer {
                             } else {
                                 rt.DrawEllipse(&circle, &brush(grey(if hover_row { 0.85 } else { 0.55 }, a))?, 1.5 * s, None);
                             }
+                            // Reminder time on the right: grey, orange within 15 min, red when late.
+                            let mut text_right = br.right;
+                            if let Some(due) = item.due {
+                                let (h, m) = (due / 100 % 100, due % 100);
+                                let tomorrow = due / 10_000 > td.now / 10_000;
+                                let label = if tomorrow { format!("Mai {h:02}:{m:02}") } else { format!("{h:02}:{m:02}") };
+                                let minutes = |t: u64| (t / 10_000) as i64 * 1440 + (t / 100 % 100) as i64 * 60 + (t % 100) as i64;
+                                let left = minutes(due) - minutes(td.now);
+                                let c = if done { grey(0.4, a) }
+                                    else if due <= td.now { color(1.0, 0.35, 0.3, a) }
+                                    else if !tomorrow && left <= 15 { color(1.0, 0.62, 0.2, a) }
+                                    else { grey(0.6, a) };
+                                let lw = if tomorrow { 60.0 } else { 40.0 } * s;
+                                text(&label, F_LABEL, rect(br.right - lw, br.top, br.right - 2.0 * s, br.bottom), trail, c)?;
+                                text_right = br.right - lw - 6.0 * s;
+                            }
                             // Text, struck through when done.
-                            let tb = rect(br.left + d + 10.0 * s, br.top, br.right, br.bottom);
+                            let tb = rect(br.left + d + 10.0 * s, br.top, text_right, br.bottom);
                             text(&item.text, F_BODY, tb, lead, grey(if done { 0.45 } else { 1.0 }, a))?;
                             if done {
                                 let tw = width(&item.text, F_BODY).min(tb.right - tb.left);
                                 let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
                                 rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &brush(grey(0.45, a))?);
                             }
-                            // Delete, only on the hovered row.
+                            // Edit and delete, only on the hovered row.
                             if hover_row {
+                                if let Some(eb) = rect_of(Button::TodoEdit(i)) {
+                                    let c = if v.hovered == Some(Button::TodoEdit(i)) || td.edit_item == Some(i) { color(YELLOW.0, YELLOW.1, YELLOW.2, a) } else { grey(0.6, a) };
+                                    text(ICON_EDIT, F_SMALL_ICON, eb, center, c)?;
+                                }
                                 if let Some(db) = rect_of(Button::TodoDelete(i)) {
                                     let c = if v.hovered == Some(Button::TodoDelete(i)) { color(1.0, 0.45, 0.4, a) } else { grey(0.6, a) };
                                     text(ICON_CLOSE, F_SMALL_ICON, db, center, c)?;
@@ -788,7 +825,7 @@ mod tests {
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "Thứ Bảy, 24 tháng 10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
-                todo: TodoView { items: &[], open: 0, done_today: 0, draft: "", editing: false, caret: false, scroll: 0 } };
+                todo: TodoView { items: &[], open: 0, done_today: 0, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 } };
             let mut renderer = Renderer::new().unwrap();
             renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
             let mut dib = DIBSECTION::default();
