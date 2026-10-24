@@ -121,6 +121,7 @@ const F_LABEL: usize = 2;
 const F_ICON: usize = 3;
 const F_TITLE: usize = 4;
 const F_LABEL_ICON: usize = 5;
+const F_TINY_ICON: usize = 6;
 
 pub const ICON_VOLUME: &str = "\u{E767}";
 pub const ICON_MUTE: &str = "\u{E74F}";
@@ -258,6 +259,7 @@ impl Renderer {
                 make(w!("Segoe Fluent Icons"), 16.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(ui, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(w!("Segoe Fluent Icons"), 11.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+                make(w!("Segoe Fluent Icons"), 8.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -406,7 +408,7 @@ impl Renderer {
                     rt.DrawEllipse(&track, &brush(grey(0.3, small_a))?, stroke, None);
                     rt.DrawGeometry(&self.ring(rcx, rcy, rr, b.percent as f32 / 100.0)?, &brush(ring_c)?, stroke, None);
                     if b.charging {
-                        text(ICON_BOLT, F_LABEL_ICON, rect(bx, by, bx + d, by + d), center, ring_c)?;
+                        text(ICON_BOLT, F_TINY_ICON, rect(bx, by, bx + d, by + d), center, ring_c)?;
                     }
                 }
                 if let Some(t) = v.music {
