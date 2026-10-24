@@ -203,17 +203,20 @@ impl App {
         // Progress bar and lyric line move on their own while the panel is open.
         changed |= self.notch.mode == Mode::Expanded && self.track.as_ref().is_some_and(|t| t.playing);
 
-        // The window is layered, so the screen sample never contains the notch itself.
+        // The capture includes our own window: sample only while the pill rests, still and alone.
+        let sample = self.notch.is_settled_rest();
         let cx = self.win.0 + self.win.2 / 2;
         let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
-        match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w) {
+        match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w, sample) {
             screen::Check::Fullscreen => self.set_hidden(true),
             screen::Check::Busy(busy) => {
                 self.set_hidden(false);
-                let before = self.notch.mode;
-                self.notch.report_busy(busy);
-                if self.notch.mode != before {
-                    self.kick();
+                if sample {
+                    let before = self.notch.mode;
+                    self.notch.report_busy(busy);
+                    if self.notch.mode != before {
+                        self.kick();
+                    }
                 }
             }
         }

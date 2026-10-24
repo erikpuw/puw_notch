@@ -56,7 +56,7 @@ rồi tắt "Hiện banner thông báo" cho từng app.
 | File | Vai trò |
 |---|---|
 | `src/notch.rs` | Máy trạng thái (Collapsed/Mini/Peek/PeekMini/Expanded/Alert) + lò xo. Thuần logic, có test. |
-| `src/screen.rs` | Mỗi 500 ms: fullscreen, hoặc đếm điểm ảnh "cạnh" ở hai dải 60 px cạnh notch (≥12 = bận). |
+| `src/screen.rs` | Mỗi 500 ms: fullscreen, hoặc đếm điểm ảnh "cạnh" ở hai dải 60 px cạnh notch (≥12 = bận). Ảnh chụp có dính chính notch, nên chỉ lấy mẫu khi notch đang nghỉ đúng cỡ (không hover/mở/banner/co giãn). |
 | `src/render.rs` | Direct2D vẽ vào DIB 32-bit, `UpdateLayeredWindow` per-pixel alpha; vị trí các nút. |
 | `src/notify.rs` | Đọc thông báo qua winsqlite3 (nạp động), tách XML toast, tên app. Có test với SQLite thật. |
 | `src/audio.rs` | Âm lượng, tắt tiếng loa, mic (Core Audio, thiết bị mặc định). |

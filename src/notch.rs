@@ -94,6 +94,11 @@ impl Notch {
         matches!(self.mode, Mode::Collapsed | Mode::Mini)
     }
 
+    /// Resting at its pill size, springs stopped: the only time the area beside it is our own business.
+    pub fn is_settled_rest(&self) -> bool {
+        self.is_resting() && self.size() == target(self.mode, self.live)
+    }
+
     /// Current (w, h, r).
     pub fn size(&self) -> [f32; 3] {
         [self.size[0].pos, self.size[1].pos, self.size[2].pos]
@@ -207,10 +212,14 @@ mod tests {
         assert_eq!(n.mode, Mode::Expanded);
         settle(&mut n);
         assert_eq!(n.size(), target(Mode::Expanded, false));
+        assert!(!n.is_settled_rest());
         n.on_leave();
+        n.step(1.0 / 60.0);
+        assert!(!n.is_settled_rest(), "still shrinking");
         assert_eq!(n.mode, Mode::Collapsed);
         settle(&mut n);
         assert_eq!(n.size(), target(Mode::Collapsed, false));
+        assert!(n.is_settled_rest());
         // music starting widens the resting pill
         assert!(n.set_live(true));
         assert!(!n.set_live(true));

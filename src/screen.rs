@@ -8,6 +8,7 @@ pub enum Check {
     /// A fullscreen app (game, video) owns the notch's monitor: hide the notch.
     Fullscreen,
     /// Normal desktop; `true` when the window under the notch has busy pixels beside the pill.
+    /// Not sampled -> `false`, and the caller ignores it.
     Busy(bool),
 }
 
@@ -44,7 +45,9 @@ fn class_name(hwnd: HWND) -> String {
 
 /// `own` = notch window, `center_x` = notch centre in screen px, `monitor` = notch monitor rect,
 /// `pill_w` = resting pill width (logical px); the strips sit just outside it.
-pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32) -> Check {
+/// `sample` = false skips the pixel strips: the capture includes our own window, so they are only
+/// meaningful while the notch rests at its pill size (not hovered, open, bannering or animating).
+pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, sample: bool) -> Check {
     unsafe {
         let fg = GetForegroundWindow();
         if fg.is_invalid() || fg == own || !IsWindowVisible(fg).as_bool() || IsIconic(fg).as_bool() {
@@ -60,6 +63,9 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32) -
         let near = |a: i32, b: i32| (a - b).abs() <= 1;
         if near(r.left, monitor.left) && near(r.top, monitor.top) && near(r.right, monitor.right) && near(r.bottom, monitor.bottom) {
             return Check::Fullscreen;
+        }
+        if !sample {
+            return Check::Busy(false);
         }
         let half = (pill_w / 2.0 * scale) as i32;
         let gap = (STRIP_GAP * scale) as i32;
@@ -83,7 +89,8 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32) -
     }
 }
 
-/// BitBlt without CAPTUREBLT skips layered windows, so our own notch never shows up in the sample.
+/// Screen capture of one strip. It includes the notch window too (measured on Windows 11, with or
+/// without CAPTUREBLT), hence the `sample` gate in `check`.
 unsafe fn grab_edges(x: i32, y: i32, w: i32, h: i32) -> usize {
     let screen = GetDC(None);
     let mem = CreateCompatibleDC(Some(screen));
