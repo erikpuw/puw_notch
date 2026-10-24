@@ -44,7 +44,24 @@ pub const ALERT_MS: u32 = 5000;
 /// How long a status banner (Caps Lock, brightness) stays.
 pub const STATUS_MS: u32 = 1500;
 /// Invisible hover margin around the pill (not used in mini: only the line itself reacts).
-pub const HOVER_MARGIN: f32 = 4.0;
+const HOVER_MARGIN: f32 = 4.0;
+/// Concave flares joining the notch sides to the screen edge: grow with the notch, capped.
+const EAR_RATIO: f32 = 0.35;
+const EAR_MAX: f32 = 14.0;
+
+/// Ear size (logical px) for a notch `h` tall.
+pub fn ear(h: f32) -> f32 {
+    (h * EAR_RATIO).min(EAR_MAX)
+}
+
+/// Area that reacts to the mouse, logical px: (half width from the centre, height from the top).
+/// The shape with its ears, plus the invisible margin outside mini. The renderer paints exactly
+/// this and the dwell check tests exactly this, so a cursor on the rim opens the panel instead
+/// of bouncing the pill and letting it fall back.
+pub fn hover_area(mode: Mode, size: [f32; 3]) -> (f32, f32) {
+    let m = if matches!(mode, Mode::Mini | Mode::PeekMini) { 0.0 } else { HOVER_MARGIN };
+    (size[0] / 2.0 + ear(size[1]) + m, size[1] + m)
+}
 /// How long the mouse must stay before Peek turns into Expanded.
 pub const DWELL_MS: u32 = 80;
 
@@ -229,6 +246,17 @@ mod tests {
             }
         }
         panic!("spring did not settle");
+    }
+
+    #[test]
+    fn hover_area_covers_the_ears_and_margin() {
+        // Collapsed pill 150 x 30: ears 30 * 0.35 = 10.5, margin 4 on each side and below.
+        let pill = target(Mode::Collapsed, false);
+        assert_eq!(hover_area(Mode::Collapsed, pill), (pill[0] / 2.0 + 10.5 + HOVER_MARGIN, pill[1] + HOVER_MARGIN));
+        // Mini reacts on the line and its tiny ears only, no margin.
+        let line = target(Mode::Mini, false);
+        assert_eq!(hover_area(Mode::Mini, line), (line[0] / 2.0 + ear(line[1]), line[1]));
+        assert_eq!(ear(200.0), EAR_MAX, "ears are capped");
     }
 
     #[test]

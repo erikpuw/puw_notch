@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use crate::connectivity::DeviceKind;
 use crate::music::Track;
-use crate::notch::{target, Mode, HOVER_MARGIN};
+use crate::notch::{self, target, Mode};
 use crate::notify::Toast;
 use crate::system::Battery;
 use crate::calendar::Appointment;
@@ -154,9 +154,6 @@ impl Button {
 const PAD: f32 = 24.0;
 /// Icon glyph change animation length.
 const ICON_MORPH_S: f32 = 0.25;
-/// Concave flares joining the notch sides to the screen edge: grow with the notch, capped.
-const EAR_RATIO: f32 = 0.35;
-const EAR_MAX: f32 = 14.0;
 const MEDIA_BTN: f32 = 40.0;
 const COVER: f32 = 64.0;
 /// Page content sits between the side arrows (logical px from the panel edge).
@@ -630,11 +627,11 @@ impl Renderer {
             rt.BeginDraw();
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
-            let ear = (nh * EAR_RATIO).min(EAR_MAX * s);
+            let ear = notch::ear(v.size[1]) * s;
             if !matches!(v.mode, Mode::Mini | Mode::PeekMini) {
-                // Alpha 1/255: invisible but still catches the mouse.
-                let m = HOVER_MARGIN * s;
-                rt.FillRectangle(&rect(l - ear - m, 0.0, r + ear + m, nh + m), &brush(color(0.0, 0.0, 0.0, 1.0 / 255.0))?);
+                // Alpha 1/255: invisible but still catches the mouse; same area as the dwell check.
+                let (half, h) = notch::hover_area(v.mode, v.size);
+                rt.FillRectangle(&rect(cx - half * s, 0.0, cx + half * s, h * s), &brush(color(0.0, 0.0, 0.0, 1.0 / 255.0))?);
             }
             rt.FillGeometry(&self.notch_shape(l, r, nh, nr, ear)?, &brush(grey(0.0, 1.0))?, None);
 

@@ -35,7 +35,7 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use connectivity::{Event, Net, RadioType, WM_CONN};
-use notch::{Mode, Notch, ALERT_MS, DWELL_MS, HOVER_MARGIN, MAX_H, MAX_W, STATUS_MS};
+use notch::{Mode, Notch, ALERT_MS, DWELL_MS, MAX_H, MAX_W, STATUS_MS};
 use music::WM_MUSIC;
 use i18n::tr;
 use audio::WM_VOLUME;
@@ -245,17 +245,17 @@ impl App {
         }
     }
 
-    /// Is the cursor over what is drawn right now (pill + hover margin outside mini)?
+    /// Is the cursor over the area that reacts to the mouse right now (`notch::hover_area`)?
     fn cursor_inside(&self) -> bool {
         let mut p = POINT::default();
         if unsafe { GetCursorPos(&mut p) }.is_err() {
             return false;
         }
-        let [nw, nh, _] = self.notch.size().map(|s| s * self.scale);
-        let m = if matches!(self.notch.mode, Mode::Mini | Mode::PeekMini) { 0.0 } else { HOVER_MARGIN * self.scale };
+        let (half, h) = notch::hover_area(self.notch.mode, self.notch.size());
+        let (half, h) = (half * self.scale, h * self.scale);
         let cx = (self.win.0 + self.win.2 / 2) as f32;
         let (x, y) = (p.x as f32, (p.y - self.win.1) as f32);
-        x >= cx - nw / 2.0 - m && x <= cx + nw / 2.0 + m && y >= 0.0 && y <= nh + m
+        (x - cx).abs() <= half && y >= 0.0 && y <= h
     }
 
     /// Keep the speaker callback on the default device and re-read the mic. A mic mute change
