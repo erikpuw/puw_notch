@@ -15,9 +15,10 @@ pub enum Check {
     Settling,
 }
 
-/// Strips sampled left and right of the collapsed pill (logical px).
-const STRIP_GAP: f32 = 18.0;
-const STRIP_W: f32 = 60.0;
+/// Strips sampled left and right of the collapsed pill (logical px): just past its ears, and only
+/// 14-48 px out, so text counts when it runs up to the notch, not when it merely comes near.
+const STRIP_GAP: f32 = 14.0;
+const STRIP_W: f32 = 34.0;
 const STRIP_H: f32 = 36.0;
 /// A pixel is "edge" when a channel differs from its left neighbour by at least this much.
 const EDGE_DELTA: u8 = 14;
@@ -130,7 +131,7 @@ unsafe fn grab_edges(x: i32, y: i32, w: i32, h: i32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{edge_pixels, is_busy};
+    use super::{edge_pixels, is_busy, STRIP_GAP, STRIP_W};
 
     #[test]
     fn busy_with_text_beside_the_notch() {
@@ -140,6 +141,16 @@ mod tests {
         assert!(!is_busy(Some(11), Some(0)), "a few stray pixels");
         assert!(!is_busy(Some(0), Some(0)), "empty title bar");
         assert!(!is_busy(None, None));
+    }
+
+    #[test]
+    fn strips_hug_the_notch_but_skip_its_ears() {
+        // The capture includes our own ears, so the strip starts past them...
+        let tallest_rest = crate::notch::target(crate::notch::Mode::Collapsed, true)[1];
+        assert!(STRIP_GAP > crate::notch::ear(tallest_rest));
+        // ...and stops within 48 px: Edge's "+" after 3 tabs sits 67 px from the music pill and must
+        // not count, the 4th tab's title 35-95 px out must (measured on recorded tab bars).
+        assert!(STRIP_GAP + STRIP_W <= 48.0);
     }
 
     #[test]
