@@ -38,8 +38,10 @@ pub struct View<'a> {
     pub battery: Option<Battery>,
     /// Banner content while in Alert (a notification or a status change).
     pub banner: Option<&'a Toast>,
-    /// Now playing; Some = "live" layout (cover in the pill).
+    /// Now playing (also paused), for the panel's Music page.
     pub music: Option<&'a Track>,
+    /// Resting pill uses the music layout (cover, bars); see `music::shows_pill`.
+    pub live: bool,
     /// Seconds, drives the equaliser bars.
     pub phase: f32,
     pub hovered: Option<Button>,
@@ -634,11 +636,12 @@ impl Renderer {
             let fade = |from: f32, span: f32| ((nh - from * s) / (span * s)).clamp(0.0, 1.0);
             let small_a = 1.0 - fade(39.0, 20.0);
             if nh >= 20.0 * s && small_a > 0.0 && v.mode != Mode::Alert {
+                let pill_music = v.music.filter(|_| v.live);
                 text(v.time, F_SMALL, rect(l, 0.0, r, nh), center, grey(1.0, small_a))?;
                 if let Some(b) = v.battery {
                     let d = 18.0 * s;
                     // Left of the time; with music the cover takes that spot, so sit before the bars.
-                    let bx = if v.music.is_some() { r - 60.0 * s } else { l + 14.0 * s };
+                    let bx = if pill_music.is_some() { r - 60.0 * s } else { l + 14.0 * s };
                     let by = (nh - d) / 2.0;
                     let ring_c = if b.charging {
                         color(0.2, 0.84, 0.29, small_a)
@@ -659,7 +662,7 @@ impl Renderer {
                         text(ICON_BOLT, F_TINY_ICON, rect(bx, by, bx + d, by + d), center, ring_c)?;
                     }
                 }
-                if let Some(t) = v.music {
+                if let Some(t) = pill_music {
                     // Live pill: cover on the left, equaliser on the right.
                     let c = 20.0 * s;
                     let top = (nh - c) / 2.0;
@@ -1199,7 +1202,7 @@ mod tests {
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
+                banner: None, music: Some(&track), live: true, phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], appts: &[],
                 list: ListView { counts: (0, 0), now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };

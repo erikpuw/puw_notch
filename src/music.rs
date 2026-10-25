@@ -19,6 +19,14 @@ use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow, 
 /// Posted when the snapshot changed (new track, play/pause, lyrics arrived).
 pub const WM_MUSIC: u32 = WM_APP + 5;
 const POLL: Duration = Duration::from_millis(500);
+/// A paused player keeps the music pill this long, then the notch goes back to the clock.
+const PAUSE_KEEP: Duration = Duration::from_secs(10);
+
+/// Music layout in the resting pill: while playing, or for `PAUSE_KEEP` after a pause so a quick
+/// resume is still one hover away. `paused_for` = None when nothing is paused.
+pub fn shows_pill(playing: bool, paused_for: Option<Duration>) -> bool {
+    playing || paused_for.is_some_and(|d| d < PAUSE_KEEP)
+}
 
 #[derive(Clone, Default)]
 pub struct Track {
@@ -451,6 +459,14 @@ pub fn current_line(lines: &[(u64, String)], pos_ms: u64) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pill_stays_ten_seconds_after_pausing() {
+        assert!(shows_pill(true, None), "playing");
+        assert!(shows_pill(false, Some(Duration::from_secs(9))), "just paused: still there to resume");
+        assert!(!shows_pill(false, Some(Duration::from_secs(10))), "paused 10 s: back to the clock");
+        assert!(!shows_pill(false, None), "no player");
+    }
 
     #[test]
     fn automatic_source_selection_prefers_playing_then_foreground() {

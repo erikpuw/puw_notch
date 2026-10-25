@@ -90,6 +90,8 @@ struct App {
     mic_muted: Option<bool>,
     music: music::Music,
     track: Option<music::Track>,
+    /// When the current track was paused (None while playing or with no player).
+    paused_since: Option<Instant>,
     started: Instant,
     /// Frame pacing: VSYNC while something moves, T_ANIM at BARS_FRAME_MS for the equaliser alone, 0 = idle.
     frame_ms: u32,
@@ -160,6 +162,7 @@ impl App {
             battery: self.battery,
             banner: self.banner.as_ref(),
             music: self.track.as_ref(),
+            live: self.notch.live,
             phase: self.started.elapsed().as_secs_f32(),
             hovered: self.hovered_button,
             page: self.page,
@@ -239,10 +242,14 @@ impl App {
         }
     }
 
-    /// Pull the latest now-playing snapshot; music starting/stopping resizes the pill.
+    /// Pull the latest now-playing snapshot; music starting/stopping resizes the pill. A paused
+    /// player keeps the pill for a few seconds (`music::shows_pill`); the panel's Music page keeps it.
     fn refresh_music(&mut self) {
         self.track = self.music.snapshot();
-        if self.notch.set_live(self.track.is_some()) || self.bars_active() {
+        let playing = self.track.as_ref().is_some_and(|t| t.playing);
+        self.paused_since = if self.track.is_some() && !playing { Some(self.paused_since.unwrap_or_else(Instant::now)) } else { None };
+        let live = music::shows_pill(playing, self.paused_since.map(|t| t.elapsed()));
+        if self.notch.set_live(live) || self.bars_active() {
             self.kick();
         }
     }
@@ -956,6 +963,7 @@ fn main() -> windows::core::Result<()> {
             mic_muted: None,
             music: music::Music::start(hwnd),
             track: None,
+            paused_since: None,
             started: Instant::now(),
             frame_ms: 0,
             vsync: Vsync::start(hwnd),
