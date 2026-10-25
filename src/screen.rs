@@ -4,6 +4,8 @@ use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use crate::notch;
+
 pub enum Check {
     /// A fullscreen app (game, video) owns the notch's monitor: hide the notch.
     Fullscreen,
@@ -15,11 +17,21 @@ pub enum Check {
     Settling,
 }
 
-/// Strips sampled left and right of the collapsed pill (logical px): just past its ears, and only
-/// 14-48 px out, so text counts when it runs up to the notch, not when it merely comes near.
-const STRIP_GAP: f32 = 14.0;
-const STRIP_W: f32 = 34.0;
-const STRIP_H: f32 = 36.0;
+/// Strips sampled left and right of the pill, as Nusa does (read from its code): 18-78 px outside
+/// the resting 150 px pill, top 30 px of the screen. The outer edge stays put when music widens the
+/// pill, so the strips never reach further out than Nusa's.
+const STRIP_GAP: f32 = 18.0;
+const STRIP_W: f32 = 60.0;
+const STRIP_H: f32 = 30.0;
+/// The capture includes our own window: stay this far outside the current pill (its ears reach 10.5).
+const EAR_CLEAR: f32 = 14.0;
+
+/// (inner, outer) distance of each strip from the notch centre, logical px, for a pill `pill_w` wide.
+fn strip_span(pill_w: f32) -> (f32, f32) {
+    let rest_half = notch::target(notch::Mode::Collapsed, false)[0] / 2.0;
+    let outer = rest_half + STRIP_GAP + STRIP_W;
+    ((rest_half + STRIP_GAP).max(pill_w / 2.0 + EAR_CLEAR), outer)
+}
 /// A pixel is "edge" when a channel differs from its left neighbour by at least this much.
 const EDGE_DELTA: u8 = 14;
 /// Edge pixels that make a strip "text": tabs or a title running up to the notch.
@@ -56,7 +68,7 @@ fn class_name(hwnd: HWND) -> String {
 }
 
 /// `own` = notch window, `center_x` = notch centre in screen px, `monitor` = notch monitor rect,
-/// `pill_w` = resting pill width (logical px); the strips sit just outside it.
+/// `pill_w` = current resting pill width (logical px); the strips follow `strip_span`.
 /// `sample` = false skips the pixel strips: the capture includes our own window, so they are only
 /// meaningful while the notch rests at its pill size (not hovered, open, bannering or animating).
 /// `last` = foreground window and rect seen by the previous call; sampling waits until they repeat.
@@ -86,9 +98,9 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         if !still {
             return Check::Settling;
         }
-        let half = (pill_w / 2.0 * scale) as i32;
-        let gap = (STRIP_GAP * scale) as i32;
-        let sw = (STRIP_W * scale) as i32;
+        let (inner, outer) = strip_span(pill_w);
+        let (inner, outer) = ((inner * scale) as i32, (outer * scale) as i32);
+        let sw = outer - inner;
         let sh = (STRIP_H * scale) as i32;
         let top = monitor.top;
         // Only sample where the foreground window actually is, so wallpaper never counts.
@@ -97,8 +109,8 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         }
         let y = r.top.max(top);
         let h = top + sh - y;
-        let strip = |x: i32| (x >= r.left + 2 && x + sw <= r.right - 2 && h > 3).then(|| grab_edges(x, y, sw, h));
-        Check::Busy(is_busy(strip(center_x - half - gap - sw), strip(center_x + half + gap)))
+        let strip = |x: i32| (x >= r.left + 2 && x + sw <= r.right - 2 && sw >= 4 && h > 3).then(|| grab_edges(x, y, sw, h));
+        Check::Busy(is_busy(strip(center_x - outer), strip(center_x + inner)))
     }
 }
 
@@ -131,7 +143,7 @@ unsafe fn grab_edges(x: i32, y: i32, w: i32, h: i32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{edge_pixels, is_busy, STRIP_GAP, STRIP_W};
+    use super::{edge_pixels, is_busy, strip_span};
 
     #[test]
     fn busy_with_text_beside_the_notch() {
@@ -144,13 +156,16 @@ mod tests {
     }
 
     #[test]
-    fn strips_hug_the_notch_but_skip_its_ears() {
-        // The capture includes our own ears, so the strip starts past them...
-        let tallest_rest = crate::notch::target(crate::notch::Mode::Collapsed, true)[1];
-        assert!(STRIP_GAP > crate::notch::ear(tallest_rest));
-        // ...and stops within 48 px: Edge's "+" after 3 tabs sits 67 px from the music pill and must
-        // not count, the 4th tab's title 35-95 px out must (measured on recorded tab bars).
-        assert!(STRIP_GAP + STRIP_W <= 48.0);
+    fn strips_sit_where_nusa_samples() {
+        use crate::notch::{target, Mode};
+        // Resting pill: 93-153 px from the centre, like Nusa (18-78 px outside a 150 px pill).
+        assert_eq!(strip_span(target(Mode::Collapsed, false)[0]), (93.0, 153.0));
+        // Music pill (wider): the inner edge moves out past the pill and its ears, the outer edge stays,
+        // so Edge's "+" after 3 tabs (~170 px out) never counts and a cut tab title (~130 px) does.
+        let (inner, outer) = strip_span(target(Mode::Collapsed, true)[0]);
+        assert!(inner > target(Mode::Collapsed, true)[0] / 2.0 + crate::notch::ear(30.0));
+        assert_eq!(outer, 153.0);
+        assert!(inner < 130.0 && 170.0 > outer);
     }
 
     #[test]
