@@ -168,8 +168,13 @@ impl Button {
 const PAD: f32 = 24.0;
 /// Icon glyph change animation length.
 const ICON_MORPH_S: f32 = 0.25;
-const MEDIA_BTN: f32 = 40.0;
-const COVER: f32 = 64.0;
+/// Music page: cover on the left, a column of text, bar and controls on its right.
+const COVER: f32 = 120.0;
+const COVER_GAP: f32 = 16.0;
+const PLAY_BTN: f32 = 38.0;
+const SKIP_BTN: f32 = 32.0;
+const CONTROLS_Y: f32 = 148.0;
+const BAR_Y: f32 = 108.0;
 /// Page content sits between the side arrows (logical px from the panel edge).
 const SIDE: f32 = 44.0;
 const ARROW: f32 = 24.0;
@@ -198,10 +203,11 @@ const SET_Y: f32 = 62.0;
 pub fn buttons(cx: f32, scale: f32) -> [(Button, D2D_RECT_F); 4] {
     let w = target(Mode::Expanded, false)[0];
     let left = cx / scale - w / 2.0;
-    let (y, c) = (124.0, w / 2.0 - MEDIA_BTN / 2.0);
-    let r = |x: f32| rect((left + x) * scale, y * scale, (left + x + MEDIA_BTN) * scale, (y + MEDIA_BTN) * scale);
-    let seek = rect((left + SIDE + 40.0) * scale, 102.0 * scale, (left + w - SIDE - 40.0) * scale, 122.0 * scale);
-    [(Button::Previous, r(c - 48.0)), (Button::PlayPause, r(c)), (Button::Next, r(c + 48.0)), (Button::Seek, seek)]
+    let (x0, x1) = (SIDE + COVER + COVER_GAP, w - SIDE);
+    let mid = (x0 + x1) / 2.0;
+    let round = |x: f32, size: f32| rect((left + x - size / 2.0) * scale, (CONTROLS_Y - size / 2.0) * scale, (left + x + size / 2.0) * scale, (CONTROLS_Y + size / 2.0) * scale);
+    let seek = rect((left + x0) * scale, (BAR_Y - 8.0) * scale, (left + x1) * scale, (BAR_Y + 8.0) * scale);
+    [(Button::Previous, round(mid - 58.0, SKIP_BTN)), (Button::PlayPause, round(mid, PLAY_BTN)), (Button::Next, round(mid + 58.0, SKIP_BTN)), (Button::Seek, seek)]
 }
 
 /// Settings rows of a health card: (setting, is a switch).
@@ -275,13 +281,13 @@ pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, pa
         && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom).map(|(b, _)| b)
 }
 
-/// Overshoot easing for the page morph: arrives a touch past and settles back.
 /// Opacity of the page leaving and the page arriving at progress `t` (0..1) of a page change.
 /// The old page is gone before the new one shows, so their text never overlaps (ghosting).
 fn page_fades(t: f32) -> (f32, f32) {
     ((1.0 - t * 3.5).clamp(0.0, 1.0), ((t - 0.2) * 2.5).clamp(0.0, 1.0))
 }
 
+/// Overshoot easing for the page morph: arrives a touch past and settles back.
 fn ease_out_back(t: f32) -> f32 {
     let (c1, t) = (1.3, t.clamp(0.0, 1.0) - 1.0);
     1.0 + (c1 + 1.0) * t * t * t + c1 * t * t
@@ -1171,29 +1177,29 @@ impl Renderer {
 
                     match page {
                         Page::Music => {
-                            let top = 38.0 * s;
-                            draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 10.0 * s, a)?;
-                            let tl = cl + (COVER + 12.0) * s;
+                            let top = 40.0 * s;
+                            draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 14.0 * s, a)?;
+                            let tl = cl + (COVER + COVER_GAP) * s;
                             match v.music {
                                 Some(t) => {
                                     let title = if t.title.is_empty() { tr("Đang phát", "Playing") } else { &t.title };
-                                    text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
-                                    text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, soft_text(tint, level, 0.65, a))?;
+                                    text(&t.artist, F_BODY, rect(tl, top, cr, top + 18.0 * s), lead, soft_text(tint, level, 0.65, a))?;
+                                    text(title, F_TITLE, rect(tl, top + 18.0 * s, cr, top + 40.0 * s), lead, grey(1.0, a))?;
                                     let lyric = t.lyric_now().unwrap_or_else(|| hovered.map_or(
                                         if t.duration_ms == 0 { tr("Trình phát chưa cung cấp thời gian", "The player gives no timeline") }
                                         else if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
-                                    text(t.command_error.unwrap_or(lyric), F_BODY, rect(tl, top + 40.0 * s, cr, top + 58.0 * s), lead,
+                                    text(t.command_error.unwrap_or(lyric), F_BODY, rect(tl, top + 42.0 * s, cr, top + 60.0 * s), lead,
                                         if t.command_error.is_some() { color(1.0, 0.5, 0.4, a) } else { grey(0.95, a) })?;
                                 }
-                                None => text(tr("Không có bài", "Nothing playing"), F_TITLE, rect(tl, top, cr, top + COVER * s), lead, grey(1.0, a))?,
+                                None => text(tr("Không có bài", "Nothing playing"), F_TITLE, rect(tl, top, cr, top + 40.0 * s), lead, grey(1.0, a))?,
                             }
                             let pos = v.music.map_or(0, |t| t.position_ms());
                             let dur = v.music.map_or(0, |t| t.duration_ms);
-                            let by = 112.0 * s;
-                            let lw = 40.0 * s;
-                            let (bl, brr) = (cl + lw, cr - lw);
-                            text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, soft_text(tint, level, 0.6, a))?;
-                            text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, soft_text(tint, level, 0.6, a))?;
+                            let by = BAR_Y * s;
+                            let (bl, brr) = (tl, cr);
+                            let times = soft_text(tint, level, 0.6, a);
+                            text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(bl, by + 4.0 * s, bl + 60.0 * s, by + 20.0 * s), lead, times)?;
+                            text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr - 60.0 * s, by + 4.0 * s, brr, by + 20.0 * s), trail, times)?;
                             let th = 4.0 * s;
                             let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
                             rt.FillRoundedRectangle(&bar(brr), &brush({ let g = 0.25 + 0.75 * level; color(g, g, g, a * (1.0 - 0.7 * level)) })?);
@@ -1209,10 +1215,19 @@ impl Renderer {
                                     Button::Next => ICON_NEXT,
                                     _ => continue,
                                 };
-                                let c = if !b.enabled(v.music) { grey(0.3, a) }
+                                let on = b.enabled(v.music);
+                                if b == Button::PlayPause {
+                                    // The main action: a white disc with a dark glyph.
+                                    let fill = if !on { grey(0.25, a) } else if hovered == Some(b) { grey(0.85, a) } else { grey(1.0, a) };
+                                    let disc = D2D1_ELLIPSE { point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
+                                        radiusX: (br.right - br.left) / 2.0, radiusY: (br.bottom - br.top) / 2.0 };
+                                    rt.FillEllipse(&disc, &brush(fill)?);
+                                    micon("play", icon, F_ICON, br, if on { grey(0.05, a) } else { grey(0.5, a) })?;
+                                    continue;
+                                }
+                                let c = if !on { grey(0.3, a) }
                                     else if hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
-                                let slot = match b { Button::Previous => "prev", Button::PlayPause => "play", _ => "next" };
-                                micon(slot, icon, F_ICON, br, c)?;
+                                micon(if b == Button::Previous { "prev" } else { "next" }, icon, F_ICON, br, c)?;
                             }
                         }
                         Page::Todo => {
@@ -1626,17 +1641,29 @@ mod tests {
 
     #[test]
     fn seek_and_icon_hit_areas_follow_dpi_and_capabilities() {
-        let track = Track { duration_ms: 120_000, can_seek: true, can_toggle: true, ..Default::default() };
+        let track = Track { duration_ms: 120_000, can_seek: true, can_toggle: true, can_previous: true, can_next: true, ..Default::default() };
         for scale in [1.0, 1.5, 2.0] {
             let cx = 265.0 * scale;
-            let (_, seek) = buttons(cx, scale)[3];
+            let [(_, prev), (_, play), (_, next), (_, seek)] = buttons(cx, scale);
+            let mid = |r: D2D_RECT_F| ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0);
             assert_eq!(seek_at(cx, scale, seek.left - 100.0, track.duration_ms), 0);
             assert_eq!(seek_at(cx, scale, seek.right + 100.0, track.duration_ms), 120_000);
             assert_eq!(seek_at(cx, scale, (seek.left + seek.right) / 2.0, track.duration_ms), 60_000);
-            assert_eq!(hit_button(cx, scale, cx, 140.0 * scale, Some(&track), Page::Music, 0, 0, None), Some(Button::PlayPause));
-            assert_eq!(hit_button(cx, scale, cx, 112.0 * scale, Some(&track), Page::Music, 0, 0, None), Some(Button::Seek));
-            assert_eq!(hit_button(cx, scale, cx, 140.0 * scale, None, Page::Music, 0, 0, None), None);
+            let (px, py) = mid(play);
+            assert_eq!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None), Some(Button::PlayPause));
+            assert_eq!(hit_button(cx, scale, mid(prev).0, mid(prev).1, Some(&track), Page::Music, 0, 0, None), Some(Button::Previous));
+            assert_eq!(hit_button(cx, scale, mid(next).0, mid(next).1, Some(&track), Page::Music, 0, 0, None), Some(Button::Next));
+            assert_eq!(hit_button(cx, scale, mid(seek).0, mid(seek).1, Some(&track), Page::Music, 0, 0, None), Some(Button::Seek));
+            assert_eq!(hit_button(cx, scale, px, py, None, Page::Music, 0, 0, None), None);
             assert!(buttons(cx, scale).iter().all(|(_, r)| r.bottom <= DOTS_Y * scale));
+            // Controls live in the right column: right of the cover, left of the side arrow, no overlaps.
+            let left = cx - 220.0 * scale;
+            let cover_right = left + (SIDE + COVER) * scale;
+            for r in [prev, play, next, seek] {
+                assert!(r.left > cover_right && r.right <= left + (440.0 - SIDE) * scale, "{r:?}");
+            }
+            assert!(prev.right <= play.left && play.right <= next.left, "round buttons must not overlap");
+            assert!(seek.bottom <= prev.top.min(play.top), "bar above the buttons");
         }
     }
 
