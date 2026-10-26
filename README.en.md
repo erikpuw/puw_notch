@@ -18,6 +18,20 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
 - **Idle robot**: after 30 s without input, an LED face (eyes and mouth) replaces the clock, looks around below, blinks and changes expression (curious, wink, excited; often happy while charging; sad on a low battery); after 5 min it falls asleep with a drifting pixel z; when you are back it grins at the cursor, centres itself, then hands the pill back to clock and battery. Toggle in the tray.
 - **Tray**: Minimal notch, Idle robot, Start with Windows, Language (Tiếng Việt / English), Quit.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Music](assets/screenshots/page-music.png)<br>**Music**: cover, title, lyrics, background fading into the cover's colour | ![Music, nothing playing](assets/screenshots/page-music-empty.png)<br>**Music** with nothing playing |
+| ![Tasks](assets/screenshots/page-tasks.png)<br>**Tasks**: tasks and appointments in one list | ![Notifications](assets/screenshots/page-notifications.png)<br>**Notifications**: each with its app's icon |
+| ![Health](assets/screenshots/page-health.png)<br>**Health**: water and stand-up reminders | ![Banner](assets/screenshots/banner.png)<br>Notification **banner** |
+
+The collapsed pill:
+
+| Music playing | Normal | Idle robot | Happy robot |
+|---|---|---|---|
+| ![](assets/screenshots/pill-music.png) | ![](assets/screenshots/pill-idle.png) | ![](assets/screenshots/robot.png) | ![](assets/screenshots/robot-happy.png) |
+
 ## Build
 
 ```bash
