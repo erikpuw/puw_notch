@@ -1,7 +1,8 @@
 //! Small OS bits: clock text, battery, settings file, start-with-Windows.
 
 use std::path::PathBuf;
-use windows::core::{w, PCWSTR};
+use windows::core::{s, w, GUID, PCWSTR};
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::System::Registry::*;
@@ -90,13 +91,35 @@ impl Battery {
     }
 }
 
+/// `PowerGetEffectiveOverlayScheme` (the power mode now in effect; 0 = success). It is in neither
+/// the `windows` crate nor every SDK's import library, so it is looked up in powrprof.dll once.
+fn effective_overlay() -> Option<GUID> {
+    type Get = unsafe extern "system" fn(*mut GUID) -> i32;
+    static GET: std::sync::OnceLock<Option<Get>> = std::sync::OnceLock::new();
+    let get = (*GET.get_or_init(|| unsafe {
+        let lib = LoadLibraryW(w!("powrprof.dll")).ok()?;
+        GetProcAddress(lib, s!("PowerGetEffectiveOverlayScheme")).map(|p| std::mem::transmute::<_, Get>(p))
+    }))?;
+    let mut guid = GUID::zeroed();
+    (unsafe { get(&mut guid) } == 0).then_some(guid)
+}
+
+/// The "Best power efficiency" power mode, which Windows 11's Energy saver switches to.
+const BEST_EFFICIENCY: GUID = GUID::from_u128(0x961cc777_2547_4f9d_8174_7d86181b8a7a);
+
+/// Battery saver is on: the classic status flag, or (Windows 11 energy saver, which leaves that
+/// flag at 0, measured) the effective power mode being "Best power efficiency".
+fn saver_on(status_flag: u8, overlay: Option<GUID>) -> bool {
+    status_flag == 1 || overlay == Some(BEST_EFFICIENCY)
+}
+
 /// None on a desktop PC (no system battery): nothing battery-related is shown then.
 pub fn battery() -> Option<Battery> {
     let mut s = SYSTEM_POWER_STATUS::default();
     if unsafe { GetSystemPowerStatus(&mut s) }.is_err() || s.BatteryLifePercent == 255 || s.BatteryFlag & 128 != 0 {
         return None;
     }
-    Some(Battery { percent: s.BatteryLifePercent.min(100), charging: s.ACLineStatus == 1, saver: s.SystemStatusFlag == 1 })
+    Some(Battery { percent: s.BatteryLifePercent.min(100), charging: s.ACLineStatus == 1, saver: saver_on(s.SystemStatusFlag, effective_overlay()) })
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -170,6 +193,19 @@ mod tests {
 
     fn b(percent: u8, charging: bool, saver: bool) -> Battery {
         Battery { percent, charging, saver }
+    }
+
+    #[test]
+    fn saver_is_the_old_flag_or_the_best_efficiency_power_mode() {
+        let other = GUID::from_u128(0x3af9b8d9_7c97_431d_ad78_34a8bfea439f); // "Balanced" overlay
+        assert!(!saver_on(0, None));
+        assert!(!saver_on(0, Some(GUID::zeroed())), "default mode");
+        assert!(!saver_on(0, Some(other)));
+        assert!(saver_on(1, None), "classic battery saver flag");
+        assert!(saver_on(1, Some(other)));
+        // Windows 11 energy saver: only the power mode changes, the flag stays 0.
+        assert!(saver_on(0, Some(BEST_EFFICIENCY)));
+        assert_eq!(BEST_EFFICIENCY, GUID::from_u128(0x961cc777_2547_4f9d_8174_7d86181b8a7a));
     }
 
     #[test]
