@@ -51,6 +51,8 @@ features = [
     "Data_Json",
     "Win32_Graphics_Imaging",
     "Win32_Graphics_Imaging_D2D",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
 ]
 
 [profile.release]

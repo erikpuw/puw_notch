@@ -52,6 +52,8 @@ pub enum Anim {
     SpeakerCone,
     MouseWheel,
     Gamepad,
+    UsbIn,
+    UsbOut,
 }
 
 pub struct Icon {
@@ -224,6 +226,20 @@ static GAMEPAD: Icon = Icon {
     ],
 };
 
+const USB_PARTS: &[Part] = &[
+    moves("M12 19m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0", 0),
+    moves("M12 17v-11.5", 0),
+    moves("M7 10v3l5 3", 0),
+    moves("M12 14.5l5 -2v-2.5", 0),
+    moves("M16 10h2v-2h-2z", 0),
+    moves("M7 9m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0", 0),
+    moves("M10 5.5h4l-2 -2.5z", 0),
+];
+/// A USB device plugged in: the whole plug slides up into its socket.
+static USB: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::UsbIn, origins: MID, parts: USB_PARTS };
+/// A USB device pulled out: the same symbol shaking and dimming.
+static USB_OUT: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::UsbOut, origins: MID, parts: USB_PARTS };
+
 /// The line icon drawn in place of a banner glyph, if it has one.
 pub fn lookup(glyph: &str) -> Option<&'static Icon> {
     Some(match glyph {
@@ -231,6 +247,8 @@ pub fn lookup(glyph: &str) -> Option<&'static Icon> {
         ICON_BRIGHTNESS => &SUN,
         ICON_PLUG | ICON_BATTERY => &CHARGING,
         ICON_UNPLUG => &PLUG,
+        ICON_USB => &USB,
+        ICON_USB_OUT => &USB_OUT,
         ICON_AIRPLANE => &PLANE,
         ICON_VOLUME => &VOLUME,
         ICON_MUTE => &MUTE,
@@ -372,6 +390,11 @@ pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
         Anim::SpeakerCone => g[0].scale = scale(1.18, 0.25, 0.4),
         Anim::MouseWheel => g[0].dy = 1.5 * bump(t, 0.2, 0.5),
         Anim::Gamepad => g[0].alpha = 1.0 - 0.7 * (tau * 1.5 * lerp_in(t, 0.2, 0.7)).sin().abs(),
+        Anim::UsbIn => g[0].dy = 3.0 * (1.0 - ease_out(t / 0.45)),
+        Anim::UsbOut => {
+            g[0].dx = 1.4 * shake;
+            g[0].alpha = 1.0 - 0.5 * bump(t, 0.2, 0.5);
+        }
     }
     g
 }
@@ -563,7 +586,7 @@ mod tests {
 
     #[test]
     fn every_icon_path_parses_and_groups_exist() {
-        let glyphs = [ICON_BT, ICON_BRIGHTNESS, ICON_PLUG, ICON_BATTERY, ICON_UNPLUG, ICON_AIRPLANE, ICON_VOLUME, ICON_MUTE, ICON_MIC, ICON_MIC_OFF,
+        let glyphs = [ICON_BT, ICON_BRIGHTNESS, ICON_PLUG, ICON_BATTERY, ICON_UNPLUG, ICON_USB, ICON_USB_OUT, ICON_AIRPLANE, ICON_VOLUME, ICON_MUTE, ICON_MIC, ICON_MIC_OFF,
             ICON_KEYBOARD, ICON_WIFI, ICON_WIFI_OFF, ICON_NO_INTERNET, ICON_ETHERNET, ICON_MOBILE, ICON_BATTERY_LOW, ICON_SAVER, ICON_REMINDER, ICON_BELL,
             ICON_WALK, ICON_HEADPHONES, ICON_SPEAKER, ICON_PHONE_DEVICE, ICON_MOUSE, ICON_GAMEPAD];
         for glyph in glyphs {
@@ -578,10 +601,10 @@ mod tests {
         assert!(lookup(ICON_DROP).is_none(), "the drop is drawn by the renderer");
     }
 
-    const ALL: [Anim; 22] = [
+    const ALL: [Anim; 24] = [
         Anim::Bluetooth, Anim::Sun, Anim::Charging, Anim::Unplug, Anim::Plane, Anim::Volume, Anim::Mute, Anim::Mic, Anim::MicOff, Anim::Keyboard,
         Anim::Wifi, Anim::WifiOff, Anim::Pulse, Anim::Ring, Anim::BatteryLow, Anim::Saver, Anim::Bell, Anim::Walk, Anim::Headphones,
-        Anim::SpeakerCone, Anim::MouseWheel, Anim::Gamepad,
+        Anim::SpeakerCone, Anim::MouseWheel, Anim::Gamepad, Anim::UsbIn, Anim::UsbOut,
     ];
 
     #[test]
@@ -624,6 +647,11 @@ mod tests {
         let start = motion(Anim::Unplug, 0.0);
         assert!(start[0].dx > 1.0 && start[1].dx < -1.0 && start[2].alpha < 0.1, "{start:?}");
         assert_eq!(motion(Anim::Unplug, 0.6)[0].dx, 0.0);
+        // USB in: slides up from below into place; USB out: shakes sideways and dims, both ways.
+        let usb = motion(Anim::UsbIn, 0.0)[0];
+        assert!(usb.dy > 2.5 && motion(Anim::UsbIn, 0.5)[0].dy == 0.0, "{usb:?}");
+        let (lo, hi) = range(Anim::UsbOut, 0, |m| m.dx);
+        assert!(lo < -0.3 && hi > 0.3 && range(Anim::UsbOut, 0, |m| m.alpha).0 < 0.7, "{lo} {hi}");
         // A key goes down; a low battery's bar blinks; the bell swings both ways from its top.
         assert!(range(Anim::Keyboard, 0, |m| m.dy).1 > 0.5);
         assert!(range(Anim::BatteryLow, 0, |m| m.alpha).0 < 0.3);

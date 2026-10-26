@@ -352,6 +352,9 @@ pub const ICON_SPEAKER: &str = "\u{E7F5}";
 pub const ICON_PHONE_DEVICE: &str = "\u{E8EA}";
 pub const ICON_MOUSE: &str = "\u{E962}";
 pub const ICON_GAMEPAD: &str = "\u{E7FC}";
+/// A USB device plugged in / pulled out: line icons (not font glyphs).
+pub const ICON_USB: &str = "\u{1}usb";
+pub const ICON_USB_OUT: &str = "\u{1}usb-out";
 /// The charger was pulled out: drawn as a plug coming apart (not a font glyph).
 pub const ICON_UNPLUG: &str = "\u{1}unplug";
 /// Not a glyph: the banner draws the water drop shape for this.

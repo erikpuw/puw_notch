@@ -16,6 +16,7 @@ mod screen;
 mod status;
 mod system;
 mod todo;
+mod usb;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +91,8 @@ struct App {
     banner: Option<Toast>,
     /// When the banner appeared.
     banner_at: Instant,
+    /// The last USB change shown (device, change, when), to drop a repeat of it.
+    usb_last: Option<(String, usb::Change, Instant)>,
     /// Last brightness Windows reported; the first report (sent on registering) is not a change.
     last_brightness: Option<u8>,
     audio: Option<audio::Audio>,
@@ -333,6 +336,21 @@ impl App {
             let (title, icon) = if muted { (tr("Đã tắt mic", "Mic off"), render::ICON_MIC_OFF) } else { (tr("Đã bật mic", "Mic on"), render::ICON_MIC) };
             self.show_banner(status_toast("Mic", title.to_string(), "", None, icon), STATUS_MS);
         }
+    }
+
+    /// A USB device came or went: a banner with its name (once per plug, none for root hubs).
+    fn usb_changed(&mut self, change: usb::Change, path: &str) {
+        let Some(id) = usb::instance_id(path) else { return };
+        let now = Instant::now();
+        if usb::is_root_hub(path) || usb::is_repeat(self.usb_last.as_ref(), &id, change, now) {
+            return;
+        }
+        self.usb_last = Some((id, change, now));
+        let (state, icon) = match change {
+            usb::Change::Arrived => (tr("Đã kết nối", "Connected"), render::ICON_USB),
+            usb::Change::Removed => (tr("Đã ngắt kết nối", "Disconnected"), render::ICON_USB_OUT),
+        };
+        self.show_banner(status_toast("USB", usb::device_name(path), state, None, icon), ALERT_MS);
     }
 
     /// Let go of a panel the mouse has left without Windows saying so (see `notch::hover_stale`).
@@ -855,6 +873,11 @@ impl App {
                     self.show_banner(connection_toast(e), ALERT_MS);
                 }
             }
+            WM_DEVICECHANGE => {
+                if let Some((change, path)) = usb::parse_message(wp, lp) {
+                    self.usb_changed(change, &path);
+                }
+            }
             WM_TRAY => {
                 let event = (lp.0 & 0xffff) as u32;
                 if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
@@ -1050,6 +1073,7 @@ fn main() -> windows::core::Result<()> {
             notifications: notify::Reader::open(),
             banner: None,
             banner_at: Instant::now(),
+            usb_last: None,
             last_brightness: None,
             audio: audio::Audio::new(),
             mic_muted: None,
@@ -1085,6 +1109,7 @@ fn main() -> windows::core::Result<()> {
         let _ = RegisterPowerSettingNotification(HANDLE(hwnd.0), &status::VIDEO_BRIGHTNESS, DEVICE_NOTIFY_WINDOW_HANDLE);
         status::watch_lock_keys(hwnd);
         connectivity::watch(hwnd);
+        usb::register(hwnd);
         app.layout();
         app.redraw();
         // Grow from the mini line into the pill (see Notch::new).
