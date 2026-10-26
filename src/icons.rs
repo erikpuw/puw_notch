@@ -244,7 +244,7 @@ pub fn lookup(glyph: &str) -> Option<&'static Icon> {
         ICON_MOBILE | ICON_PHONE_DEVICE => &MOBILE,
         ICON_BATTERY_LOW => &BATTERY_LOW,
         ICON_SAVER => &SAVER,
-        ICON_REMINDER => &BELL,
+        ICON_REMINDER | ICON_BELL => &BELL,
         ICON_WALK => &WALK,
         ICON_HEADPHONES => &HEADPHONES,
         ICON_SPEAKER => &SPEAKER,
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn every_icon_path_parses_and_groups_exist() {
         let glyphs = [ICON_BT, ICON_BRIGHTNESS, ICON_PLUG, ICON_BATTERY, ICON_UNPLUG, ICON_AIRPLANE, ICON_VOLUME, ICON_MUTE, ICON_MIC, ICON_MIC_OFF,
-            ICON_KEYBOARD, ICON_WIFI, ICON_WIFI_OFF, ICON_NO_INTERNET, ICON_ETHERNET, ICON_MOBILE, ICON_BATTERY_LOW, ICON_SAVER, ICON_REMINDER,
+            ICON_KEYBOARD, ICON_WIFI, ICON_WIFI_OFF, ICON_NO_INTERNET, ICON_ETHERNET, ICON_MOBILE, ICON_BATTERY_LOW, ICON_SAVER, ICON_REMINDER, ICON_BELL,
             ICON_WALK, ICON_HEADPHONES, ICON_SPEAKER, ICON_PHONE_DEVICE, ICON_MOUSE, ICON_GAMEPAD];
         for glyph in glyphs {
             let icon = lookup(glyph).unwrap_or_else(|| panic!("{glyph:?} has no line icon"));

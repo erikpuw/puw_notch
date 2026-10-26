@@ -364,7 +364,7 @@ const ICON_PLAY: &str = "\u{E768}";
 const ICON_PAUSE: &str = "\u{E769}";
 const ICON_NEXT: &str = "\u{E893}";
 const ICON_NOTE: &str = "\u{E8D6}";
-const ICON_BELL: &str = "\u{EA8F}";
+pub const ICON_BELL: &str = "\u{EA8F}";
 const ICON_BOLT: &str = "\u{E945}";
 const ICON_LEFT: &str = "\u{E76B}";
 const ICON_RIGHT: &str = "\u{E76C}";
@@ -978,7 +978,7 @@ impl Renderer {
         self.glow = (tint, level, now);
         // The banner's line icon (status / device) with its paths as geometry.
         let banner_line = (|| {
-            let icon = if v.mode == Mode::Alert { v.banner?.icon? } else { return None };
+            let icon = if v.mode == Mode::Alert { v.banner?.icon.unwrap_or(ICON_BELL) } else { return None };
             let ic = icons::lookup(icon)?;
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
@@ -1152,9 +1152,9 @@ impl Renderer {
             if v.mode == Mode::Alert {
                 if let Some(t) = v.banner {
                     let a = fade(44.0, 18.0);
-                    // Icon on the left, text beside it. Status and device icons are line icons whose
-                    // parts move for a moment after the banner appears (icons.rs); the water drop
-                    // hops; a Windows notification's bell stays a still glyph.
+                    // Icon on the left, text beside it. Status and device icons, and a notification's
+                    // bell, are line icons whose parts move for a moment after the banner appears
+                    // (icons.rs); the water drop hops.
                     let d = 36.0 * s;
                     let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + 2.0 * s);
                     let icon = t.icon.unwrap_or(ICON_BELL);
