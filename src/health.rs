@@ -1,5 +1,5 @@
 //! Water and "stand up" reminders. Times are minutes: of the day for the water window, and
-//! `calendar::minutes` totals for clocks that span days. Settings and today's water are kept in
+//! `todo::minutes` totals for clocks that span days. Settings and today's water are kept in
 //! %APPDATA%\PuwNotch\health.txt as key=value lines.
 
 use std::path::PathBuf;

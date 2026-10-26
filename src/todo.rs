@@ -1,28 +1,53 @@
-//! To-do list: add, tick done, delete, optional reminder time (24 h, written in the task text:
-//! "Họp 20:00", "8h30 gửi báo cáo", "20h"). Saved as plain text in %APPDATA%\PuwNotch\todo.txt,
-//! one task per line: "-[ @<due>]\t<text>" open, "x <yyyymmdd>[ @<due>]\t<text>" done that day,
-//! where <due> is yyyymmddHHMM.
+//! Tasks and appointments in one list, typed on the notch: "Mua sữa", "Họp nhóm 20:00",
+//! "Khám răng 28/10 14:30", "Họp mai 9h". A time alone is today (tomorrow once it has passed);
+//! a date (dd/mm[/yyyy], "hôm nay", "mai" / "ngày mai", "today", "tomorrow") without a time is
+//! 08:00. Timed tasks ring `remind_before` minutes early (0 = only on time) and on time; open
+//! tasks past their time stay, marked overdue, until ticked or deleted.
+//! Saved in %APPDATA%\PuwNotch\todo.txt, one task per line: "-[ @<at>]\t<text>" open,
+//! "x <yyyymmdd>[ @<at>]\t<text>" done that day (<at> = yyyymmddHHMM), plus "# remind <min>".
+//! calendar.txt ("@<at>\t<text>") from the old Appointments page is folded in once.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Longest task text kept (characters).
 pub const MAX_LEN: usize = 120;
+/// Choices for the early reminder, minutes before the time (0 = off).
+pub const REMIND_STEPS: [u32; 6] = [0, 5, 10, 15, 30, 60];
+const REMIND_DEFAULT: u32 = 15;
+/// A date typed without a time.
+const DEFAULT_HOUR: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
     pub text: String,
     /// Day it was ticked (yyyymmdd), None while open.
     pub done: Option<u32>,
-    /// Reminder as yyyymmddHHMM.
-    pub due: Option<u64>,
-    /// Reminder banner already shown (this run only; past reminders are not replayed at start).
-    pub notified: bool,
+    /// When, yyyymmddHHMM; None for a plain task.
+    pub at: Option<u64>,
+    /// Early and on-time reminders already shown (this run only; past ones are not replayed).
+    pub told_soon: bool,
+    pub told_now: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Ring {
+    /// `remind_before` minutes to go.
+    Soon,
+    /// It is time.
+    Now,
+}
+
 pub struct Todo {
     pub items: Vec<Item>,
+    /// Early reminder, one of `REMIND_STEPS`.
+    pub remind_before: u32,
     path: Option<PathBuf>,
+}
+
+impl Default for Todo {
+    fn default() -> Self {
+        Todo { items: Vec::new(), remind_before: REMIND_DEFAULT, path: None }
+    }
 }
 
 /// Local time as yyyymmddHHMM.
@@ -30,21 +55,39 @@ pub fn stamp(date: u32, hour: u32, minute: u32) -> u64 {
     date as u64 * 10_000 + hour as u64 * 100 + minute as u64
 }
 
-/// Day after a yyyymmdd date.
-pub fn next_day(date: u32) -> u32 {
-    let (y, m, d) = (date / 10_000, date / 100 % 100, date % 100);
-    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let days = match m {
+fn days_in_month(year: u32, month: u32) -> u32 {
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    match month {
         2 if leap => 29,
         2 => 28,
         4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    };
-    match (d < days, m < 12) {
+        1..=12 => 31,
+        _ => 0,
+    }
+}
+
+/// Day after a yyyymmdd date.
+pub fn next_day(date: u32) -> u32 {
+    let (y, m, d) = (date / 10_000, date / 100 % 100, date % 100);
+    match (d < days_in_month(y, m), m < 12) {
         (true, _) => date + 1,
         (false, true) => y * 10_000 + (m + 1) * 100 + 1,
         (false, false) => (y + 1) * 10_000 + 101,
     }
+}
+
+/// Minutes since an arbitrary epoch of a yyyymmddHHMM stamp, for differences between two stamps.
+pub fn minutes(t: u64) -> i64 {
+    let (date, hm) = ((t / 10_000) as u32, t % 10_000);
+    let (y, m, d) = (date / 10_000, date / 100 % 100, date % 100);
+    // days from civil (Howard Hinnant), good for any Gregorian date
+    let (y, m) = if m <= 2 { (y as i64 - 1, m as i64 + 12) } else { (y as i64, m as i64) };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m - 3) + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe;
+    days * 1440 + (hm / 100) as i64 * 60 + (hm % 100) as i64
 }
 
 /// Find a 24 h time in the text ("20:00", "8:05", "20h", "20h30", "8H"). Returns
@@ -78,17 +121,95 @@ pub fn parse_time(text: &str) -> Option<(u32, u32, String)> {
     None
 }
 
-impl Todo {
-    /// Load from disk, drop tasks finished before `today`; reminders already past are not replayed.
-    pub fn load(today: u32, now: u64) -> Self {
-        let path = std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("PuwNotch").join("todo.txt"));
-        let text = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
-        let mut t = Todo { items: parse(&text), path };
-        for it in &mut t.items {
-            it.notified = it.due.is_some_and(|d| d <= now);
+/// Find a date in the words: "hôm nay", "mai" / "ngày mai", "today", "tomorrow", dd/mm[/yyyy]
+/// (also with '-'). Returns (yyyymmdd, year given) and the words without it.
+fn parse_date(words: &[&str], today: u32) -> Option<((u32, bool), Vec<String>)> {
+    let lower: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
+    let rest = |drop: &[usize]| words.iter().enumerate().filter(|(i, _)| !drop.contains(i)).map(|(_, w)| w.to_string()).collect();
+    for (i, w) in lower.iter().enumerate() {
+        match w.as_str() {
+            "mai" | "tomorrow" => {
+                let drop = if i > 0 && lower[i - 1] == "ngày" { vec![i - 1, i] } else { vec![i] };
+                return Some(((next_day(today), true), rest(&drop)));
+            }
+            "nay" if i > 0 && lower[i - 1] == "hôm" => return Some(((today, true), rest(&[i - 1, i]))),
+            "today" => return Some(((today, true), rest(&[i]))),
+            _ => {}
         }
-        if t.new_day(today) {
-            t.save();
+    }
+    for (i, w) in words.iter().enumerate() {
+        let t = w.trim_end_matches([',', '.']);
+        let parts: Vec<&str> = t.split(['/', '-']).collect();
+        if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit())) {
+            continue;
+        }
+        let (Ok(d), Ok(m)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) else { continue };
+        let (y, given) = match parts.get(2).map(|y| y.parse::<u32>()) {
+            Some(Ok(y)) => (if y < 100 { 2000 + y } else { y }, true),
+            Some(Err(_)) => continue,
+            None => (today / 10_000, false),
+        };
+        if d == 0 || d > days_in_month(y, m) {
+            continue;
+        }
+        return Some(((y * 10_000 + m * 100 + d, given), rest(&[i])));
+    }
+    None
+}
+
+/// Typed text -> (task text, when). Spaces squeezed, length capped; None when nothing is left.
+/// No date and no time: a plain task. A time alone: today, or tomorrow once passed. A date:
+/// that day (08:00 without a time); dd/mm already behind us this year means next year.
+pub fn read(text: &str, now: u64) -> Option<(String, Option<u64>)> {
+    let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_LEN).collect();
+    let today = (now / 10_000) as u32;
+    let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
+    let (date, rest) = match parse_date(&words, today) {
+        Some((date, rest)) => (Some(date), rest.join(" ")),
+        None => (None, text.clone()),
+    };
+    let time = parse_time(&rest);
+    let (h, m, rest) = match (&time, date) {
+        (Some((h, m, rest)), _) => (*h, *m, rest.clone()),
+        (None, Some(_)) => (DEFAULT_HOUR, 0, rest),
+        (None, None) => return (!text.is_empty()).then_some((text, None)),
+    };
+    let at = match date {
+        Some((day, given)) => {
+            let at = stamp(day, h, m);
+            if !given && at <= now && day != today { stamp(day + 10_000, h, m) } else { at }
+        }
+        None => {
+            let at = stamp(today, h, m);
+            if at > now { at } else { stamp(next_day(today), h, m) }
+        }
+    };
+    // A bare time ("20h") still needs a readable title.
+    let rest = if rest.is_empty() && time.is_some() { format!("{h:02}:{m:02}") } else { rest };
+    (!rest.is_empty()).then_some((rest, Some(at)))
+}
+
+impl Todo {
+    /// Load todo.txt (folding in an old calendar.txt once) and drop tasks finished before today.
+    /// Reminders already behind `now` are not replayed.
+    pub fn load(now: u64) -> Self {
+        let dir = std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("PuwNotch"));
+        let mut t = dir.as_deref().map(Self::load_from).unwrap_or_default();
+        t.settle_reminders(now);
+        t.new_day((now / 10_000) as u32);
+        t.save();
+        t
+    }
+
+    fn load_from(dir: &Path) -> Self {
+        let path = dir.join("todo.txt");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let text = strip_bom(&text);
+        let mut t = Todo { items: parse(text), remind_before: parse_remind(text), path: Some(path) };
+        let old = dir.join("calendar.txt");
+        if let Ok(cal) = std::fs::read_to_string(&old) {
+            t.items.extend(parse_calendar(strip_bom(&cal)));
+            let _ = std::fs::rename(&old, dir.join("calendar.txt.bak"));
         }
         t
     }
@@ -98,43 +219,76 @@ impl Todo {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, serialize(&self.items));
+        let _ = std::fs::write(p, format!("# remind {}\n{}", self.remind_before, serialize(&self.items)));
     }
 
-    /// New open task on top. A 24 h time in the text becomes the reminder: today if it is still
-    /// ahead of `now` (yyyymmddHHMM), otherwise tomorrow. Blank text is ignored.
+    /// Reminders whose moment is already behind `now` count as shown.
+    fn settle_reminders(&mut self, now: u64) {
+        let before = self.remind_before as i64;
+        for it in &mut self.items {
+            if let Some(at) = it.at {
+                it.told_now = at <= now;
+                it.told_soon = minutes(at) - minutes(now) <= before;
+            }
+        }
+    }
+
+    /// Open first; among those today's (also overdue and plain tasks) before later days, by time.
+    /// Equal keys keep their order, so a new plain task stays on top.
+    fn sort(&mut self, today: u32) {
+        self.items.sort_by_key(|it| {
+            let later = it.at.is_some_and(|a| (a / 10_000) as u32 > today);
+            (it.done.is_some(), later, it.at.unwrap_or(0))
+        });
+    }
+
     pub fn add(&mut self, text: &str, now: u64) -> bool {
-        let Some((text, due)) = read_input(text, now) else { return false };
-        self.items.insert(0, Item { text, done: None, due, notified: false });
+        let Some((text, at)) = read(text, now) else { return false };
+        // Set inside the early window: only the on-time reminder is left.
+        let told_soon = at.is_some_and(|a| minutes(a) - minutes(now) <= self.remind_before as i64);
+        self.items.insert(0, Item { text, done: None, at, told_soon, told_now: false });
+        self.sort((now / 10_000) as u32);
         self.save();
         true
     }
 
-    /// Replace a task's text and reminder (read the same way as `add`); done state is kept.
+    /// Replace a task's text and time (read the same way as `add`); done state is kept.
     /// Blank text leaves the task as it was.
     pub fn update(&mut self, i: usize, text: &str, now: u64) -> bool {
-        let Some((text, due)) = read_input(text, now) else { return false };
-        let Some(item) = self.items.get_mut(i) else { return false };
-        item.notified = item.due == due && item.notified;
-        (item.text, item.due) = (text, due);
+        let Some((text, at)) = read(text, now) else { return false };
+        let before = self.remind_before as i64;
+        let Some(it) = self.items.get_mut(i) else { return false };
+        if it.at != at {
+            it.told_soon = at.is_some_and(|a| minutes(a) - minutes(now) <= before);
+            it.told_now = false;
+        }
+        (it.text, it.at) = (text, at);
+        self.sort((now / 10_000) as u32);
         self.save();
         true
     }
 
-    /// What the edit box shows for a task: its text with the reminder time back in.
-    pub fn edit_text(&self, i: usize) -> String {
+    /// What the edit box shows: the text with its time (and date when not today) back in.
+    pub fn edit_text(&self, i: usize, today: u32) -> String {
         let Some(it) = self.items.get(i) else { return String::new() };
-        match it.due {
-            Some(d) => format!("{} {:02}:{:02}", it.text, d / 100 % 100, d % 100),
+        match it.at {
+            Some(a) => {
+                let (day, h, m) = ((a / 10_000) as u32, a / 100 % 100, a % 100);
+                if day == today {
+                    format!("{} {h:02}:{m:02}", it.text)
+                } else {
+                    format!("{} {:02}/{:02} {h:02}:{m:02}", it.text, day % 100, day / 100 % 100)
+                }
+            }
             None => it.text.clone(),
         }
     }
 
-    /// Tick / untick. Done tasks sink below the open ones (order otherwise kept).
+    /// Tick / untick. Done tasks sink below the open ones.
     pub fn toggle(&mut self, i: usize, today: u32) {
-        let Some(item) = self.items.get_mut(i) else { return };
-        item.done = if item.done.is_some() { None } else { Some(today) };
-        self.items.sort_by_key(|it| it.done.is_some());
+        let Some(it) = self.items.get_mut(i) else { return };
+        it.done = if it.done.is_some() { None } else { Some(today) };
+        self.sort(today);
         self.save();
     }
 
@@ -145,55 +299,72 @@ impl Todo {
         }
     }
 
-    /// Forget tasks finished on an earlier day. Returns whether anything went.
+    /// Forget tasks finished on an earlier day and re-sort (tomorrow's tasks become today's).
+    /// Open tasks stay, even past their day. Returns whether anything went.
     pub fn new_day(&mut self, today: u32) -> bool {
         let before = self.items.len();
         self.items.retain(|it| it.done.is_none_or(|d| d >= today));
-        self.items.len() != before
+        self.sort(today);
+        let gone = self.items.len() != before;
+        if gone {
+            self.save();
+        }
+        gone
     }
 
-    pub fn open_count(&self) -> usize {
-        self.items.iter().filter(|it| it.done.is_none()).count()
+    /// Step the early reminder through `REMIND_STEPS` (-1 / +1).
+    pub fn step_remind(&mut self, dir: i32) {
+        let i = REMIND_STEPS.iter().position(|&m| m == self.remind_before).unwrap_or(3) as i32;
+        self.remind_before = REMIND_STEPS[(i + dir).clamp(0, REMIND_STEPS.len() as i32 - 1) as usize];
+        self.save();
     }
 
-    pub fn done_today(&self, today: u32) -> usize {
-        self.items.iter().filter(|it| it.done == Some(today)).count()
+    /// (open for today: plain, overdue and today's; open on later days).
+    pub fn counts(&self, today: u32) -> (usize, usize) {
+        let open = self.items.iter().filter(|it| it.done.is_none());
+        let later = open.clone().filter(|it| it.at.is_some_and(|a| (a / 10_000) as u32 > today)).count();
+        (open.count() - later, later)
     }
 
-    /// Open tasks whose reminder time has come and that were not announced yet.
-    pub fn due(&self, now: u64) -> Vec<usize> {
-        (0..self.items.len()).filter(|&i| {
-            let it = &self.items[i];
-            it.done.is_none() && !it.notified && it.due.is_some_and(|d| d <= now)
-        }).collect()
+    /// Reminders to show now: open timed tasks reaching their early or on-time moment.
+    pub fn rings(&self, now: u64) -> Vec<(usize, Ring)> {
+        let before = self.remind_before as i64;
+        let mut out = Vec::new();
+        for (i, it) in self.items.iter().enumerate() {
+            let (Some(at), None) = (it.at, it.done) else { continue };
+            if !it.told_now && at <= now {
+                out.push((i, Ring::Now));
+            } else if before > 0 && !it.told_soon && minutes(at) - minutes(now) <= before {
+                out.push((i, Ring::Soon));
+            }
+        }
+        out
     }
 
-    pub fn mark_notified(&mut self, i: usize) {
+    pub fn mark(&mut self, i: usize, ring: Ring) {
         if let Some(it) = self.items.get_mut(i) {
-            it.notified = true;
+            match ring {
+                Ring::Soon => it.told_soon = true,
+                Ring::Now => (it.told_soon, it.told_now) = (true, true),
+            }
         }
     }
 }
 
-/// Typed text -> (task text, reminder). Spaces squeezed, length capped; None when blank.
-fn read_input(text: &str, now: u64) -> Option<(String, Option<u64>)> {
-    let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_LEN).collect();
-    let (text, due) = match parse_time(&text) {
-        Some((h, m, rest)) => {
-            let today = (now / 10_000) as u32;
-            let at = stamp(today, h, m);
-            let due = if at > now { at } else { stamp(next_day(today), h, m) };
-            // A bare time ("20:00") stays as the task text.
-            (if rest.is_empty() { format!("{h:02}:{m:02}") } else { rest }, Some(due))
-        }
-        None => (text, None),
-    };
-    (!text.is_empty()).then_some((text, due))
+/// Files saved by Notepad or PowerShell can start with a byte-order mark.
+fn strip_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
+fn parse_remind(text: &str) -> u32 {
+    text.lines()
+        .find_map(|l| l.strip_prefix("# remind ")?.trim().parse().ok())
+        .filter(|m| REMIND_STEPS.contains(m))
+        .unwrap_or(REMIND_DEFAULT)
 }
 
 fn parse(text: &str) -> Vec<Item> {
-    let mut items: Vec<Item> = text
-        .lines()
+    text.lines()
         .filter_map(|line| {
             let (head, body) = line.split_once('\t')?;
             let mut parts = head.split_whitespace();
@@ -202,16 +373,26 @@ fn parse(text: &str) -> Vec<Item> {
                 "x" => Some(parts.next()?.parse().ok()?),
                 _ => return None,
             };
-            let due = match parts.next() {
+            let at = match parts.next() {
                 Some(d) => Some(d.strip_prefix('@')?.parse().ok()?),
                 None => None,
             };
             let body = body.trim();
-            (!body.is_empty()).then(|| Item { text: body.to_string(), done, due, notified: false })
+            (!body.is_empty()).then(|| Item { text: body.to_string(), done, at, told_soon: false, told_now: false })
         })
-        .collect();
-    items.sort_by_key(|it| it.done.is_some());
-    items
+        .collect()
+}
+
+/// Old Appointments page file: "@<at>\t<text>" per line, all open.
+fn parse_calendar(text: &str) -> Vec<Item> {
+    text.lines()
+        .filter_map(|line| {
+            let (head, body) = line.split_once('\t')?;
+            let at = head.trim().strip_prefix('@')?.parse().ok()?;
+            let body = body.trim();
+            (!body.is_empty()).then(|| Item { text: body.to_string(), done: None, at: Some(at), told_soon: false, told_now: false })
+        })
+        .collect()
 }
 
 fn serialize(items: &[Item]) -> String {
@@ -220,10 +401,10 @@ fn serialize(items: &[Item]) -> String {
         .map(|it| {
             // Tabs and line breaks would break the format.
             let text = it.text.replace(['\t', '\r', '\n'], " ");
-            let due = it.due.map(|d| format!(" @{d}")).unwrap_or_default();
+            let at = it.at.map(|d| format!(" @{d}")).unwrap_or_default();
             match it.done {
-                None => format!("-{due}\t{text}\n"),
-                Some(d) => format!("x {d}{due}\t{text}\n"),
+                None => format!("-{at}\t{text}\n"),
+                Some(d) => format!("x {d}{at}\t{text}\n"),
             }
         })
         .collect()
@@ -234,125 +415,168 @@ mod tests {
     use super::*;
 
     const DAY: u32 = 20261025;
-    /// 25/10/2026 14:30
+    /// Sun 25/10/2026 14:30
     const NOW: u64 = 202610251430;
-
-    fn list(items: &[(&str, Option<u32>)]) -> Todo {
-        Todo { items: items.iter().map(|(t, d)| Item { text: t.to_string(), done: *d, due: None, notified: false }).collect(), path: None }
-    }
 
     fn texts(t: &Todo) -> Vec<&str> {
         t.items.iter().map(|i| i.text.as_str()).collect()
     }
 
     #[test]
-    fn add_tick_remove() {
-        let mut t = list(&[]);
-        assert!(!t.add("   ", NOW));
-        assert!(t.add("  Gửi   báo cáo  ", NOW));
-        assert!(t.add("Họp nhóm", NOW));
-        assert_eq!(texts(&t), ["Họp nhóm", "Gửi báo cáo"]);
-        t.toggle(0, DAY);
-        assert_eq!(texts(&t), ["Gửi báo cáo", "Họp nhóm"], "done sinks");
-        assert_eq!((t.open_count(), t.done_today(DAY)), (1, 1));
-        t.toggle(1, DAY);
-        assert_eq!(t.items[1].done, None, "untick");
-        t.remove(0);
-        assert_eq!(texts(&t), ["Họp nhóm"]);
-        t.remove(5);
-        assert_eq!(t.items.len(), 1);
-    }
-
-    #[test]
-    fn long_text_is_cut() {
-        let mut t = list(&[]);
-        t.add(&"a".repeat(500), NOW);
-        assert_eq!(t.items[0].text.chars().count(), MAX_LEN);
-    }
-
-    #[test]
-    fn next_day_clears_finished() {
-        let mut t = list(&[("cũ xong", Some(DAY - 1)), ("hôm nay xong", Some(DAY)), ("còn mở", None)]);
-        assert!(t.new_day(DAY));
-        assert_eq!(texts(&t), ["hôm nay xong", "còn mở"]);
-        assert!(!t.new_day(DAY));
+    fn reads_plain_timed_and_dated() {
+        assert_eq!(read("  Mua   sữa ", NOW), Some(("Mua sữa".into(), None)), "no date, no time: plain task");
+        assert_eq!(read("Họp nhóm 20:00", NOW), Some(("Họp nhóm".into(), Some(202610252000))));
+        assert_eq!(read("Gửi báo cáo 8h30", NOW), Some(("Gửi báo cáo".into(), Some(202610260830))), "time passed -> tomorrow");
+        assert_eq!(read("Khám răng 28/10 14:30", NOW), Some(("Khám răng".into(), Some(202610281430))));
+        assert_eq!(read("Họp mai 9h", NOW), Some(("Họp".into(), Some(202610260900))));
+        assert_eq!(read("Họp ngày mai 9h", NOW), Some(("Họp".into(), Some(202610260900))));
+        assert_eq!(read("Sinh nhật 5/1", NOW), Some(("Sinh nhật".into(), Some(202701050800))), "date alone -> 08:00, past date -> next year");
+        assert_eq!(read("Bảo vệ 3/11/2026 7h30", NOW), Some(("Bảo vệ".into(), Some(202611030730))));
+        assert_eq!(read("Cuộc hẹn hôm nay 20:00", NOW), Some(("Cuộc hẹn".into(), Some(202610252000))));
+        assert_eq!(read("Dentist tomorrow 9:30", NOW), Some(("Dentist".into(), Some(202610260930))));
+        assert_eq!(read("Call today at 16:00", NOW), Some(("Call".into(), Some(202610251600))));
+        assert_eq!(read("20h", NOW), Some(("20:00".into(), Some(202610252000))), "bare time keeps a title");
+        assert_eq!(read("Lạ 31/2 9:00", NOW).map(|r| r.1), Some(Some(202610260900)), "invalid date is just text");
+        assert_eq!(read("Báo cáo 2024", NOW), Some(("Báo cáo 2024".into(), None)));
+        assert_eq!(read("   ", NOW), None);
+        assert_eq!(read("mai", NOW), None, "a date with nothing to do");
+        assert_eq!(read(&"a".repeat(500), NOW).unwrap().0.chars().count(), MAX_LEN);
     }
 
     #[test]
     fn times_24h() {
-        assert_eq!(parse_time("Họp nhóm 20:00"), Some((20, 0, "Họp nhóm".into())));
-        assert_eq!(parse_time("8h30 gửi báo cáo"), Some((8, 30, "gửi báo cáo".into())));
-        assert_eq!(parse_time("Đi đá bóng 17h"), Some((17, 0, "Đi đá bóng".into())));
         assert_eq!(parse_time("Họp lúc 9:05."), Some((9, 5, "Họp".into())));
         assert_eq!(parse_time("Uống thuốc 0:00"), Some((0, 0, "Uống thuốc".into())));
-        assert_eq!(parse_time("Nộp 25:00"), None, "not a 24 h time");
+        assert_eq!(parse_time("Nộp 25:00"), None);
         assert_eq!(parse_time("Xem 9:5"), None);
-        assert_eq!(parse_time("Báo cáo 2024"), None);
         assert_eq!(parse_time("Mua 3h30m sạc"), None);
-        assert_eq!(parse_time("Mua sữa"), None);
-    }
-
-    #[test]
-    fn reminder_today_or_tomorrow() {
-        let mut t = list(&[]);
-        t.add("Họp nhóm 20:00", NOW);
-        assert_eq!((t.items[0].text.as_str(), t.items[0].due), ("Họp nhóm", Some(202610252000)));
-        t.add("Gửi báo cáo 8h30", NOW);
-        assert_eq!(t.items[0].due, Some(202610260830), "already past today -> tomorrow");
-        t.add("20h", NOW);
-        assert_eq!(t.items[0].text, "20:00", "bare time keeps a readable title");
         assert_eq!(next_day(20261031), 20261101);
         assert_eq!(next_day(20261231), 20270101);
         assert_eq!(next_day(20280228), 20280229);
+        assert_eq!(minutes(202610260005) - minutes(202610252355), 10);
+        assert_eq!(minutes(202701010000) - minutes(202612312359), 1);
     }
 
     #[test]
-    fn due_once_and_not_when_done() {
-        let mut t = list(&[]);
-        t.add("Họp 20:00", NOW);
-        t.add("Gọi mẹ 15:00", NOW);
-        assert!(t.due(NOW).is_empty());
-        let later = 202610252001;
-        let due = t.due(later);
-        assert_eq!(due.len(), 2);
-        t.mark_notified(due[0]);
-        assert_eq!(t.due(later).len(), 1, "announced once");
-        let left = t.due(later)[0];
-        t.toggle(left, DAY);
-        assert!(t.due(later).is_empty(), "done tasks do not ring");
-    }
-
-    #[test]
-    fn edit_text_and_time() {
-        let mut t = list(&[]);
-        t.add("Họp nhóm 20:00", NOW);
-        assert_eq!(t.edit_text(0), "Họp nhóm 20:00", "the box gets the time back");
-        assert!(t.update(0, "Họp cả công ty 21h", NOW));
-        assert_eq!((t.items[0].text.as_str(), t.items[0].due), ("Họp cả công ty", Some(202610252100)));
-        assert!(t.update(0, "Họp cả công ty", NOW));
-        assert_eq!(t.items[0].due, None, "time removed -> no reminder");
-        assert!(!t.update(0, "   ", NOW), "blank keeps the task");
-        assert_eq!(t.items[0].text, "Họp cả công ty");
+    fn one_list_today_first_then_later_days() {
+        let mut t = Todo::default();
+        t.add("Khám răng 28/10 14:30", NOW);
+        t.add("Mua sữa", NOW);
+        t.add("Họp 16:00", NOW);
+        t.add("Gọi mẹ mai 9h", NOW);
+        assert_eq!(texts(&t), ["Mua sữa", "Họp", "Gọi mẹ", "Khám răng"]);
+        assert_eq!(t.counts(DAY), (2, 2), "today: plain + 16:00; later: tomorrow + 28/10");
         t.toggle(0, DAY);
-        t.update(0, "Đã họp", NOW);
-        assert_eq!(t.items[0].done, Some(DAY), "editing keeps done");
+        assert_eq!(texts(&t)[3], "Mua sữa", "done sinks");
+        assert_eq!(t.counts(DAY), (1, 2));
+        t.toggle(3, DAY);
+        assert_eq!(t.items[0].done, None, "untick");
+        t.remove(0);
+        t.remove(9);
+        assert_eq!(t.items.len(), 3);
+    }
+
+    #[test]
+    fn rings_early_by_the_chosen_minutes_then_on_time() {
+        let mut t = Todo::default();
+        assert_eq!(t.remind_before, 15);
+        t.add("Họp 15:30", NOW);
+        t.add("Gặp khách 14:40", NOW);
+        t.add("Mua sữa", NOW);
+        let i = |t: &Todo, s: &str| t.items.iter().position(|x| x.text == s).unwrap();
+        assert!(t.items[i(&t, "Gặp khách")].told_soon, "set 10 min ahead: no early reminder");
+        assert!(t.rings(NOW).is_empty());
+        assert_eq!(t.rings(202610251440), vec![(i(&t, "Gặp khách"), Ring::Now)]);
+        let g = i(&t, "Gặp khách");
+        t.mark(g, Ring::Now);
+        assert_eq!(t.rings(202610251515), vec![(i(&t, "Họp"), Ring::Soon)]);
+        let h = i(&t, "Họp");
+        t.mark(h, Ring::Soon);
+        assert!(t.rings(202610251516).is_empty());
+        assert_eq!(t.rings(202610251530), vec![(h, Ring::Now)]);
+        t.mark(h, Ring::Now);
+        assert!(t.rings(202610251600).is_empty(), "each reminder once; plain tasks never ring");
+        // 0 = only on time; done tasks never ring
+        let mut t = Todo::default();
+        t.remind_before = 0;
+        t.add("Họp 15:30", NOW);
+        assert!(t.rings(202610251525).is_empty());
+        t.toggle(0, DAY);
+        assert!(t.rings(202610251530).is_empty());
+    }
+
+    #[test]
+    fn remind_steps_through_the_choices() {
+        let mut t = Todo::default();
+        t.step_remind(1);
+        assert_eq!(t.remind_before, 30);
+        t.step_remind(1);
+        t.step_remind(1);
+        assert_eq!(t.remind_before, 60, "stops at the last choice");
+        for _ in 0..9 {
+            t.step_remind(-1);
+        }
+        assert_eq!(t.remind_before, 0);
+    }
+
+    #[test]
+    fn overdue_stays_done_goes_next_day() {
+        let mut t = Todo::default();
+        t.add("Nộp thuế 25/10 15:00", NOW);
+        t.add("Đã xong", NOW);
+        t.toggle(0, DAY);
+        assert!(t.new_day(DAY + 1));
+        assert_eq!(texts(&t), ["Nộp thuế"], "finished yesterday goes, overdue stays");
+        assert!(!t.new_day(DAY + 1));
+    }
+
+    #[test]
+    fn edit_text_puts_time_and_date_back() {
+        let mut t = Todo::default();
+        t.add("Họp nhóm 20:00", NOW);
+        t.add("Khám răng 28/10 14:30", NOW);
+        t.add("Mua sữa", NOW);
+        assert_eq!(t.edit_text(0, DAY), "Mua sữa");
+        assert_eq!(t.edit_text(1, DAY), "Họp nhóm 20:00", "today: time only");
+        assert_eq!(t.edit_text(2, DAY), "Khám răng 28/10 14:30");
+        assert!(t.update(1, "Họp cả công ty 29/10 9h", NOW));
+        assert_eq!(t.items.iter().find(|x| x.text == "Họp cả công ty").unwrap().at, Some(202610290900));
+        assert!(t.update(0, "Mua sữa tươi", NOW));
+        assert!(!t.update(0, "   ", NOW), "blank keeps the task");
         assert!(!t.update(9, "x", NOW));
     }
 
     #[test]
-    fn file_round_trip() {
+    fn file_round_trip_and_old_calendar() {
         let items = vec![
-            Item { text: "mở\tcó tab".into(), done: None, due: Some(202610252000), notified: true },
-            Item { text: "xong".into(), done: Some(DAY), due: None, notified: false },
+            Item { text: "mở\tcó tab".into(), done: None, at: Some(202610252000), told_soon: true, told_now: false },
+            Item { text: "xong".into(), done: Some(DAY), at: None, told_soon: false, told_now: false },
         ];
         let text = serialize(&items);
         assert_eq!(text, "- @202610252000\tmở có tab\nx 20261025\txong\n");
-        let back = parse(&text);
-        assert_eq!(back[0].text, "mở có tab");
-        assert_eq!(back[0].due, Some(202610252000));
-        assert_eq!(back[1].done, Some(DAY));
-        // lines written before reminders existed still load
-        assert_eq!(parse("-\tcũ\nx 20261024\tcũ xong\n").len(), 2);
+        let back = parse(&format!("# remind 30\n{text}"));
+        assert_eq!((back[0].at, back[1].done), (Some(202610252000), Some(DAY)));
+        assert_eq!(parse_remind("# remind 30\n"), 30);
+        assert_eq!(parse_remind("# remind 7\n"), 15, "unknown step -> default");
+        assert_eq!(parse_remind("-\tcũ\n"), 15);
         assert!(parse("rác\n\t\nx abc\tsai ngày\n- @xx\tsai giờ\n").is_empty(), "bad lines are skipped");
+        assert_eq!(parse(strip_bom("\u{feff}-\tMua sữa\n")).len(), 1, "a BOM (Notepad, PowerShell) does not eat the first line");
+        assert_eq!(parse_calendar(strip_bom("\u{feff}@202610281430\tKhám răng\n")).len(), 1);
+        let cal = parse_calendar("@202610281430\tKhám răng\nrác\n");
+        assert_eq!((cal.len(), cal[0].at, cal[0].done), (1, Some(202610281430), None));
+    }
+
+    #[test]
+    fn folds_old_calendar_file_once() {
+        let dir = std::env::temp_dir().join(format!("puw_todo_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("todo.txt"), "-\tMua sữa\n").unwrap();
+        std::fs::write(dir.join("calendar.txt"), "@202610281430\tKhám răng\n").unwrap();
+        let t = Todo::load_from(&dir);
+        assert_eq!(texts(&t), ["Mua sữa", "Khám răng"]);
+        assert!(!dir.join("calendar.txt").exists() && dir.join("calendar.txt.bak").exists(), "old file kept as .bak");
+        t.save();
+        assert_eq!(texts(&Todo::load_from(&dir)), ["Mua sữa", "Khám răng"], "not folded twice");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

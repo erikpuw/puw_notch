@@ -1,7 +1,6 @@
 #![windows_subsystem = "windows"]
 
 mod audio;
-mod calendar;
 mod connectivity;
 mod music;
 mod foobar;
@@ -41,7 +40,7 @@ use i18n::tr;
 use audio::WM_VOLUME;
 use status::WM_LOCKKEY;
 use notify::Toast;
-use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, PAGES};
+use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, NOTE_ROWS, PAGES};
 
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_FRAME: u32 = WM_APP + 7;
@@ -54,6 +53,8 @@ const T_ALERT: usize = 4;
 const T_CARET: usize = 6;
 /// Page switch morph length.
 const PAGE_MORPH_S: f32 = 0.32;
+/// Notifications kept on the Notifications page.
+const NOTES_MAX: usize = 30;
 const CARET_MS: u32 = 530;
 const CHECK_MS: u32 = 500;
 const MENU_MINIMAL: usize = 10;
@@ -110,8 +111,9 @@ struct App {
     edit_item: Option<usize>,
     caret: bool,
     todo_scroll: usize,
-    cal_scroll: usize,
-    calendar: calendar::Calendar,
+    /// Notifications page: what Windows still keeps, newest first, and its first visible row.
+    notes: Vec<notify::Note>,
+    note_scroll: usize,
     health: health::Health,
     /// Health card showing its settings.
     settings_open: Option<Card>,
@@ -168,10 +170,8 @@ impl App {
             page: self.page,
             leaving: self.page_anim.map(|(from, t0, dir)| (from, (t0.elapsed().as_secs_f32() / PAGE_MORPH_S).min(1.0), dir)),
             list: ListView {
-                counts: match self.page {
-                    Page::Calendar => (self.calendar.upcoming(now), self.calendar.today_count(self.today)),
-                    _ => (self.todo.open_count(), self.todo.done_today(self.today)),
-                },
+                counts: self.todo.counts(self.today),
+                remind_before: self.todo.remind_before,
                 now,
                 draft: &self.draft,
                 editing: self.editing,
@@ -180,8 +180,8 @@ impl App {
                 scroll: self.scroll(),
             },
             todos: &self.todo.items,
-            appts: &self.calendar.items,
-            health: HealthView { h: &self.health, now: calendar::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
+            notes: &self.notes,
+            health: HealthView { h: &self.health, now: todo::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
         };
         // An icon that just changed keeps frames coming until its morph has played.
         self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
@@ -298,7 +298,7 @@ impl App {
         let today = system::today();
         if today != self.today {
             self.today = today;
-            changed |= self.todo.new_day(today) | self.calendar.new_day(today);
+            changed |= self.todo.new_day(today);
             self.health.new_day(today);
             self.clamp_scroll();
         }
@@ -328,8 +328,13 @@ impl App {
 
         self.remind();
 
-        // Reading them is the Windows notification centre's job; the notch only announces new ones.
+        // New ones get a banner; the Notifications page lists what Windows still keeps.
         let new = self.notifications.as_mut().map(|r| r.poll()).unwrap_or_default();
+        let showing_notes = self.notch.mode == Mode::Expanded && self.page == Page::Notify;
+        if !new.is_empty() || showing_notes {
+            self.refresh_notes();
+            changed |= showing_notes;
+        }
         if let Some(t) = new.into_iter().last() {
             self.show_banner(t, ALERT_MS);
         }
@@ -357,39 +362,30 @@ impl App {
         true
     }
 
-    /// To-do and appointment reminders whose time has come, then water / stand-up. A to-do or
-    /// appointment that cannot show now (fullscreen game, panel open) rings at the next chance.
-    /// A banner that shows switches the panel to its page, so resting on it opens the right one.
+    /// Task reminders (early and on time) whose moment has come, then water / stand-up. One that
+    /// cannot show now (fullscreen game, panel open) rings at the next chance. A banner that shows
+    /// switches the panel to its page, so resting on it opens the right one.
     fn remind(&mut self) {
         let now = system::now_stamp();
         let hhmm = |d: u64| format!("{:02}:{:02}", d / 100 % 100, d % 100);
-        for i in self.todo.due(now) {
+        for (i, ring) in self.todo.rings(now) {
             let Some(item) = self.todo.items.get(i) else { continue };
-            let at = item.due.map_or(String::new(), hhmm);
-            let toast = status_toast(tr("Nhắc việc", "Reminder"), item.text.clone(), &format!("{} · {at}", tr("Đến giờ", "It's time")), None, render::ICON_REMINDER);
-            if !self.show_banner(toast, ALERT_MS * 2) {
-                return;
-            }
-            self.todo.mark_notified(i);
-            self.page = Page::Todo;
-        }
-        for (i, ring) in self.calendar.rings(now) {
-            let Some(ap) = self.calendar.items.get(i) else { continue };
+            let at = item.at.unwrap_or(now);
             let when = match ring {
-                calendar::Ring::Soon => format!("{} {} {} · {}", tr("Còn", "In"), calendar::SOON_MIN, tr("phút", "min"), hhmm(ap.at)),
-                calendar::Ring::Now => format!("{} · {}", tr("Đến giờ", "It's time"), hhmm(ap.at)),
+                todo::Ring::Soon => format!("{} {} {} · {}", tr("Còn", "In"), todo::minutes(at) - todo::minutes(now), tr("phút", "min"), hhmm(at)),
+                todo::Ring::Now => format!("{} · {}", tr("Đến giờ", "It's time"), hhmm(at)),
             };
-            let toast = status_toast(tr("Lịch hẹn", "Appointment"), ap.text.clone(), &when, None, render::ICON_CALENDAR);
+            let toast = status_toast(tr("Nhắc việc", "Reminder"), item.text.clone(), &when, None, render::ICON_REMINDER);
             if !self.show_banner(toast, ALERT_MS * 2) {
                 return;
             }
-            self.calendar.mark(i, ring);
-            self.page = Page::Calendar;
+            self.todo.mark(i, ring);
+            self.page = Page::Todo;
         }
         let h = &self.health;
         let (cup, goal) = (h.cup_ml, h.goal_ml);
         let every = h.sit_every_min;
-        for ring in self.health.tick(calendar::minutes(now), minute_of_day(now), idle_seconds()) {
+        for ring in self.health.tick(todo::minutes(now), minute_of_day(now), idle_seconds()) {
             let taken = self.health.taken_ml;
             let level = Some(taken as f32 / goal.max(1) as f32);
             let toast = match ring {
@@ -405,15 +401,23 @@ impl App {
 
     /// First visible row of the list page on screen.
     fn scroll(&self) -> usize {
-        if self.page == Page::Calendar { self.cal_scroll } else { self.todo_scroll }
+        if self.page == Page::Notify { self.note_scroll } else { self.todo_scroll }
     }
 
     fn rows(&self) -> usize {
         match self.page {
             Page::Todo => self.todo.items.len(),
-            Page::Calendar => self.calendar.items.len(),
+            Page::Notify => self.notes.len(),
             _ => 0,
         }
+    }
+
+    /// Re-read the Notifications page from Windows (cleared there = gone here).
+    fn refresh_notes(&mut self) {
+        if let Some(r) = &self.notifications {
+            self.notes = r.recent(NOTES_MAX, system::utc_offset_min());
+        }
+        self.clamp_scroll();
     }
 
     fn hit(&self, x: f32, y: f32) -> Option<Button> {
@@ -441,11 +445,14 @@ impl App {
                 self.page_anim = Some((self.page, Instant::now(), dir));
                 self.page = next;
                 self.settings_open = None;
+                if next == Page::Notify {
+                    self.refresh_notes();
+                }
                 self.kick();
             }
             Button::ListInput => self.begin_edit(),
             Button::ListEdit(i) => {
-                self.draft = if self.page == Page::Calendar { self.calendar.edit_text(i) } else { self.todo.edit_text(i) };
+                self.draft = self.todo.edit_text(i, self.today);
                 self.edit_item = Some(i);
                 self.begin_edit();
             }
@@ -456,13 +463,14 @@ impl App {
             }
             Button::ListDelete(i) => {
                 self.cancel_task_edit();
-                if self.page == Page::Calendar { self.calendar.remove(i) } else { self.todo.remove(i) }
+                self.todo.remove(i);
                 self.clamp_scroll();
             }
             Button::Gear(card) => self.settings_open = if self.settings_open == Some(card) { None } else { Some(card) },
-            Button::Drink => self.health.drink(calendar::minutes(system::now_stamp())),
-            Button::Snooze => self.health.snooze(calendar::minutes(system::now_stamp())),
-            Button::Stood => self.health.stood_up(calendar::minutes(system::now_stamp())),
+            Button::RemindStep(dir) => self.todo.step_remind(dir),
+            Button::Drink => self.health.drink(todo::minutes(system::now_stamp())),
+            Button::Snooze => self.health.snooze(todo::minutes(system::now_stamp())),
+            Button::Stood => self.health.stood_up(todo::minutes(system::now_stamp())),
             Button::Step(set, dir) => self.health.change(set, dir),
             Button::Toggle(set) => self.health.change(set, 1),
         }
@@ -479,15 +487,12 @@ impl App {
     /// Enter in the box: save the edited task, or add a new one. The box stays for the next task.
     fn submit(&mut self) {
         let now = system::now_stamp();
-        let calendar = self.page == Page::Calendar;
-        let saved = match (self.edit_item, calendar) {
-            (Some(i), true) => self.calendar.update(i, &self.draft, now),
-            (Some(i), false) => self.todo.update(i, &self.draft, now),
-            (None, true) => self.calendar.add(&self.draft, now),
-            (None, false) => self.todo.add(&self.draft, now),
+        let saved = match self.edit_item {
+            Some(i) => self.todo.update(i, &self.draft, now),
+            None => self.todo.add(&self.draft, now),
         };
         if saved {
-            if self.edit_item.take().is_none() && !calendar {
+            if self.edit_item.take().is_none() {
                 self.todo_scroll = 0;
             }
             self.draft.clear();
@@ -497,7 +502,7 @@ impl App {
 
     fn clamp_scroll(&mut self) {
         self.todo_scroll = self.todo_scroll.min(self.todo.items.len().saturating_sub(LIST_ROWS));
-        self.cal_scroll = self.cal_scroll.min(self.calendar.items.len().saturating_sub(LIST_ROWS));
+        self.note_scroll = self.note_scroll.min(self.notes.len().saturating_sub(NOTE_ROWS));
     }
 
     /// Typing needs the keyboard: let the window activate for once, remembering who had it.
@@ -716,10 +721,10 @@ impl App {
             // Lost the keyboard (clicked elsewhere): stop typing, keep the draft.
             WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => self.end_edit(),
             // The wheel only scrolls a long to-do list; pages switch with the arrows.
-            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && matches!(self.page, Page::Todo | Page::Calendar) => {
+            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && matches!(self.page, Page::Todo | Page::Notify) => {
                 let delta = ((wp.0 >> 16) & 0xffff) as i16;
-                let max = self.rows().saturating_sub(LIST_ROWS);
-                let scroll = if self.page == Page::Calendar { &mut self.cal_scroll } else { &mut self.todo_scroll };
+                let max = self.rows().saturating_sub(if self.page == Page::Notify { NOTE_ROWS } else { LIST_ROWS });
+                let scroll = if self.page == Page::Notify { &mut self.note_scroll } else { &mut self.todo_scroll };
                 *scroll = if delta > 0 { scroll.saturating_sub(1) } else { (*scroll + 1).min(max) };
                 self.redraw();
             }
@@ -974,15 +979,15 @@ fn main() -> windows::core::Result<()> {
             hovered_button: None,
             last_foreground: None,
             page: Page::Music,
-            todo: todo::Todo::load(system::today(), system::now_stamp()),
+            todo: todo::Todo::load(system::now_stamp()),
             today: system::today(),
             draft: String::new(),
             editing: false,
             edit_item: None,
             caret: false,
             todo_scroll: 0,
-            cal_scroll: 0,
-            calendar: calendar::Calendar::load(system::now_stamp()),
+            notes: Vec::new(),
+            note_scroll: 0,
             health: health::Health::load(system::today()),
             settings_open: None,
             page_anim: None,

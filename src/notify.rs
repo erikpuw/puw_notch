@@ -18,6 +18,34 @@ pub struct Toast {
     pub icon: Option<&'static str>,
 }
 
+/// One notification on the panel's Notifications page.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub app: String,
+    pub title: String,
+    pub body: String,
+    /// Arrival as local yyyymmddHHMM.
+    pub at: u64,
+}
+
+/// Windows FILETIME (100 ns ticks since 1601-01-01 UTC) -> local yyyymmddHHMM, given the local
+/// offset from UTC in minutes.
+pub fn local_stamp(filetime: i64, utc_offset_min: i64) -> u64 {
+    let total = filetime / 600_000_000 + utc_offset_min; // minutes since 1601-01-01
+    let (days, minute) = (total.div_euclid(1440), total.rem_euclid(1440));
+    // civil from days (Howard Hinnant), counted from 1970-01-01
+    let z = days - 134_774 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    (((y * 100 + m) * 100 + d) * 10_000 + minute / 60 * 100 + minute % 60) as u64
+}
+
 type Open = unsafe extern "system" fn(*const c_char, *mut *mut c_void, c_int, *const c_char) -> c_int;
 type Prepare = unsafe extern "system" fn(*mut c_void, *const c_char, c_int, *mut *mut c_void, *mut *const c_char) -> c_int;
 type Step = unsafe extern "system" fn(*mut c_void) -> c_int;
@@ -107,6 +135,32 @@ impl Reader {
         out
     }
 
+    /// The newest `limit` notifications still in the notification centre, newest first (what the
+    /// user cleared there is gone here too). `utc_offset_min` turns arrival times into local time.
+    pub fn recent(&self, limit: usize, utc_offset_min: i64) -> Vec<Note> {
+        let q = format!(
+            "SELECT h.PrimaryId, n.Payload, n.ArrivalTime FROM Notification n JOIN NotificationHandler h ON h.RecordId = n.HandlerId \
+             WHERE n.Type = 'toast' ORDER BY n.ArrivalTime DESC, n.Id DESC LIMIT {limit}"
+        );
+        let mut out = Vec::new();
+        unsafe {
+            let Ok(cq) = CString::new(q) else { return out };
+            let mut stmt = std::ptr::null_mut();
+            if (self.sql.prepare)(self.db, cq.as_ptr(), -1, &mut stmt, std::ptr::null_mut()) != 0 {
+                return out;
+            }
+            while (self.sql.step)(stmt) == SQLITE_ROW {
+                let (title, body) = parse_payload(&self.text(stmt, 1));
+                if !title.is_empty() {
+                    let at = local_stamp((self.sql.col_int)(stmt, 2), utc_offset_min);
+                    out.push(Note { app: app_name(&self.text(stmt, 0)), title, body, at });
+                }
+            }
+            (self.sql.finalize)(stmt);
+        }
+        out
+    }
+
     unsafe fn text(&self, stmt: *mut c_void, col: c_int) -> String {
         let p = (self.sql.col_blob)(stmt, col) as *const u8;
         let n = (self.sql.col_bytes)(stmt, col).max(0) as usize;
@@ -182,6 +236,16 @@ mod tests {
     }
 
     #[test]
+    fn filetime_to_local_stamp() {
+        // 2026-10-26 07:51 UTC
+        let ft = 134_374_746_600_000_000;
+        assert_eq!(local_stamp(ft, 0), 202610260751);
+        assert_eq!(local_stamp(ft, 7 * 60), 202610261451, "UTC+7");
+        assert_eq!(local_stamp(ft, -8 * 60), 202610252351, "back across midnight");
+        assert_eq!(local_stamp(0, 0), 160101010000);
+    }
+
+    #[test]
     fn app_names() {
         assert_eq!(app_name(r"{6D809377-6AF0-444B-8957-A3773F02200E}\Google\Chrome\Application\chrome.exe"), "chrome");
         assert_eq!(app_name("MSTeams_8wekyb3d8bbwe!MSTeams"), "MSTeams");
@@ -197,18 +261,23 @@ mod tests {
         let path = dir.join("wpn.db");
         let _ = std::fs::remove_file(&path);
         let sql = "CREATE TABLE NotificationHandler(RecordId INTEGER PRIMARY KEY, PrimaryId TEXT);\
-                   CREATE TABLE Notification(Id INTEGER, HandlerId INTEGER, Type TEXT, Payload BLOB);\
+                   CREATE TABLE Notification(Id INTEGER, HandlerId INTEGER, Type TEXT, Payload BLOB, ArrivalTime INTEGER);\
                    INSERT INTO NotificationHandler VALUES(1,'MSTeams_8wekyb3d8bbwe!MSTeams');\
-                   INSERT INTO Notification VALUES(5,1,'toast','<toast><text>Cũ</text></toast>');";
+                   INSERT INTO Notification VALUES(5,1,'toast','<toast><text>Cũ</text></toast>',134374746600000000);";
         exec(&path, sql);
         let mut r = Reader::open_path(path.to_str().unwrap()).expect("open");
         assert!(r.poll().is_empty(), "what was there at start is not new");
-        exec(&path, "INSERT INTO Notification VALUES(6,1,'toast','<toast><text>Mới</text><text>nội dung</text></toast>');\
-                     INSERT INTO Notification VALUES(7,1,'tile','<tile><text>bỏ qua</text></tile>');");
+        exec(&path, "INSERT INTO Notification VALUES(6,1,'toast','<toast><text>Mới</text><text>nội dung</text></toast>',134374747200000000);\
+                     INSERT INTO Notification VALUES(7,1,'tile','<tile><text>bỏ qua</text></tile>',134374747800000000);");
         let new = r.poll();
         assert_eq!(new.len(), 1);
         assert_eq!(new[0].title, "Mới");
         assert_eq!(new[0].body, "nội dung");
+        // the Notifications page: every toast still there, newest first, local time
+        let list = r.recent(30, 7 * 60);
+        assert_eq!(list.iter().map(|n| (n.title.as_str(), n.at)).collect::<Vec<_>>(), [("Mới", 202610261452), ("Cũ", 202610261451)]);
+        assert_eq!(list[0].app, "MSTeams");
+        assert_eq!(r.recent(1, 0).len(), 1);
     }
 
     fn exec(path: &std::path::Path, sql: &str) {

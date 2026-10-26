@@ -20,12 +20,11 @@ use std::time::Instant;
 use crate::connectivity::DeviceKind;
 use crate::music::Track;
 use crate::notch::{self, target, Mode};
-use crate::notify::Toast;
+use crate::notify::{Note, Toast};
 use crate::system::Battery;
-use crate::calendar::Appointment;
 use crate::health::{self, Health, Setting};
 use crate::i18n::tr;
-use crate::todo::Item;
+use crate::todo::{self, Item};
 
 /// Everything the painter needs for one frame (logical px).
 pub struct View<'a> {
@@ -48,10 +47,11 @@ pub struct View<'a> {
     pub page: Page,
     /// Page switch in progress: (page sliding out, progress 0..1, direction +1 next / -1 previous).
     pub leaving: Option<(Page, f32, i32)>,
-    /// Box, scroll and counts of the list page on screen (to-do or calendar).
+    /// Box, scroll and counts of the list page on screen (tasks or notifications).
     pub list: ListView<'a>,
     pub todos: &'a [Item],
-    pub appts: &'a [Appointment],
+    /// Notifications page, newest first.
+    pub notes: &'a [Note],
     pub health: HealthView<'a>,
 }
 
@@ -59,20 +59,22 @@ pub struct View<'a> {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
     Music,
+    /// Tasks and appointments in one list.
     Todo,
-    Calendar,
+    /// Windows notifications, to read back.
+    Notify,
     Health,
 }
 
-pub const PAGES: [Page; 4] = [Page::Music, Page::Todo, Page::Calendar, Page::Health];
+pub const PAGES: [Page; 4] = [Page::Music, Page::Todo, Page::Notify, Page::Health];
 
 impl Page {
     /// Header of the page: icon, name, accent colour.
     fn title(self) -> (&'static str, &'static str, (f32, f32, f32)) {
         match self {
             Page::Music => ("\u{E8D6}", tr("Nhạc", "Music"), (0.72, 0.52, 1.0)),
-            Page::Todo => ("\u{E9D5}", tr("Việc cần làm", "To-do"), GREEN),
-            Page::Calendar => (ICON_CALENDAR, tr("Lịch hẹn", "Appointments"), BLUE),
+            Page::Todo => ("\u{E9D5}", tr("Việc", "Tasks"), GREEN),
+            Page::Notify => (ICON_BELL, tr("Thông báo", "Notifications"), BLUE),
             Page::Health => ("\u{E95E}", tr("Sức khỏe", "Health"), (1.0, 0.42, 0.5)),
         }
     }
@@ -80,8 +82,10 @@ impl Page {
 
 /// The add / edit box and the visible rows of a list page.
 pub struct ListView<'a> {
-    /// Counts shown above the rows: to-do = (open, done today); calendar = (upcoming, today).
+    /// Counts shown above the task rows: (open for today, open on later days).
     pub counts: (usize, usize),
+    /// Early reminder, minutes (the tasks' settings row).
+    pub remind_before: u32,
     /// Local time yyyymmddHHMM, for the time labels.
     pub now: u64,
     /// Text being typed (kept when the box loses focus).
@@ -97,7 +101,7 @@ pub struct ListView<'a> {
 
 pub struct HealthView<'a> {
     pub h: &'a Health,
-    /// Total minutes (calendar::minutes) and minute of the day, now.
+    /// Total minutes (todo::minutes) and minute of the day, now.
     pub now: i64,
     pub minute_of_day: u32,
     /// Card whose settings are open.
@@ -108,6 +112,8 @@ pub struct HealthView<'a> {
 pub enum Card {
     Water,
     Sit,
+    /// The task list's settings (early reminder).
+    Tasks,
 }
 
 /// Clickable things of the open panel.
@@ -131,6 +137,8 @@ pub enum Button {
     Stood,
     /// −1 / +1 on a setting.
     Step(Setting, i32),
+    /// −1 / +1 on the tasks' early reminder.
+    RemindStep(i32),
     Toggle(Setting),
 }
 
@@ -163,13 +171,17 @@ const SIDE: f32 = 44.0;
 const ARROW: f32 = 24.0;
 const ARROW_Y: f32 = 80.0;
 const DOTS_Y: f32 = 174.0;
-/// List pages (to-do, calendar).
+/// Task list page.
 const INPUT_Y: f32 = 36.0;
 const INPUT_H: f32 = 26.0;
 const COUNT_Y: f32 = 66.0;
 const ROW_Y: f32 = 84.0;
 const ROW_H: f32 = 22.0;
 pub const LIST_ROWS: usize = 3;
+/// Notifications page: rows of two lines.
+const NOTE_Y: f32 = 36.0;
+const NOTE_H: f32 = 42.0;
+pub const NOTE_ROWS: usize = 3;
 /// Health page cards.
 const CARD_TOP: f32 = 34.0;
 const CARD_BOTTOM: f32 = 158.0;
@@ -193,6 +205,7 @@ fn setting_rows(card: Card) -> &'static [(Setting, bool)] {
     match card {
         Card::Water => &[(Setting::WaterOn, true), (Setting::Cup, false), (Setting::Goal, false), (Setting::From, false), (Setting::To, false)],
         Card::Sit => &[(Setting::SitOn, true), (Setting::SitEvery, false)],
+        Card::Tasks => &[],
     }
 }
 
@@ -206,17 +219,23 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {
         Page::Music => out.extend(buttons(cx, scale)),
-        Page::Todo | Page::Calendar => {
+        Page::Todo => {
             out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
-            for (row, i) in (scroll..rows.min(scroll + LIST_ROWS)).enumerate() {
-                let y = ROW_Y + row as f32 * ROW_H;
-                // To-do: the row ticks. Calendar: the row opens the appointment for editing.
-                let main = if page == Page::Todo { Button::ListToggle(i) } else { Button::ListEdit(i) };
-                out.push((main, r(cl, y, cw - 48.0, ROW_H)));
-                out.push((Button::ListEdit(i), r(cl + cw - 46.0, y, 22.0, ROW_H)));
-                out.push((Button::ListDelete(i), r(cl + cw - 22.0, y, 22.0, ROW_H)));
+            out.push((Button::Gear(Card::Tasks), r(cl + cw - 20.0, COUNT_Y - 2.0, 20.0, 18.0)));
+            if settings == Some(Card::Tasks) {
+                out.push((Button::RemindStep(-1), r(cl + cw - 108.0, ROW_Y + 2.0, 18.0, 18.0)));
+                out.push((Button::RemindStep(1), r(cl + cw - 22.0, ROW_Y + 2.0, 18.0, 18.0)));
+            } else {
+                for (row, i) in (scroll..rows.min(scroll + LIST_ROWS)).enumerate() {
+                    let y = ROW_Y + row as f32 * ROW_H;
+                    out.push((Button::ListToggle(i), r(cl, y, cw - 48.0, ROW_H)));
+                    out.push((Button::ListEdit(i), r(cl + cw - 46.0, y, 22.0, ROW_H)));
+                    out.push((Button::ListDelete(i), r(cl + cw - 22.0, y, 22.0, ROW_H)));
+                }
             }
         }
+        // Read only: the arrows and the wheel.
+        Page::Notify => {}
         Page::Health => {
             for (card, x) in [(Card::Water, cl), (Card::Sit, cl + CARD_W + CARD_GAP)] {
                 out.push((Button::Gear(card), r(x + CARD_W - 28.0, CARD_TOP + 4.0, 22.0, 22.0)));
@@ -289,7 +308,6 @@ pub const ICON_BATTERY: &str = "\u{E83F}";
 pub const ICON_BATTERY_LOW: &str = "\u{E850}";
 pub const ICON_SAVER: &str = "\u{EBA6}";
 pub const ICON_REMINDER: &str = "\u{EC92}";
-pub const ICON_CALENDAR: &str = "\u{E787}";
 pub const ICON_WALK: &str = "\u{E805}";
 /// Not a glyph: the banner draws the water drop shape for this.
 pub const ICON_DROP: &str = "\u{1}drop";
@@ -768,10 +786,10 @@ impl Renderer {
                 let lv = &v.list;
                 let rows_of = |page: Page| match page {
                     Page::Todo => v.todos.len(),
-                    Page::Calendar => v.appts.len(),
+                    Page::Notify => v.notes.len(),
                     _ => 0,
                 };
-                let minutes = |t: u64| (t / 10_000) as i64 * 1440 + (t / 100 % 100) as i64 * 60 + (t % 100) as i64;
+                let minutes = todo::minutes;
                 let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
 
                 // One page, shifted by `dx` and faded by `pa` (the page switch morph).
@@ -842,21 +860,23 @@ impl Renderer {
                         matches!(hovered, Some(Button::ListToggle(j)) | Some(Button::ListEdit(j)) | Some(Button::ListDelete(j)) if j == i)
                             || (current && lv.edit_item == Some(i))
                     };
-                    let scrollbar = |n: usize| -> Result<()> {
-                        if n > LIST_ROWS {
-                            let (top, bottom) = (ROW_Y * s, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
+                    // Scroll position of `n` rows shown `rows` at a time from `y0`, `row_h` apart.
+                    let scrollbar = |n: usize, rows: usize, y0: f32, row_h: f32| -> Result<()> {
+                        if n > rows {
+                            let (top, bottom) = (y0 * s, (y0 + row_h * rows as f32) * s);
                             let x = cr + 6.0 * s;
                             rt.FillRoundedRectangle(&rounded(rect(x, top, x + 3.0 * s, bottom), 1.5 * s), &brush(grey(0.2, a))?);
-                            let len = (bottom - top) * LIST_ROWS as f32 / n as f32;
-                            let start = top + (bottom - top - len) * scroll as f32 / (n - LIST_ROWS) as f32;
+                            let len = (bottom - top) * rows as f32 / n as f32;
+                            let start = top + (bottom - top - len) * scroll as f32 / (n - rows) as f32;
                             rt.FillRoundedRectangle(&rounded(rect(x, start, x + 3.0 * s, start + len), 1.5 * s), &brush(grey(0.6, a))?);
                         }
                         Ok(())
                     };
-                    // "HH:MM" coloured by how close it is: orange within 15 min, red when past.
+                    // Time label coloured by how close it is: orange within the early reminder, red when past.
                     let time_color = |due: u64, quiet: bool| {
                         let left = minutes(due) - minutes(lv.now);
-                        if quiet { grey(0.4, a) } else if left <= 0 { color(1.0, 0.35, 0.3, a) } else if left <= 15 { color(1.0, 0.62, 0.2, a) } else { grey(0.6, a) }
+                        if quiet { grey(0.4, a) } else if left <= 0 { color(1.0, 0.35, 0.3, a) }
+                        else if left <= lv.remind_before.max(15) as i64 { color(1.0, 0.62, 0.2, a) } else { grey(0.6, a) }
                     };
 
                     match page {
@@ -906,93 +926,99 @@ impl Renderer {
                             }
                         }
                         Page::Todo => {
-                            draw_input(tr("Thêm việc… (vd: Họp nhóm 20:00)", "Add a task… (e.g. Team call 20:00)"))?;
-                            let (open, done_today) = if current { lv.counts } else { (v.todos.iter().filter(|i| i.done.is_none()).count(), 0) };
+                            draw_input(tr("Thêm việc… (vd: Họp 20:00, Khám răng 28/10 9h)", "Add a task… (e.g. Call 20:00, Dentist 28/10 9h)"))?;
+                            let today = (lv.now / 10_000) as u32;
+                            let (open, later) = if current { lv.counts } else { (0, 0) };
                             let cy = COUNT_Y * s;
-                            text(&format!("{} · {open}", tr("Chưa xong", "Open")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), lead, grey(0.6, a))?;
-                            text(&format!("✓ {} {done_today}", tr("Xong hôm nay", "Done today")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), trail,
-                                if done_today > 0 { solid(GREEN, a) } else { grey(0.6, a) })?;
-                            if v.todos.is_empty() {
-                                let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
-                                text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, area, center, grey(0.55, a))?;
+                            text(&format!("{} · {open}", tr("Hôm nay", "Today")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), lead, grey(0.6, a))?;
+                            text(&format!("{} · {later}", tr("Sắp tới", "Upcoming")), F_LABEL, rect(cl, cy - 2.0 * s, cr - 26.0 * s, cy + 16.0 * s), trail,
+                                if later > 0 { solid(BLUE, a) } else { grey(0.6, a) })?;
+                            let open_set = settings == Some(Card::Tasks);
+                            if let Some(gb) = rect_of(Button::Gear(Card::Tasks)) {
+                                let hot = hovered == Some(Button::Gear(Card::Tasks));
+                                let (icon, c) = if open_set { (ICON_CHECK, solid(GREEN, a)) } else { (ICON_GEAR, grey(if hot { 1.0 } else { 0.6 }, a)) };
+                                micon("tasks-gear", icon, F_SMALL_ICON, gb, c)?;
                             }
-                            for (b, br) in btns.iter() {
-                                let Button::ListToggle(i) = *b else { continue };
-                                let Some(item) = v.todos.get(i) else { continue };
-                                let hot = row_hovered(i);
-                                if hot {
-                                    rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &brush(grey(0.1, a))?);
+                            if open_set {
+                                // Settings: the early reminder, stepped with − / +.
+                                let y = ROW_Y * s;
+                                text(tr("Nhắc trước", "Remind before"), F_BODY, rect(cl, y, cr - 112.0 * s, y + 22.0 * s), lead, grey(0.9, a))?;
+                                let value = if lv.remind_before == 0 { tr("Tắt", "Off").to_string() } else { format!("{} {}", lv.remind_before, tr("phút", "min")) };
+                                text(&value, F_BODY, rect(cr - 88.0 * s, y, cr - 26.0 * s, y + 22.0 * s), center, grey(1.0, a))?;
+                                for (b, icon) in [(Button::RemindStep(-1), ICON_MINUS), (Button::RemindStep(1), ICON_PLUS)] {
+                                    if let Some(sb) = rect_of(b) {
+                                        rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: (sb.left + sb.right) / 2.0, Y: (sb.top + sb.bottom) / 2.0 }, radiusX: 9.0 * s, radiusY: 9.0 * s },
+                                            &brush(grey(if hovered == Some(b) { 0.3 } else { 0.2 }, a))?);
+                                        text(icon, F_TINY_ICON, sb, center, grey(1.0, a))?;
+                                    }
                                 }
-                                // Tick circle.
-                                let d = 14.0 * s;
-                                let (ccx, ccy) = (br.left + d / 2.0, (br.top + br.bottom) / 2.0);
-                                let circle = D2D1_ELLIPSE { point: Vector2 { X: ccx, Y: ccy }, radiusX: d / 2.0 - 0.75 * s, radiusY: d / 2.0 - 0.75 * s };
-                                let done = item.done.is_some();
-                                if done {
-                                    rt.FillEllipse(&circle, &brush(solid(GREEN, a))?);
-                                    text(ICON_CHECK, F_TINY_ICON, rect(ccx - d / 2.0, ccy - d / 2.0, ccx + d / 2.0, ccy + d / 2.0), center, grey(0.0, a))?;
-                                } else {
-                                    rt.DrawEllipse(&circle, &brush(grey(if hot { 0.85 } else { 0.55 }, a))?, 1.5 * s, None);
+                                text(tr("Việc có giờ còn được nhắc đúng giờ", "Timed tasks also ring on time"), F_LABEL,
+                                    rect(cl, y + 26.0 * s, cr, y + 44.0 * s), lead, grey(0.5, a))?;
+                            } else {
+                                if v.todos.is_empty() {
+                                    let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
+                                    text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, area, center, grey(0.55, a))?;
                                 }
-                                // Reminder time on the right.
-                                let mut text_right = br.right;
-                                if let Some(due) = item.due {
-                                    let (h, m) = (due / 100 % 100, due % 100);
-                                    let tomorrow = due / 10_000 > lv.now / 10_000;
-                                    let label = if tomorrow { format!("{} {h:02}:{m:02}", tr("Mai", "Tmrw")) } else { format!("{h:02}:{m:02}") };
-                                    let lw = if tomorrow { 60.0 } else { 40.0 } * s;
-                                    text(&label, F_LABEL, rect(br.right - lw, br.top, br.right - 2.0 * s, br.bottom), trail, time_color(due, done))?;
-                                    text_right = br.right - lw - 6.0 * s;
+                                for (b, br) in btns.iter() {
+                                    let Button::ListToggle(i) = *b else { continue };
+                                    let Some(item) = v.todos.get(i) else { continue };
+                                    let hot = row_hovered(i);
+                                    if hot {
+                                        rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &brush(grey(0.1, a))?);
+                                    }
+                                    // Tick circle.
+                                    let d = 14.0 * s;
+                                    let (ccx, ccy) = (br.left + d / 2.0, (br.top + br.bottom) / 2.0);
+                                    let circle = D2D1_ELLIPSE { point: Vector2 { X: ccx, Y: ccy }, radiusX: d / 2.0 - 0.75 * s, radiusY: d / 2.0 - 0.75 * s };
+                                    let done = item.done.is_some();
+                                    if done {
+                                        rt.FillEllipse(&circle, &brush(solid(GREEN, a))?);
+                                        text(ICON_CHECK, F_TINY_ICON, rect(ccx - d / 2.0, ccy - d / 2.0, ccx + d / 2.0, ccy + d / 2.0), center, grey(0.0, a))?;
+                                    } else {
+                                        rt.DrawEllipse(&circle, &brush(grey(if hot { 0.85 } else { 0.55 }, a))?, 1.5 * s, None);
+                                    }
+                                    // When, on the right: "HH:MM" today, "Mai HH:MM", "dd/mm HH:MM" (red once past).
+                                    let mut text_right = br.right;
+                                    if let Some(at) = item.at {
+                                        let (day, h, m) = ((at / 10_000) as u32, at / 100 % 100, at % 100);
+                                        let (label, lw) = if day == today { (format!("{h:02}:{m:02}"), 40.0) }
+                                            else if day == todo::next_day(today) { (format!("{} {h:02}:{m:02}", tr("Mai", "Tmrw")), 64.0) }
+                                            else { (format!("{:02}/{:02} {h:02}:{m:02}", day % 100, day / 100 % 100), 74.0) };
+                                        text(&label, F_LABEL, rect(br.right - lw * s, br.top, br.right - 2.0 * s, br.bottom), trail, time_color(at, done))?;
+                                        text_right = br.right - (lw + 6.0) * s;
+                                    }
+                                    // Text, struck through when done.
+                                    let tb = rect(br.left + d + 10.0 * s, br.top, text_right, br.bottom);
+                                    text(&item.text, F_BODY, tb, lead, grey(if done { 0.45 } else { 1.0 }, a))?;
+                                    if done {
+                                        let tw = width(&item.text, F_BODY).min(tb.right - tb.left);
+                                        let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
+                                        rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &brush(grey(0.45, a))?);
+                                    }
+                                    row_tools(i, hot)?;
                                 }
-                                // Text, struck through when done.
-                                let tb = rect(br.left + d + 10.0 * s, br.top, text_right, br.bottom);
-                                text(&item.text, F_BODY, tb, lead, grey(if done { 0.45 } else { 1.0 }, a))?;
-                                if done {
-                                    let tw = width(&item.text, F_BODY).min(tb.right - tb.left);
-                                    let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
-                                    rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &brush(grey(0.45, a))?);
-                                }
-                                row_tools(i, hot)?;
+                                scrollbar(v.todos.len(), LIST_ROWS, ROW_Y, ROW_H)?;
                             }
-                            scrollbar(v.todos.len())?;
                         }
-                        Page::Calendar => {
-                            draw_input(tr("Thêm lịch hẹn… (vd: Khám răng 28/10 14:30)", "Add an appointment… (e.g. Dentist 28/10 14:30)"))?;
-                            let today = lv.now / 10_000;
-                            let (upcoming, today_n) = if current { lv.counts } else { (v.appts.iter().filter(|x| x.at > lv.now).count(), 0) };
-                            let cy = COUNT_Y * s;
-                            text(&format!("{} · {upcoming}", tr("Sắp tới", "Upcoming")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), lead, grey(0.6, a))?;
-                            text(&format!("{} · {today_n}", tr("Hôm nay", "Today")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), trail,
-                                if today_n > 0 { solid(BLUE, a) } else { grey(0.6, a) })?;
-                            if v.appts.is_empty() {
-                                let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
-                                text(tr("Chưa có lịch hẹn", "No appointments"), F_BODY, area, center, grey(0.55, a))?;
+                        Page::Notify => {
+                            if v.notes.is_empty() {
+                                let area = rect(cl, NOTE_Y * s, cr, (NOTE_Y + NOTE_H * NOTE_ROWS as f32) * s);
+                                text(tr("Chưa có thông báo", "No notifications"), F_BODY, area, center, grey(0.55, a))?;
                             }
-                            for (b, br) in btns.iter() {
-                                // the first ListEdit of a row is its text area
-                                let Button::ListEdit(i) = *b else { continue };
-                                if br.right - br.left < 30.0 * s {
-                                    continue;
-                                }
-                                let Some(ap) = v.appts.get(i) else { continue };
-                                let hot = row_hovered(i);
-                                if hot {
-                                    rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &brush(grey(0.1, a))?);
-                                }
-                                // Day on the left, time on the right.
-                                let day = ap.at / 10_000;
-                                let (d, mo) = (day % 100, day / 100 % 100);
-                                let day_label = if day == today { tr("Hôm nay", "Today").to_string() }
-                                    else if day == crate::todo::next_day(today as u32) as u64 { tr("Mai", "Tmrw").to_string() }
-                                    else { format!("{d:02}/{mo:02}") };
-                                let past = ap.at <= lv.now;
-                                text(&day_label, F_LABEL, rect(br.left, br.top, br.left + 52.0 * s, br.bottom), lead,
-                                    if day == today && !past { solid(BLUE, a) } else { grey(0.6, a) })?;
-                                text(&format!("{:02}:{:02}", ap.at / 100 % 100, ap.at % 100), F_LABEL, rect(br.right - 40.0 * s, br.top, br.right - 2.0 * s, br.bottom), trail, time_color(ap.at, false))?;
-                                text(&ap.text, F_BODY, rect(br.left + 56.0 * s, br.top, br.right - 46.0 * s, br.bottom), lead, grey(if past { 0.5 } else { 1.0 }, a))?;
-                                row_tools(i, hot)?;
+                            let today = (lv.now / 10_000) as u32;
+                            for (row, n) in v.notes.iter().skip(scroll).take(NOTE_ROWS).enumerate() {
+                                let y = (NOTE_Y + row as f32 * NOTE_H) * s;
+                                // Line 1: title, time on the right. Line 2: app · text.
+                                let day = (n.at / 10_000) as u32;
+                                let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
+                                    else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }
+                                    else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
+                                text(&when, F_LABEL, rect(cr - 64.0 * s, y, cr, y + 20.0 * s), trail, grey(0.55, a))?;
+                                text(&n.title, F_TITLE, rect(cl, y, cr - 68.0 * s, y + 20.0 * s), lead, grey(1.0, a))?;
+                                let line2 = if n.body.is_empty() { n.app.clone() } else { format!("{} · {}", n.app, n.body) };
+                                text(&line2, F_BODY, rect(cl, y + 19.0 * s, cr, y + 37.0 * s), lead, grey(0.65, a))?;
                             }
-                            scrollbar(v.appts.len())?;
+                            scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
                         }
                         Page::Health => {
                             let hv = &v.health;
@@ -1228,8 +1254,8 @@ mod tests {
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), live: true, phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
-                leaving: None, todos: &[], appts: &[],
-                list: ListView { counts: (0, 0), now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                leaving: None, todos: &[], notes: &[],
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();

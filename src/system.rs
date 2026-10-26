@@ -5,7 +5,8 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::System::Registry::*;
-use windows::Win32::System::SystemInformation::GetLocalTime;
+use windows::Win32::Foundation::SYSTEMTIME;
+use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
 
 const WEEKDAYS: [&str; 7] = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 const WEEKDAYS_EN: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -14,6 +15,13 @@ const WEEKDAYS_EN: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 pub fn now_stamp() -> u64 {
     let t = unsafe { GetLocalTime() };
     crate::todo::stamp(t.wYear as u32 * 10_000 + t.wMonth as u32 * 100 + t.wDay as u32, t.wHour as u32, t.wMinute as u32)
+}
+
+/// Local time minus UTC in minutes (notification arrival times are stored in UTC).
+pub fn utc_offset_min() -> i64 {
+    let (local, utc) = unsafe { (GetLocalTime(), GetSystemTime()) };
+    let total = |t: SYSTEMTIME| crate::todo::minutes(crate::todo::stamp(t.wYear as u32 * 10_000 + t.wMonth as u32 * 100 + t.wDay as u32, t.wHour as u32, t.wMinute as u32));
+    total(local) - total(utc)
 }
 
 /// Local date as yyyymmdd (to-do "done today").
