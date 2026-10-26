@@ -331,7 +331,31 @@ impl App {
         }
     }
 
+    /// Let go of a panel the mouse has left without Windows saying so (see `notch::hover_stale`).
+    fn release_stale_hover(&mut self) {
+        if !notch::hover_stale(self.notch.mode, self.hover_in, self.editing, self.cursor_inside()) {
+            return;
+        }
+        self.hover_in = false;
+        // Ask Windows for the next leave again: the old request may be gone.
+        self.tracking = false;
+        self.hovered_button = None;
+        unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
+        self.notch.on_leave();
+        self.kick();
+    }
+
+    /// After a fullscreen / immersive app (Photos) Windows can leave a topmost window stacked under
+    /// ordinary ones with its style intact: stack it on top again.
+    fn keep_on_top(&self) {
+        if !self.hidden && screen::buried(self.hwnd) {
+            unsafe { let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
+        }
+    }
+
     fn tick(&mut self) {
+        self.keep_on_top();
+        self.release_stale_hover();
         let (time, date) = system::clock();
         let battery = system::battery();
         let mut changed = (&time, &date, battery) != (&self.time, &self.date, self.battery);

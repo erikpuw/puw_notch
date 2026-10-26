@@ -71,6 +71,14 @@ pub fn ear(h: f32) -> f32 {
 pub fn hover_area(size: [f32; 3]) -> (f32, f32) {
     (size[0] / 2.0, size[1])
 }
+/// The system's mouse-leave message can go missing (the window was hidden or pushed under a
+/// fullscreen app and brought back), which leaves the panel open with the cursor far away. True
+/// when the panel, or the "mouse is inside" flag, outlived the real cursor: release it.
+/// Typing keeps the panel open on purpose; a banner ends by its own timer.
+pub fn hover_stale(mode: Mode, hover_in: bool, editing: bool, inside: bool) -> bool {
+    !editing && !inside && mode != Mode::Alert && (hover_in || matches!(mode, Mode::Peek | Mode::PeekMini | Mode::Expanded))
+}
+
 /// How long the mouse must stay before Peek turns into Expanded.
 pub const DWELL_MS: u32 = 80;
 
@@ -247,6 +255,21 @@ impl Notch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_hover_is_an_open_panel_with_the_cursor_gone() {
+        use Mode::*;
+        for mode in [Peek, PeekMini, Expanded] {
+            assert!(hover_stale(mode, true, false, false), "{mode:?}: cursor left, no leave message");
+            assert!(!hover_stale(mode, true, false, true), "{mode:?}: cursor still on it");
+            assert!(!hover_stale(mode, true, true, false), "{mode:?}: typing keeps the panel open");
+        }
+        for mode in [Collapsed, Mini, Alert] {
+            assert!(!hover_stale(mode, false, false, false), "{mode:?}: nothing to release");
+        }
+        assert!(hover_stale(Collapsed, true, false, false), "mouse remembered as inside while the pill rests");
+        assert!(!hover_stale(Alert, false, false, false), "a banner ends by its own timer");
+    }
 
     fn settle(n: &mut Notch) {
         for _ in 0..600 {

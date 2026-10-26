@@ -59,6 +59,26 @@ pub fn edge_pixels(px: &[u8], w: usize) -> usize {
     n
 }
 
+/// Is an ordinary (not topmost) visible window stacked above `own`? A topmost window is never
+/// below one while Windows keeps its order, but a fullscreen / immersive app can leave it there
+/// with the topmost style still set, so only the stacking order tells.
+pub fn buried(own: HWND) -> bool {
+    unsafe {
+        let mut w = own;
+        while let Ok(above) = GetWindow(w, GW_HWNDPREV) {
+            if above.is_invalid() {
+                break;
+            }
+            let topmost = GetWindowLongPtrW(above, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0;
+            if !topmost && IsWindowVisible(above).as_bool() {
+                return true;
+            }
+            w = above;
+        }
+        false
+    }
+}
+
 const SHELL_CLASSES: [&str; 4] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
 
 fn class_name(hwnd: HWND) -> String {
