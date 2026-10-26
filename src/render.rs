@@ -377,10 +377,10 @@ struct CoverCache {
 
 /// Shadow of the open panel: reaches SHADOW_STEPS * SHADOW_STEP px past the edge (the window has
 /// 24+ px of margin below), SHADOW_ALPHA dark at the edge, shifted SHADOW_DY px down.
-const SHADOW_STEPS: u32 = 8;
-const SHADOW_STEP: f32 = 2.0;
-const SHADOW_ALPHA: f32 = 0.32;
-const SHADOW_DY: f32 = 3.0;
+const SHADOW_STEPS: u32 = 6;
+const SHADOW_STEP: f32 = 1.0;
+const SHADOW_ALPHA: f32 = 0.22;
+const SHADOW_DY: f32 = 1.5;
 
 /// Largest centred square of a `w` x `h` image: (x, y, side).
 fn square_crop(w: u32, h: u32) -> (u32, u32, u32) {
