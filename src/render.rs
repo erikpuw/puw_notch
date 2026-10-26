@@ -47,6 +47,8 @@ pub struct View<'a> {
     pub robot: Option<Eyes>,
     /// Seconds, drives the equaliser bars.
     pub phase: f32,
+    /// Seconds since the current banner appeared (drives its icon's motion).
+    pub banner_age: f32,
     pub hovered: Option<Button>,
     pub page: Page,
     /// Page switch in progress: (page sliding out, progress 0..1, direction +1 next / -1 previous).
@@ -285,6 +287,54 @@ pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, pa
 /// The old page is gone before the new one shows, so their text never overlaps (ghosting).
 fn page_fades(t: f32) -> (f32, f32) {
     ((1.0 - t * 3.5).clamp(0.0, 1.0), ((t - 0.2) * 2.5).clamp(0.0, 1.0))
+}
+
+/// How a banner icon is drawn at one moment: rotation in degrees around a pivot `pivot_y` icon
+/// heights below its centre (negative = above), scale about the centre, shift down by `dy` icon
+/// heights, and opacity.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct IconMotion {
+    rot: f32,
+    pivot_y: f32,
+    scale: f32,
+    dy: f32,
+    alpha: f32,
+}
+
+impl IconMotion {
+    const STILL: IconMotion = IconMotion { rot: 0.0, pivot_y: 0.0, scale: 1.0, dy: 0.0, alpha: 1.0 };
+}
+
+/// Seconds a banner icon moves for after the banner appears.
+const ICON_MOTION_S: f32 = 1.2;
+
+/// The motion of banner icon `icon` `age` seconds after its banner appeared: every icon pops in
+/// from small and transparent, then does its own thing (bell swings from its top, the sun turns
+/// once, volume pulses, a plug bounces, ...). Still after ICON_MOTION_S.
+fn icon_motion(icon: &str, age: f32) -> IconMotion {
+    if age >= ICON_MOTION_S {
+        return IconMotion::STILL;
+    }
+    let t = age.max(0.0);
+    let tau = std::f32::consts::TAU;
+    let decay = (-3.5 * t).exp();
+    let mut m = IconMotion { scale: 0.6 + 0.4 * ease_out_back((t / 0.35).min(1.0)), alpha: (t / 0.15).min(1.0), ..IconMotion::STILL };
+    match icon {
+        ICON_BELL | ICON_REMINDER => {
+            m.rot = 28.0 * (-2.5 * t).exp() * (tau * 2.5 * t).sin();
+            m.pivot_y = -0.4;
+        }
+        // One full turn, slowing down.
+        ICON_BRIGHTNESS => m.rot = 360.0 * (1.0 - (1.0 - (t / 1.0).min(1.0)).powi(3)),
+        ICON_VOLUME | ICON_MUTE => m.scale *= 1.0 + 0.18 * decay * (tau * 2.0 * t).sin().abs(),
+        ICON_MIC | ICON_MIC_OFF => m.alpha *= 1.0 - 0.5 * decay * (tau * 2.0 * t).sin().abs(),
+        ICON_BT | ICON_WIFI | ICON_AIRPLANE => m.rot = 10.0 * decay * (tau * 4.0 * t).sin(),
+        ICON_PLUG | ICON_BATTERY | ICON_BATTERY_LOW | ICON_SAVER | ICON_BOLT => m.dy = -0.18 * decay * (tau * 2.5 * t).sin().abs(),
+        // A key press: down and back up.
+        ICON_KEYBOARD => m.dy = 0.14 * (1.0 - (tau * (t / 0.3).min(1.0)).cos()) / 2.0,
+        _ => {}
+    }
+    m
 }
 
 /// Overshoot easing for the page morph: arrives a touch past and settles back.
@@ -1063,18 +1113,31 @@ impl Renderer {
                 }
             }
 
+            let mut icon_busy = false;
             if v.mode == Mode::Alert {
                 if let Some(t) = v.banner {
                     let a = fade(44.0, 18.0);
-                    // Icon on the left, text beside it.
+                    // Icon on the left, text beside it; it moves for a moment after the banner appears.
                     let d = 36.0 * s;
                     let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + 2.0 * s);
-                    if t.icon == Some(ICON_DROP) {
-                        let g = self.water_drop(ix + d / 2.0, iy + d / 2.0, 18.0 * s)?;
-                        rt.FillGeometry(&g, &brush(color(BLUE.0, BLUE.1, BLUE.2, a))?, None);
+                    let icon = t.icon.unwrap_or(ICON_BELL);
+                    let m = icon_motion(icon, v.banner_age);
+                    icon_busy = v.banner_age < ICON_MOTION_S;
+                    let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
+                    let (sin, cos) = m.rot.to_radians().sin_cos();
+                    let (px, py) = (mx, my + m.pivot_y * d);
+                    let turn = Matrix3x2 { M11: cos, M12: sin, M21: -sin, M22: cos, M31: px - px * cos + py * sin, M32: py - px * sin - py * cos };
+                    let size = Matrix3x2 { M11: m.scale, M12: 0.0, M21: 0.0, M22: m.scale, M31: mx * (1.0 - m.scale), M32: my * (1.0 - m.scale) + m.dy * d };
+                    let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
+                    rt.SetTransform(&(turn * size * base));
+                    let ia = a * m.alpha;
+                    if icon == ICON_DROP {
+                        let g = self.water_drop(mx, my, 18.0 * s)?;
+                        rt.FillGeometry(&g, &brush(color(BLUE.0, BLUE.1, BLUE.2, ia))?, None);
                     } else {
-                        micon("banner", t.icon.unwrap_or(ICON_BELL), F_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
+                        micon("banner", icon, F_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, ia))?;
                     }
+                    rt.SetTransform(&base);
                     let (tl, tr) = (ix + d + 12.0 * s, r - 22.0 * s);
                     text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
                     text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
@@ -1568,7 +1631,7 @@ impl Renderer {
                 Some(&blend),
                 ULW_ALPHA,
             )?;
-            Ok(morphing.get() || glow_busy)
+            Ok(morphing.get() || glow_busy || icon_busy)
         }
     }
 }
@@ -1632,6 +1695,26 @@ mod tests {
         assert!(c.r > c.g && c.g >= 0.8, "full glow: light, leaning towards red");
         let half = soft_text(red, 0.5, 0.6, 1.0);
         assert!(half.g > 0.6 && half.g < c.g, "in between while fading");
+    }
+
+    #[test]
+    fn icon_motions_start_small_end_still_and_never_break() {
+        let icons = [ICON_BELL, ICON_BRIGHTNESS, ICON_VOLUME, ICON_MUTE, ICON_MIC, ICON_MIC_OFF, ICON_BT, ICON_WIFI, ICON_PLUG, ICON_BATTERY,
+            ICON_KEYBOARD, ICON_AIRPLANE, ICON_DROP, ICON_REMINDER];
+        for icon in icons {
+            let start = icon_motion(icon, 0.0);
+            assert!(start.scale < 1.0 && start.alpha < 1.0, "{icon:?} pops in from small and transparent: {start:?}");
+            assert_eq!(icon_motion(icon, ICON_MOTION_S), IconMotion::STILL, "{icon:?} rests when the motion is over");
+            assert_eq!(icon_motion(icon, 9.0), IconMotion::STILL);
+            for i in 0..=120 {
+                let m = icon_motion(icon, i as f32 * ICON_MOTION_S / 120.0);
+                assert!(m.rot.is_finite() && m.scale > 0.0 && m.scale < 1.6 && (0.0..=1.0).contains(&m.alpha) && m.dy.abs() < 0.5, "{icon:?} t={i}: {m:?}");
+            }
+        }
+        // The bell swings both ways and settles.
+        let swings: Vec<f32> = (0..60).map(|i| icon_motion(ICON_BELL, i as f32 * 0.02).rot).collect();
+        assert!(swings.iter().any(|r| *r > 5.0) && swings.iter().any(|r| *r < -5.0), "swings both ways");
+        assert!(icon_motion(ICON_BELL, 1.1).rot.abs() < 2.0, "nearly still near the end");
     }
 
     #[test]
@@ -1747,7 +1830,7 @@ mod tests {
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], notes: &[],
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
