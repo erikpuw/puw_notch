@@ -7,6 +7,8 @@
 pub const SHOW_S: u32 = 30;
 pub const SLEEP_S: u32 = 300;
 const LOOK_S: f32 = 1.6;
+/// Of those, the first part follows the cursor; then eyes and mouth settle in the middle.
+const GLANCE_S: f32 = 1.1;
 /// Eyes fade in and out over this long.
 const FADE_S: f32 = 0.35;
 
@@ -165,12 +167,16 @@ impl Robot {
         let t = self.clock;
         let target = match self.state {
             // Wandering, mostly down: the robot looks at the desk.
-            State::Awake | State::Off => ((t * 0.7).sin() * 1.0 + (t * 1.9).sin() * 0.3, 0.9 + (t * 1.3).sin() * 0.25),
+            State::Awake => ((t * 0.7).sin() * 1.0 + (t * 1.9).sin() * 0.3, 0.9 + (t * 1.3).sin() * 0.25),
             State::Asleep => (0.0, 0.6),
+            // Back at work: a glance at the cursor, then the face centres before the clock returns.
+            State::Look if self.since >= GLANCE_S => (0.0, 0.0),
             State::Look => match cursor {
                 Some((x, y)) => ((x / 60.0).clamp(-1.2, 1.2), (y / 22.0).clamp(-0.8, 1.2)),
                 None => ((self.since * 3.0).sin() * 0.9, 0.3),
             },
+            // Handed back: fade out where it is centred, no wandering.
+            State::Off => (0.0, 0.0),
         };
         let k = (dt * 9.0).min(1.0);
         self.gaze.0 += (target.0 - self.gaze.0) * k;
@@ -303,6 +309,37 @@ mod tests {
         let (l, r) = curious_eyes(0.0);
         assert_eq!(l, r, "straight ahead: same size");
         assert_eq!(curious_eyes(5.0), curious_eyes(1.0), "clamped");
+    }
+
+    #[test]
+    fn face_returns_to_the_centre_before_giving_the_pill_back() {
+        let mut r = Robot::default();
+        r.update(SHOW_S, true);
+        for _ in 0..60 {
+            r.step(0.05, None, Mood::Normal);
+        }
+        r.update(0, true);
+        assert_eq!(r.state, State::Look);
+        // The cursor is far up-left: the face first looks there...
+        let mut gaze = (0.0, 0.0);
+        for _ in 0..30 {
+            gaze = r.step(0.02, Some((-200.0, -50.0)), Mood::Normal).gaze;
+        }
+        assert!(gaze.0 < -1.0, "glances at the cursor first: {gaze:?}");
+        // ...then eyes and mouth settle in the middle by the time the clock comes back.
+        let mut frames = 0;
+        while r.state == State::Look && frames < 400 {
+            r.update(0, true);
+            gaze = r.step(0.02, Some((-200.0, -50.0)), Mood::Normal).gaze;
+            frames += 1;
+        }
+        assert_eq!(r.state, State::Off, "the glance ends");
+        assert!(gaze.0.abs() < 0.12 && gaze.1.abs() < 0.12, "centred when the pill is handed back: {gaze:?}");
+        // While the face fades out it stays put instead of drifting back to the desk.
+        for _ in 0..10 {
+            gaze = r.step(0.02, None, Mood::Normal).gaze;
+        }
+        assert!(gaze.0.abs() < 0.12 && gaze.1.abs() < 0.12, "no wandering while fading out: {gaze:?}");
     }
 
     #[test]
