@@ -1,7 +1,6 @@
 #![windows_subsystem = "windows"]
 
 mod audio;
-mod banner_guard;
 mod connectivity;
 mod music;
 mod foobar;
@@ -964,9 +963,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
 }
 
 fn main() -> windows::core::Result<()> {
-    if banner_guard::run_if_helper() {
-        return Ok(());
-    }
     unsafe {
         let _mutex = CreateMutexW(None, false, w!("Local\\PuwNotch.SingleInstance"))?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
@@ -1055,9 +1051,6 @@ fn main() -> windows::core::Result<()> {
             prev_foreground: HWND::default(),
             high_surrogate: None,
         };
-        // Keep native banners if notification delivery to Notch is unavailable.
-        let _banner_guard = banner_guard::Guard::start(app.notifications.is_some())
-            .map_err(|error| banner_guard::report(&error)).ok();
         app.refresh_audio();
         let _ = RegisterPowerSettingNotification(HANDLE(hwnd.0), &status::VIDEO_BRIGHTNESS, DEVICE_NOTIFY_WINDOW_HANDLE);
         status::watch_lock_keys(hwnd);

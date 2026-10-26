@@ -27,9 +27,7 @@ target/release/puw_notch.exe
 
 Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`.
 
-Thông báo đọc từ trung tâm thông báo Windows, nên **thông báo Windows phải đang bật**. Khi đọc được trung tâm thông báo, Notch tự ẩn banner Windows của các app đã đăng ký, giữ thông báo trong Notification Center. Khi thoát, khôi phục đúng cài đặt banner trước đó (app vốn tắt banner vẫn tắt).
-
-Một tiến trình phụ cùng exe theo dõi Notch để khôi phục cả khi ứng dụng crash hoặc bị kết thúc cưỡng bức. Nếu cả hai tiến trình bị kill hoặc máy tắt đột ngột, bản sao cài đặt trong `HKCU\Software\PuwNotch\BannerBackup` được phục hồi khi Notch khởi động lại. App mới đăng ký được kiểm tra mỗi 250 ms, nên banner đầu tiên vẫn có thể xuất hiện. Popup riêng của ứng dụng không thuộc banner Windows; thay đổi banner thủ công khi Notch đang chạy được giữ lại nếu phát hiện được. Lỗi khôi phục được giữ lại để thử ở lần chạy sau và ghi vào `%APPDATA%\PuwNotch\banner-guard-error.log`.
+Thông báo đọc từ trung tâm thông báo Windows, nên **thông báo Windows phải đang bật**. Muốn chỉ thấy thông báo trên notch, không hiện banner ở góc phải màn hình: bật **Không làm phiền** của Windows (Cài đặt → Hệ thống → Thông báo). Windows vẫn giữ thông báo trong trung tâm thông báo nên notch vẫn đọc và hiện banner như bình thường. Windows chưa cho app khác tự tắt banner của từng app đang chạy, nên việc này do bạn bật.
 
 ## Ủng hộ
 
