@@ -1066,11 +1066,9 @@ impl Renderer {
             if v.mode == Mode::Alert {
                 if let Some(t) = v.banner {
                     let a = fade(44.0, 18.0);
-                    // Icon in a circle on the left, text beside it.
+                    // Icon on the left, text beside it.
                     let d = 36.0 * s;
                     let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + 2.0 * s);
-                    let circle = D2D1_ELLIPSE { point: Vector2 { X: ix + d / 2.0, Y: iy + d / 2.0 }, radiusX: d / 2.0, radiusY: d / 2.0 };
-                    rt.FillEllipse(&circle, &brush(grey(0.2, a))?);
                     if t.icon == Some(ICON_DROP) {
                         let g = self.water_drop(ix + d / 2.0, iy + d / 2.0, 18.0 * s)?;
                         rt.FillGeometry(&g, &brush(color(BLUE.0, BLUE.1, BLUE.2, a))?, None);
