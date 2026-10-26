@@ -17,32 +17,34 @@ pub enum Check {
     Settling,
 }
 
-/// Strips sampled left and right of the pill, as Nusa does (read from its code): 18-78 px outside
-/// the resting 150 px pill, top 30 px of the screen. The outer edge stays put when music widens the
-/// pill, so the strips never reach further out than Nusa's.
-const STRIP_GAP: f32 = 18.0;
-const STRIP_W: f32 = 60.0;
-const STRIP_H: f32 = 30.0;
-/// The capture includes our own window: stay this far outside the current pill (its ears reach 10.5).
-const EAR_CLEAR: f32 = 14.0;
+/// What the pill covers: the body of the pill (its resting height, the top of the screen), measured
+/// from the pill itself, short or long (music widens it), without its rounded corners. The notch
+/// window is left out of the capture while this is read, so it sees the tabs under the pill.
+const PILL_H: f32 = 30.0;
 
-/// (inner, outer) distance of each strip from the notch centre, logical px, for a pill `pill_w` wide.
-fn strip_span(pill_w: f32) -> (f32, f32) {
-    let rest_half = notch::target(notch::Mode::Collapsed, false)[0] / 2.0;
-    let outer = rest_half + STRIP_GAP + STRIP_W;
-    ((rest_half + STRIP_GAP).max(pill_w / 2.0 + EAR_CLEAR), outer)
+/// Half the width checked: the pill's body, i.e. its half width minus the rounded corner.
+fn body_half(pill_w: f32) -> f32 {
+    let corner = notch::target(notch::Mode::Collapsed, false)[2];
+    (pill_w / 2.0 - corner).max(0.0)
 }
+
+/// Cut the span `[from, to)` to where the window `[left, right)` is, with 2 px margin for its frame;
+/// None when nothing of at least 4 px is left.
+fn clip_span(from: i32, to: i32, left: i32, right: i32) -> Option<(i32, i32)> {
+    let (from, to) = (from.max(left + 2), to.min(right - 2));
+    (to - from >= 4).then_some((from, to))
+}
+
 /// A pixel is "edge" when a channel differs from its left neighbour by at least this much.
 const EDGE_DELTA: u8 = 14;
-/// Edge pixels that make a strip "text": tabs or a title running up to the notch.
+/// Edge pixels under the pill that make it "covering something": a tab title, a tab's edge.
 const BUSY_EDGES: usize = 12;
 
-/// Busy when text sits right beside the pill on either side: tabs reaching under the notch from
-/// the left (Edge, Terminal) count as much as tabs on both sides. `None` = strip outside the window.
-/// Maximize / restore no longer trips it: `check` only samples a window that held still, and
-/// `Notch::report_busy` needs two checks in a row.
-pub fn is_busy(left: Option<usize>, right: Option<usize>) -> bool {
-    [left, right].into_iter().flatten().any(|n| n >= BUSY_EDGES)
+/// Busy when the pill sits on content: tabs or a title under it (Edge, Terminal). `None` = the
+/// window does not reach under the pill. Maximize / restore no longer trips it: `check` only samples
+/// a window that held still, and `Notch::report_busy` needs two checks in a row.
+pub fn is_busy(under_pill: Option<usize>) -> bool {
+    under_pill.is_some_and(|n| n >= BUSY_EDGES)
 }
 
 /// Count edge pixels in a top-down BGRA buffer `w` pixels wide.
@@ -118,10 +120,8 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         if !still {
             return Check::Settling;
         }
-        let (inner, outer) = strip_span(pill_w);
-        let (inner, outer) = ((inner * scale) as i32, (outer * scale) as i32);
-        let sw = outer - inner;
-        let sh = (STRIP_H * scale) as i32;
+        let half = (body_half(pill_w) * scale) as i32;
+        let sh = (PILL_H * scale) as i32;
         let top = monitor.top;
         // Only sample where the foreground window actually is, so wallpaper never counts.
         if r.top > top + sh || r.bottom <= top {
@@ -129,14 +129,23 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         }
         let y = r.top.max(top);
         let h = top + sh - y;
-        let strip = |x: i32| (x >= r.left + 2 && x + sw <= r.right - 2 && sw >= 4 && h > 3).then(|| grab_edges(x, y, sw, h));
-        Check::Busy(is_busy(strip(center_x - outer), strip(center_x + inner)))
+        let under = clip_span(center_x - half, center_x + half, r.left, r.right).filter(|_| h > 3);
+        Check::Busy(is_busy(under.map(|(from, to)| grab_edges(own, from, y, to - from, h))))
     }
 }
 
-/// Screen capture of one strip. It includes the notch window too (measured on Windows 11, with or
-/// without CAPTUREBLT), hence the `sample` gate in `check`.
-unsafe fn grab_edges(x: i32, y: i32, w: i32, h: i32) -> usize {
+/// Screen capture of the area under the pill. The notch window is dropped from the capture for the
+/// moment (display affinity), else it would hide exactly what is being looked for.
+unsafe fn grab_edges(own: HWND, x: i32, y: i32, w: i32, h: i32) -> usize {
+    let _ = SetWindowDisplayAffinity(own, WDA_EXCLUDEFROMCAPTURE);
+    // The compositor drops the window from what it hands to capture on its next frame.
+    let _ = windows::Win32::Graphics::Dwm::DwmFlush();
+    let edges = grab_edges_raw(x, y, w, h);
+    let _ = SetWindowDisplayAffinity(own, WDA_NONE);
+    edges
+}
+
+unsafe fn grab_edges_raw(x: i32, y: i32, w: i32, h: i32) -> usize {
     let screen = GetDC(None);
     let mem = CreateCompatibleDC(Some(screen));
     let mut bmi = BITMAPINFO::default();
@@ -163,29 +172,36 @@ unsafe fn grab_edges(x: i32, y: i32, w: i32, h: i32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{edge_pixels, is_busy, strip_span};
+    use super::{body_half, clip_span, edge_pixels, is_busy};
 
     #[test]
-    fn busy_with_text_beside_the_notch() {
-        assert!(is_busy(Some(40), Some(30)), "tabs on both sides");
-        assert!(is_busy(Some(105), Some(0)), "Edge / Terminal tabs reaching the notch from the left");
-        assert!(is_busy(None, Some(60)), "the other strip outside the window");
-        assert!(!is_busy(Some(11), Some(0)), "a few stray pixels");
-        assert!(!is_busy(Some(0), Some(0)), "empty title bar");
-        assert!(!is_busy(None, None));
+    fn busy_when_content_sits_under_the_pill() {
+        assert!(is_busy(Some(40)), "tab titles under the pill");
+        assert!(is_busy(Some(30)), "one tab edge running down the pill's height");
+        assert!(!is_busy(Some(11)), "a few stray pixels");
+        assert!(!is_busy(Some(0)), "empty title bar");
+        assert!(!is_busy(None), "the window does not reach under the pill");
     }
 
     #[test]
-    fn strips_sit_where_nusa_samples() {
+    fn the_checked_span_is_the_pill_body_short_or_long() {
         use crate::notch::{target, Mode};
-        // Resting pill: 93-153 px from the centre, like Nusa (18-78 px outside a 150 px pill).
-        assert_eq!(strip_span(target(Mode::Collapsed, false)[0]), (93.0, 153.0));
-        // Music pill (wider): the inner edge moves out past the pill and its ears, the outer edge stays,
-        // so Edge's "+" after 3 tabs (~170 px out) never counts and a cut tab title (~130 px) does.
-        let (inner, outer) = strip_span(target(Mode::Collapsed, true)[0]);
-        assert!(inner > target(Mode::Collapsed, true)[0] / 2.0 + crate::notch::ear(30.0));
-        assert_eq!(outer, 153.0);
-        assert!(inner < 130.0 && 170.0 > outer);
+        // Measured from the pill's own width, minus its rounded corners: a 150 px pill with 14 px
+        // corners checks 61 px each side of the centre, the 216 px music pill 94 px.
+        assert_eq!(body_half(target(Mode::Collapsed, false)[0]), 61.0);
+        assert_eq!(body_half(target(Mode::Collapsed, true)[0]), 94.0);
+        assert_eq!(body_half(10.0), 0.0, "never negative");
+    }
+
+    #[test]
+    fn the_span_is_cut_to_the_window_under_it() {
+        assert_eq!(clip_span(900, 1020, 0, 1920), Some((900, 1020)), "window covers it all");
+        // 2 px margin inside the window's own edge
+        assert_eq!(clip_span(900, 1020, 950, 1920), Some((952, 1020)), "window starts under the pill");
+        assert_eq!(clip_span(900, 1020, 0, 960), Some((900, 958)), "window ends under the pill");
+        assert_eq!(clip_span(900, 1020, 1000, 1100), Some((1002, 1020)), "only a sliver");
+        assert_eq!(clip_span(900, 1020, 1100, 1900), None, "window entirely beside the pill");
+        assert_eq!(clip_span(900, 903, 0, 1920), None, "too narrow to tell anything");
     }
 
     #[test]
