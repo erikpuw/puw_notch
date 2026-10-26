@@ -266,6 +266,8 @@ const F_ICON: usize = 3;
 const F_TITLE: usize = 4;
 const F_TINY_ICON: usize = 5;
 const F_BODY_WRAP: usize = 6;
+/// Text column of a notification banner: its 420 px width minus icon (18 + 36 + 12) and right pad 22.
+const BANNER_TEXT_W: f32 = 420.0 - 88.0;
 const F_SMALL_ICON: usize = 7;
 const F_BIG: usize = 8;
 
@@ -432,11 +434,15 @@ impl Renderer {
                     Ok(f)
                 }
             };
-            // Same body text, but wrapping onto more lines (top-aligned; the box clips it).
+            // Same body text, but wrapping onto more lines (top-aligned). Text past the box's last
+            // line ends with "…" after a whole word, never mid-word.
             let wrap = |f: IDWriteTextFormat| -> Result<IDWriteTextFormat> {
                 unsafe {
                     f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
                     f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                    let sign = self.dw.CreateEllipsisTrimmingSign(&f)?;
+                    let trim = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_WORD, delimiter: 0, delimiterCount: 0 };
+                    f.SetTrimming(&trim, &sign)?;
                 }
                 Ok(f)
             };
@@ -549,6 +555,19 @@ impl Renderer {
 
     /// Draw one frame and push it to `hwnd` placed at screen (x, y), window size (w, h) device px.
     /// Returns true while an icon morph is still playing (the caller keeps frames coming).
+    /// Lines `text` wraps to in a notification banner (its body font and width, at `scale`).
+    pub fn banner_lines(&mut self, text: &str, scale: f32) -> u32 {
+        let Ok(fonts) = self.fonts(scale) else { return 1 };
+        let u: Vec<u16> = text.encode_utf16().collect();
+        let mut m = DWRITE_TEXT_METRICS::default();
+        unsafe {
+            match self.dw.CreateTextLayout(&u, &fonts[F_BODY_WRAP], BANNER_TEXT_W * scale, 10_000.0) {
+                Ok(layout) if layout.GetMetrics(&mut m).is_ok() => m.lineCount.max(1),
+                _ => 1,
+            }
+        }
+    }
+
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
         self.ensure_surface(w, h)?;
         let fonts = self.fonts(scale)?;
@@ -704,9 +723,15 @@ impl Renderer {
                             rt.FillRoundedRectangle(&bar(tr), &brush(grey(0.25, a))?);
                             rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &brush(grey(1.0, a))?);
                         }
-                        // Tall banner: up to two lines of the notification text.
-                        None if nh > 74.0 * s => text(&t.body, F_BODY_WRAP, rect(tl, 43.0 * s, tr, 79.0 * s), lead, grey(0.75, a))?,
-                        None => text(&t.body, F_BODY, rect(tl, 42.0 * s, tr, 58.0 * s), lead, grey(0.75, a))?,
+                        // Status banner (icon): one line under the title.
+                        None if t.icon.is_some() => text(&t.body, F_BODY, rect(tl, 42.0 * s, tr, 58.0 * s), lead, grey(0.75, a))?,
+                        // Notification: wraps over the banner's height (sized to its lines, at most
+                        // `BANNER_MAX_LINES`); what still does not fit ends with "…".
+                        None => {
+                            let top = notch::BANNER_TEXT_TOP * s;
+                            let bottom = (nh - 7.0 * s).max(top + notch::BANNER_LINE_H * s);
+                            text(&t.body, F_BODY_WRAP, rect(tl, top, tr, bottom), lead, grey(0.75, a))?
+                        }
                     }
                 }
             }

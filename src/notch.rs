@@ -32,8 +32,21 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
     }
 }
 
-/// Banner for a notification with a body: wider and two lines of text.
-pub const ALERT_TALL: [f32; 3] = [420.0, 86.0, 24.0];
+/// A notification banner shows at most this many lines of its text; longer text ends with "…".
+pub const BANNER_MAX_LINES: u32 = 4;
+/// Text line height in the notification banner (13 px Segoe UI) and where the text starts.
+pub const BANNER_LINE_H: f32 = 18.0;
+pub const BANNER_TEXT_TOP: f32 = 43.0;
+
+/// Banner size for `lines` lines of notification text (0 = status banner: volume, brightness...).
+/// Wider than the status banner and as tall as its text, capped at `BANNER_MAX_LINES`.
+pub fn alert_size(lines: u8) -> [f32; 3] {
+    if lines == 0 {
+        return target(Mode::Alert, false);
+    }
+    let n = (lines as u32).min(BANNER_MAX_LINES) as f32;
+    [420.0, BANNER_TEXT_TOP + n * BANNER_LINE_H + 7.0, 24.0]
+}
 
 /// Window must fit the largest target plus the hover margin.
 /// Includes room for the spring overshoot and the ears.
@@ -96,8 +109,8 @@ pub struct Notch {
     pub mode: Mode,
     pub minimal: bool,
     pub live: bool,
-    /// Current banner wants the tall size (`ALERT_TALL`).
-    tall_alert: bool,
+    /// Lines of text in the current notification banner (0 = status banner), see `alert_size`.
+    alert_lines: u8,
     obstructed: bool,
     clear_checks: u8,
     busy_checks: u8,
@@ -106,7 +119,7 @@ pub struct Notch {
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, tall_alert: false, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
         for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
@@ -168,20 +181,20 @@ impl Notch {
         }
     }
 
-    /// New banner (`tall` = notification text needing two lines). Returns true if shown
-    /// (not while the panel is open).
-    pub fn on_alert(&mut self, tall: bool) -> bool {
+    /// New banner with `lines` lines of notification text (0 = status banner). Returns true if
+    /// shown (not while the panel is open).
+    pub fn on_alert(&mut self, lines: u8) -> bool {
         if self.mode == Mode::Expanded {
             return false;
         }
         self.mode = Mode::Alert;
-        self.tall_alert = tall;
+        self.alert_lines = lines;
         true
     }
 
     /// Size the springs head for right now.
     fn goal(&self) -> [f32; 3] {
-        if self.mode == Mode::Alert && self.tall_alert { ALERT_TALL } else { target(self.mode, self.live) }
+        if self.mode == Mode::Alert { alert_size(self.alert_lines) } else { target(self.mode, self.live) }
     }
 
     pub fn on_alert_end(&mut self) {
@@ -294,7 +307,7 @@ mod tests {
     #[test]
     fn spring_stays_within_two_percent_on_open_and_close() {
         let sizes = [target(Mode::Collapsed, false), target(Mode::Expanded, false),
-            target(Mode::Mini, false), ALERT_TALL];
+            target(Mode::Mini, false), alert_size(BANNER_MAX_LINES as u8)];
         for from in sizes {
             for to in sizes {
                 for dt in [1.0 / 120.0, 1.0 / 60.0, 0.05] {
@@ -357,7 +370,7 @@ mod tests {
         let mut n = Notch::new(false);
         n.report_busy(true);
         n.report_busy(true);
-        assert!(n.on_alert(false));
+        assert!(n.on_alert(0));
         assert_eq!(n.mode, Mode::Alert);
         // passing over the banner does not end it
         assert!(n.on_enter());
@@ -366,18 +379,28 @@ mod tests {
         n.on_alert_end();
         assert_eq!(n.mode, Mode::Mini);
         // resting on the banner opens the panel, and the panel is not replaced by a banner
-        n.on_alert(false);
+        n.on_alert(0);
         n.on_enter();
         n.on_dwell(true);
         assert_eq!(n.mode, Mode::Expanded);
-        assert!(!n.on_alert(false));
+        assert!(!n.on_alert(0));
         n.on_alert_end();
         assert_eq!(n.mode, Mode::Expanded);
-        // a notification with text grows to the tall banner
+        // a notification with text grows to fit its lines
         let mut n = Notch::new(false);
-        n.on_alert(true);
+        n.on_alert(3);
         settle(&mut n);
-        assert_eq!(n.size(), ALERT_TALL);
+        assert_eq!(n.size(), alert_size(3));
+    }
+
+    #[test]
+    fn banner_grows_with_its_text_up_to_four_lines() {
+        assert_eq!(alert_size(1), [420.0, 68.0, 24.0]);
+        assert_eq!(alert_size(2), [420.0, 86.0, 24.0], "two lines: the old tall banner");
+        assert_eq!(alert_size(4), [420.0, 122.0, 24.0]);
+        assert_eq!(alert_size(9), alert_size(BANNER_MAX_LINES as u8), "longer text ends with ... instead");
+        assert_eq!(alert_size(0), target(Mode::Alert, false), "status banner (volume, brightness) keeps its size");
+        assert!(alert_size(4)[1] < MAX_H);
     }
 
     #[test]

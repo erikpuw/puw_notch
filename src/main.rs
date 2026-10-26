@@ -342,9 +342,13 @@ impl App {
     /// Short banner on the notch; skipped over a fullscreen game or while the panel is open.
     /// Returns whether it is showing.
     fn show_banner(&mut self, t: Toast, ms: u32) -> bool {
-        // Notifications (no status icon) with text get the taller two-line banner.
-        let tall = t.icon.is_none() && !t.body.is_empty();
-        if self.hidden || !self.notch.on_alert(tall) {
+        // Notifications (no status icon) with text grow to fit it, up to BANNER_MAX_LINES lines.
+        let lines = if t.icon.is_none() && !t.body.is_empty() {
+            self.renderer.banner_lines(&t.body, self.scale).min(notch::BANNER_MAX_LINES) as u8
+        } else {
+            0
+        };
+        if self.hidden || !self.notch.on_alert(lines) {
             return false;
         }
         self.banner = Some(t);
