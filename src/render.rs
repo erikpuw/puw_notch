@@ -375,6 +375,13 @@ struct CoverCache {
     glow: Option<(f32, f32, f32)>,
 }
 
+/// Shadow of the open panel: reaches SHADOW_STEPS * SHADOW_STEP px past the edge (the window has
+/// 24+ px of margin below), SHADOW_ALPHA dark at the edge, shifted SHADOW_DY px down.
+const SHADOW_STEPS: u32 = 8;
+const SHADOW_STEP: f32 = 2.0;
+const SHADOW_ALPHA: f32 = 0.32;
+const SHADOW_DY: f32 = 3.0;
+
 /// Largest centred square of a `w` x `h` image: (x, y, side).
 fn square_crop(w: u32, h: u32) -> (u32, u32, u32) {
     let side = w.min(h);
@@ -963,10 +970,21 @@ impl Renderer {
 
             let ear = notch::ear(v.size[1]) * s;
             let shape = self.notch_shape(l, r, nh, nr, ear)?;
+            // How far the pill has grown into the panel (0: pill, 1: open).
+            let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
+            // A thin soft shadow under the open panel (the pill and banners have none): faint black
+            // strokes of the outline, widest first, drawn a little lower; the fill covers the inside.
+            if open > 0.0 && v.mode != Mode::Alert {
+                let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
+                rt.SetTransform(&(Matrix3x2::translation(0.0, SHADOW_DY * s) * base));
+                for k in (1..=SHADOW_STEPS).rev() {
+                    rt.DrawGeometry(&shape, &brush(color(0.0, 0.0, 0.0, SHADOW_ALPHA / SHADOW_STEPS as f32 * open))?, 2.0 * SHADOW_STEP * k as f32 * s, &self.round);
+                }
+                rt.SetTransform(&base);
+            }
             rt.FillGeometry(&shape, &brush(grey(0.0, 1.0))?, None);
             // Music page: the cover's colour rises from the bottom, black at the top. The pill stays
             // black; the glow grows in with the panel.
-            let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
             // During a page change the glow follows the Music page's own fade, so it never shows
             // under the Health or Tasks page it is replacing (or lingers under one arriving).
             let gate = match v.leaving {
