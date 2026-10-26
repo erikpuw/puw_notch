@@ -355,7 +355,7 @@ struct CoverCache {
     track_key: u64,
     bytes: Option<Arc<Vec<u8>>>,
     bitmap: Option<ID2D1Bitmap>,
-    /// Colour of the glow around the notch while this cover is up.
+    /// Colour the Music page fades into while this cover is up (None: no cover).
     glow: Option<(f32, f32, f32)>,
 }
 
@@ -386,17 +386,39 @@ fn soft_text(tint: Option<(f32, f32, f32)>, grey_v: f32, a: f32) -> D2D1_COLOR_F
     }
 }
 
-/// One premultiplied BGRA pixel (the cover's average) -> glow colour: the same hue at full
-/// brightness. None for covers too dark or too grey to tint anything.
-fn glow_tint([b, g, r, a]: [u8; 4]) -> Option<(f32, f32, f32)> {
-    if a == 0 {
-        return None;
+/// Tint for covers with no colour to speak of (black, white, grey): a light grey.
+const GLOW_NEUTRAL: (f32, f32, f32) = (0.8, 0.8, 0.8);
+
+/// A small copy of the cover (premultiplied BGRA pixels) -> glow colour: its most prominent hue
+/// at full brightness. Pixels vote for their 30-degree hue bin by how vivid and bright they are;
+/// the winning bin's colours are averaged, so one strong colour beats a muddy overall average.
+/// Covers that are nearly all black or grey get GLOW_NEUTRAL.
+fn glow_tint(pixels: &[u8]) -> (f32, f32, f32) {
+    let mut bins = [(0.0f32, [0.0f32; 3]); 12];
+    for px in pixels.chunks_exact(4).filter(|p| p[3] > 0) {
+        let un = |c: u8| (c as f32 / px[3] as f32).min(1.0);
+        let (r, g, b) = (un(px[2]), un(px[1]), un(px[0]));
+        let max = r.max(g).max(b);
+        let chroma = max - r.min(g).min(b);
+        let weight = chroma * chroma * max;
+        if chroma < 0.1 || weight <= 0.0 {
+            continue;
+        }
+        let hue = if max == r { ((g - b) / chroma).rem_euclid(6.0) } else if max == g { (b - r) / chroma + 2.0 } else { (r - g) / chroma + 4.0 };
+        let bin = &mut bins[((hue * 2.0) as usize).min(11)];
+        bin.0 += weight;
+        for (sum, c) in bin.1.iter_mut().zip([r, g, b]) {
+            *sum += weight * c;
+        }
     }
-    let un = |c: u8| (c as f32 / a as f32).min(1.0);
-    let (r, g, b) = (un(r), un(g), un(b));
+    let (weight, sum) = bins.into_iter().fold((0.0, [0.0; 3]), |best, bin| if bin.0 > best.0 { bin } else { best });
+    // Under ~1% of the pixels at a pale tint: not enough colour to bother with.
+    if weight <= pixels.len() as f32 / 4.0 * 0.0005 {
+        return GLOW_NEUTRAL;
+    }
+    let [r, g, b] = sum.map(|c| c / weight);
     let max = r.max(g).max(b);
-    let chroma = max - r.min(g).min(b);
-    (max >= 0.12 && chroma >= 0.06).then(|| (r / max, g / max, b / max))
+    (r / max, g / max, b / max)
 }
 
 pub struct Renderer {
@@ -568,14 +590,14 @@ impl Renderer {
                 let frame = decoder.GetFrame(0).ok()?;
                 let conv = wic.CreateFormatConverter().ok()?;
                 conv.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
-                // Average colour: the whole cover scaled down to one pixel.
-                let one = wic.CreateBitmapScaler().ok()?;
-                one.Initialize(&conv, 1, 1, WICBitmapInterpolationModeFant).ok()?;
-                let mut px = [0u8; 4];
-                one.CopyPixels(std::ptr::null(), 4, &mut px).ok()?;
-                Some((self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()?, glow_tint(px)))
+                // Glow colour: from the cover scaled down to 16x16.
+                let small = wic.CreateBitmapScaler().ok()?;
+                small.Initialize(&conv, 16, 16, WICBitmapInterpolationModeFant).ok()?;
+                let mut px = [0u8; 16 * 16 * 4];
+                small.CopyPixels(std::ptr::null(), 16 * 4, &mut px).ok()?;
+                Some((self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()?, glow_tint(&px)))
             });
-            let (bitmap, glow) = match decoded { Some((b, g)) => (Some(b), g), None => (None, None) };
+            let (bitmap, glow) = match decoded { Some((b, g)) => (Some(b), Some(g)), None => (None, None) };
             self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), bitmap, glow });
         }
         self.cover.as_ref().and_then(|c| c.bitmap.clone())
@@ -1416,13 +1438,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn glow_tint_keeps_hue_and_skips_dull_covers() {
-        assert_eq!(glow_tint([0, 0, 100, 255]), Some((1.0, 0.0, 0.0)), "dark red -> full red");
-        assert_eq!(glow_tint([0, 50, 100, 255]), Some((1.0, 0.5, 0.0)), "orange keeps its mix");
-        assert_eq!(glow_tint([0, 0, 50, 100]), Some((1.0, 0.0, 0.0)), "premultiplied alpha is undone");
-        assert_eq!(glow_tint([10, 10, 10, 255]), None, "near black");
-        assert_eq!(glow_tint([128, 128, 128, 255]), None, "grey");
-        assert_eq!(glow_tint([0, 0, 0, 0]), None, "transparent");
+    fn glow_tint_picks_the_strongest_hue_and_greys_out_dull_covers() {
+        let px = |b: u8, g: u8, r: u8, a: u8, n: usize| [b, g, r, a].repeat(n);
+        assert_eq!(glow_tint(&px(0, 0, 100, 255, 4)), (1.0, 0.0, 0.0), "dark red -> full red");
+        assert_eq!(glow_tint(&px(0, 50, 100, 255, 4)), (1.0, 0.5, 0.0), "orange keeps its mix");
+        assert_eq!(glow_tint(&px(0, 0, 50, 100, 4)), (1.0, 0.0, 0.0), "premultiplied alpha is undone");
+        // Mostly grey with a little vivid blue: the blue wins, not a grey-blue average.
+        let mixed = [px(120, 120, 120, 255, 200), px(255, 40, 0, 255, 5)].concat();
+        let (r, _, b) = glow_tint(&mixed);
+        assert!(b == 1.0 && r < 0.3, "blue, got r={r} b={b}");
+        // Red beats the blue when there is more of it.
+        let two = [px(255, 0, 0, 255, 2), px(0, 0, 255, 255, 6)].concat();
+        assert_eq!(glow_tint(&two), (1.0, 0.0, 0.0));
+        for dull in [px(10, 10, 10, 255, 256), px(128, 128, 128, 255, 256), px(255, 255, 255, 255, 256), px(0, 0, 0, 0, 256), Vec::new()] {
+            assert_eq!(glow_tint(&dull), GLOW_NEUTRAL);
+        }
     }
 
     #[test]
