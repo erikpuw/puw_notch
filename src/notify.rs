@@ -21,6 +21,8 @@ pub struct Toast {
 /// One notification on the panel's Notifications page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {
+    /// App user model id: where Windows takes the app's icon from.
+    pub id: String,
     pub app: String,
     pub title: String,
     pub body: String,
@@ -153,7 +155,8 @@ impl Reader {
                 let (title, body) = parse_payload(&self.text(stmt, 1));
                 if !title.is_empty() {
                     let at = local_stamp((self.sql.col_int)(stmt, 2), utc_offset_min);
-                    out.push(Note { app: app_name(&self.text(stmt, 0)), title, body, at });
+                    let id = self.text(stmt, 0);
+                    out.push(Note { app: app_name(&id), id, title, body, at });
                 }
             }
             (self.sql.finalize)(stmt);

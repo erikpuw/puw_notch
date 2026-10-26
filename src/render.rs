@@ -1,7 +1,8 @@
 //! Direct2D drawing into a 32-bit DIB, shown with UpdateLayeredWindow (per-pixel alpha).
 //! Pixels with alpha 0 let the mouse through, so the drawn shape is the hit area.
 
-use windows::core::{w, Result, PCWSTR};
+use windows::core::{w, Result, HSTRING, PCWSTR};
+use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY};
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -434,6 +435,8 @@ pub struct Renderer {
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
     /// Decoded cover of the current track (keyed by Track::art_key).
     cover: Option<CoverCache>,
+    /// Start-menu icon per app id (None: Windows has none for it); asked once per app.
+    app_icons: HashMap<String, Option<ID2D1Bitmap>>,
     /// Icon slots that just changed glyph: (current, previous, when) for the morph.
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
     /// Round caps and joins for the robot face's strokes.
@@ -506,7 +509,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -601,6 +604,25 @@ impl Renderer {
             self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), bitmap, glow });
         }
         self.cover.as_ref().and_then(|c| c.bitmap.clone())
+    }
+
+    /// The icon Windows shows for this app id (the shell's AppsFolder knows packaged and
+    /// Start-menu apps alike).
+    fn app_icon(&mut self, id: &str) -> Option<ID2D1Bitmap> {
+        if !self.app_icons.contains_key(id) {
+            let bitmap = (|| unsafe {
+                let item: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(format!("shell:AppsFolder\\{id}")), None).ok()?;
+                let hbmp = item.GetImage(SIZE { cx: 64, cy: 64 }, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY).ok()?;
+                let wic = self.wic.as_ref()?;
+                let src = wic.CreateBitmapFromHBITMAP(hbmp, HPALETTE::default(), WICBitmapUseAlpha);
+                let _ = DeleteObject(hbmp.into());
+                let conv = wic.CreateFormatConverter().ok()?;
+                conv.Initialize(&src.ok()?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
+                self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()
+            })();
+            self.app_icons.insert(id.to_string(), bitmap);
+        }
+        self.app_icons[id].clone()
     }
 
     /// iPhone-style notch: flat top on the screen edge, concave "ears" flaring into it,
@@ -797,6 +819,7 @@ impl Renderer {
         let fonts = self.fonts(scale)?;
         let cover = v.music.and_then(|t| self.cover(t));
         let tinted = if v.live && v.page == Page::Music { self.cover.as_ref().and_then(|c| c.glow) } else { None };
+        let note_icons: Vec<Option<ID2D1Bitmap>> = if v.page == Page::Notify { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         let rt = &self.rt;
         let s = scale;
         let [nw, nh, nr] = v.size.map(|d| d * s);
@@ -1244,9 +1267,18 @@ impl Renderer {
                                     else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
                                 // App tile: its initial on a colour taken from its name.
                                 let tile = rect(cl, y + 3.0 * s, cl + 30.0 * s, y + 33.0 * s);
-                                let (tr_, tg, tb) = app_tint(&n.app);
-                                rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &brush(color(tr_, tg, tb, a))?);
-                                text(&app_initial(&n.app), F_TITLE, tile, center, grey(1.0, a))?;
+                                match note_icons.get(scroll + row).and_then(|i| i.as_ref()) {
+                                    // The app's own icon on a light-grey tile, so dark logos show on black.
+                                    Some(icon) => {
+                                        rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &brush(grey(0.16, a))?);
+                                        rt.DrawBitmap(icon, Some(&rect(tile.left + 3.0 * s, tile.top + 3.0 * s, tile.right - 3.0 * s, tile.bottom - 3.0 * s)), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                                    }
+                                    None => {
+                                        let (tr_, tg, tb) = app_tint(&n.app);
+                                        rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &brush(color(tr_, tg, tb, a))?);
+                                        text(&app_initial(&n.app), F_TITLE, tile, center, grey(1.0, a))?;
+                                    }
+                                }
                                 let tx = cl + 38.0 * s;
                                 text(&when, F_LABEL, rect(cr - 64.0 * s, y, cr, y + 20.0 * s), trail, grey(0.55, a))?;
                                 text(&n.title, F_TITLE, rect(tx, y, cr - 68.0 * s, y + 20.0 * s), lead, grey(1.0, a))?;

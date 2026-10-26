@@ -12,7 +12,7 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
 - **4 pages** (switch with ‹ ›):
   - **Music**: cover art, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, click to seek, the Music page fades into the cover's colour towards the bottom while playing. Works with any app using Windows media controls, plus iTunes and foobar2000.
   - **Tasks**: one list for tasks and appointments. Type "Buy milk", "Call 20:00" (time only = today) or "Dentist 28/10 14:30", "Call mom tomorrow 9h" (with a date = scheduled). Tick / edit / delete; overdue tasks stay, marked red. ⚙ picks an early reminder of 0–60 min, plus one on time.
-  - **Notifications**: read back the ~30 latest Windows notifications (newest first, scroll with the wheel).
+  - **Notifications**: read back the ~30 latest Windows notifications (newest first, scroll with the wheel), each with its app's icon.
   - **Health**: water and stand-up reminders with adjustable times and amounts.
 - **Banners**: Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth, network, battery.
 - **Idle robot**: after 30 s without input, an LED face (eyes and mouth) replaces the clock, looks around below, blinks and changes expression (curious, wink, excited; often happy while charging; sad on a low battery); after 5 min it falls asleep with a drifting pixel z; when you are back it grins at the cursor, centres itself, then hands the pill back to clock and battery. Toggle in the tray.
