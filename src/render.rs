@@ -276,6 +276,12 @@ pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, pa
 }
 
 /// Overshoot easing for the page morph: arrives a touch past and settles back.
+/// Opacity of the page leaving and the page arriving at progress `t` (0..1) of a page change.
+/// The old page is gone before the new one shows, so their text never overlaps (ghosting).
+fn page_fades(t: f32) -> (f32, f32) {
+    ((1.0 - t * 3.5).clamp(0.0, 1.0), ((t - 0.2) * 2.5).clamp(0.0, 1.0))
+}
+
 fn ease_out_back(t: f32) -> f32 {
     let (c1, t) = (1.3, t.clamp(0.0, 1.0) - 1.0);
     1.0 + (c1 + 1.0) * t * t * t + c1 * t * t
@@ -930,9 +936,16 @@ impl Renderer {
             // Music page: the cover's colour rises from the bottom, black at the top. The pill stays
             // black; the glow grows in with the panel.
             let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
+            // During a page change the glow follows the Music page's own fade, so it never shows
+            // under the Health or Tasks page it is replacing (or lingers under one arriving).
+            let gate = match v.leaving {
+                Some((_, t, _)) if v.page == Page::Music => page_fades(t).1,
+                Some((Page::Music, t, _)) => page_fades(t).0,
+                _ => 1.0,
+            };
             if level > 0.0 && open > 0.0 && v.mode != Mode::Alert {
                 let (gr, gg, gb) = glow_bottom(tint);
-                let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level) };
+                let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level * gate) };
                 let stops = rt.CreateGradientStopCollection(&[stop(0.0, 0.0), stop(0.4, 0.12), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                 let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
                 rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
@@ -1047,8 +1060,9 @@ impl Renderer {
                 match v.leaving {
                     Some((from, t, dir)) => {
                         let d = dir as f32 * 24.0 * s;
-                        draw_title(from, -d * t.min(1.0), (1.0 - t * 1.8).max(0.0))?;
-                        draw_title(v.page, d * (1.0 - ease_out_back(t)), (t * 1.6).min(1.0))?;
+                        let (out_a, in_a) = page_fades(t);
+                        draw_title(from, -d * t.min(1.0), out_a)?;
+                        draw_title(v.page, d * (1.0 - ease_out_back(t)), in_a)?;
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
@@ -1443,8 +1457,9 @@ impl Renderer {
                     Some((from, t, dir)) => {
                         let span = (cr - cl) * 0.55;
                         let d = dir as f32;
-                        draw_page(from, -d * span * t.min(1.0), (1.0 - t * 1.8).max(0.0))?;
-                        draw_page(v.page, d * span * (1.0 - ease_out_back(t)), (t * 1.6).min(1.0))?;
+                        let (out_a, in_a) = page_fades(t);
+                        draw_page(from, -d * span * t.min(1.0), out_a)?;
+                        draw_page(v.page, d * span * (1.0 - ease_out_back(t)), in_a)?;
                     }
                     None => draw_page(v.page, 0.0, 1.0)?,
                 }
@@ -1552,6 +1567,16 @@ mod tests {
         assert!(c.r > c.g && c.g >= 0.8, "full glow: light, leaning towards red");
         let half = soft_text(red, 0.5, 0.6, 1.0);
         assert!(half.g > 0.6 && half.g < c.g, "in between while fading");
+    }
+
+    #[test]
+    fn page_change_never_shows_both_pages_strongly() {
+        assert_eq!(page_fades(0.0), (1.0, 0.0));
+        assert_eq!(page_fades(1.0), (0.0, 1.0));
+        for i in 0..=100 {
+            let (out_a, in_a) = page_fades(i as f32 / 100.0);
+            assert!(out_a * in_a <= 0.05, "t={}: old {out_a:.2} over new {in_a:.2}", i as f32 / 100.0);
+        }
     }
 
     #[test]
