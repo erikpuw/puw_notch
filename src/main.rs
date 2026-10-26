@@ -87,8 +87,6 @@ struct App {
     notifications: Option<notify::Reader>,
     /// What the Alert banner shows right now.
     banner: Option<Toast>,
-    /// When the banner appeared.
-    banner_at: Instant,
     /// Last brightness Windows reported; the first report (sent on registering) is not a change.
     last_brightness: Option<u8>,
     audio: Option<audio::Audio>,
@@ -176,7 +174,6 @@ impl App {
             live: self.notch.live,
             robot: eyes,
             phase: self.started.elapsed().as_secs_f32(),
-            banner_age: self.banner_at.elapsed().as_secs_f32(),
             hovered: self.hovered_button,
             page: self.page,
             leaving: self.page_anim.map(|(from, t0, dir)| (from, (t0.elapsed().as_secs_f32() / PAGE_MORPH_S).min(1.0), dir)),
@@ -431,7 +428,6 @@ impl App {
             return false;
         }
         self.banner = Some(t);
-        self.banner_at = Instant::now();
         unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
         self.kick();
         true
@@ -1048,7 +1044,6 @@ fn main() -> windows::core::Result<()> {
             battery: system::battery(),
             notifications: notify::Reader::open(),
             banner: None,
-            banner_at: Instant::now(),
             last_brightness: None,
             audio: audio::Audio::new(),
             mic_muted: None,
