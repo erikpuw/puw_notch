@@ -110,8 +110,37 @@ fn manage(settings: &str, backup: &str, alive: &AtomicBool) -> io::Result<()> {
     result.and(restored)
 }
 
+/// Registry key names cannot hold a backslash, so a path is journaled with `%` and `\` escaped.
+fn encode(path: &str) -> String { path.replace('%', "%25").replace('\\', "%5C") }
+fn decode(name: &str) -> String { name.replace("%5C", "\\").replace("%25", "%") }
+
+/// The apps' own settings keys, as paths below `settings`: the keys without subkeys. An app whose
+/// AUMID is a path ("{GUID}\WindowsPowerShell\v1.0\powershell.exe", classic desktop apps) is kept as
+/// nested keys, and Windows reads ShowBanner from the leaf, not from the parents on the way.
+fn leaf_paths(settings: &Key) -> io::Result<Vec<String>> {
+    fn walk(key: &Key, prefix: &str, depth: u32, out: &mut Vec<String>) -> io::Result<()> {
+        for name in key.children()? {
+            let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}\\{name}") };
+            let child = match key.child(&name, false) {
+                Ok(child) => child,
+                Err(e) if e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND.0 as i32) => continue,
+                Err(e) => return Err(e),
+            };
+            if depth >= 8 || child.children()?.is_empty() {
+                out.push(path);
+            } else {
+                walk(&child, &path, depth + 1, out)?;
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(settings, "", 0, &mut out)?;
+    Ok(out)
+}
+
 fn suppress(settings: &Key, backup: &Key, seen: &mut HashSet<String>) -> io::Result<()> {
-    for name in settings.children()? {
+    for name in leaf_paths(settings)? {
         if seen.contains(&name) { continue; }
         let app = match settings.child(&name, false) {
             Ok(app) => app,
@@ -120,7 +149,7 @@ fn suppress(settings: &Key, backup: &Key, seen: &mut HashSet<String>) -> io::Res
         };
         let original = app.dword("ShowBanner")?;
         if original != Some(0) {
-            let journal = backup.child(&name, true)?;
+            let journal = backup.child(&encode(&name), true)?;
             if let Some(value) = original { journal.set("Original", value)?; }
             journal.set("Present", u32::from(original.is_some()))?;
             // Durable original first: a failure must never leave an unrecorded change.
@@ -143,7 +172,7 @@ fn restore(settings: &Key, backup: &Key) -> io::Result<()> {
                     1 => Some(journal.dword("Original")?.ok_or_else(|| io::Error::other("Missing banner backup value"))?),
                     _ => return Err(io::Error::other("Invalid banner backup marker")),
                 };
-                match settings.child(&name, false) {
+                match settings.child(&decode(&name), false) {
                     Ok(app) if app.dword("ShowBanner")? == Some(0) => {
                         match original {
                             Some(value) => app.set("ShowBanner", value)?,
@@ -286,13 +315,23 @@ mod tests {
         on.set("Enabled", 1).unwrap(); on.set("ShowInActionCenter", 1).unwrap();
         let off = settings.child("off", true).unwrap(); off.set("ShowBanner", 0).unwrap();
         let default = settings.child("default", true).unwrap();
+        // Desktop apps use a path as AUMID ("{GUID}\WindowsPowerShell\v1.0\powershell.exe"), which the
+        // registry keeps as nested keys: only the leaf is the app's own settings.
+        let nested = settings.child(r"{guid}\WindowsPowerShell\powershell.exe", true).unwrap();
+        let parent = settings.child("{guid}", false).unwrap();
         let mut seen = HashSet::new();
         suppress(&settings, &backup, &mut seen).unwrap();
         assert_eq!(on.dword("ShowBanner").unwrap(), Some(0));
         assert_eq!(default.dword("ShowBanner").unwrap(), Some(0));
+        assert_eq!(nested.dword("ShowBanner").unwrap(), Some(0), "the leaf key is the app's");
+        assert_eq!(parent.dword("ShowBanner").unwrap(), None, "parents of a path are no app");
         assert_eq!(on.dword("Enabled").unwrap(), Some(1));
         assert_eq!(on.dword("ShowInActionCenter").unwrap(), Some(1));
-        assert_eq!(backup.children().unwrap().len(), 2);
+        // The journal stays flat: a nested name is stored encoded, so it can be enumerated and deleted.
+        let mut journal = backup.children().unwrap();
+        journal.sort();
+        assert_eq!(journal, ["default", "on", r"{guid}%5CWindowsPowerShell%5Cpowershell.exe"]);
+        assert_eq!(decode(&encode(r"a%b\c")), r"a%b\c");
         // Discover apps registered after startup; don't undo manual banner changes.
         let late = settings.child("late", true).unwrap();
         on.set("ShowBanner", 2).unwrap();
@@ -306,12 +345,13 @@ mod tests {
         assert_eq!(off.dword("ShowBanner").unwrap(), Some(0));
         assert_eq!(default.dword("ShowBanner").unwrap(), None);
         assert_eq!(late.dword("ShowBanner").unwrap(), None);
+        assert_eq!(nested.dword("ShowBanner").unwrap(), None, "the nested app is restored too");
         assert!(backup.children().unwrap().is_empty());
         on.set("ShowBanner", 1).unwrap();
         suppress(&settings, &backup, &mut HashSet::new()).unwrap();
         restore(&settings, &backup).unwrap();
         assert_eq!(on.dword("ShowBanner").unwrap(), Some(1));
-        drop((on, off, default, late, settings, backup));
+        drop((on, off, default, late, nested, parent, settings, backup));
         unsafe { check(RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(wide(&root).as_ptr()))).unwrap(); }
     }
 }
