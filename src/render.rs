@@ -24,7 +24,7 @@ use crate::notify::{Note, Toast};
 use crate::system::Battery;
 use crate::health::{self, Health, Setting};
 use crate::i18n::tr;
-use crate::robot::{Eyes, Face};
+use crate::robot::{curious_eyes, Eyes, Face};
 use crate::todo::{self, Item};
 
 /// Everything the painter needs for one frame (logical px).
@@ -587,7 +587,12 @@ impl Renderer {
             match e.face {
                 Face::Normal if e.open < 0.5 => block(x, ey + 3.0 * s, 7.0 * s, 1.6 * s),
                 Face::Normal => block(x, ey, 7.0 * s, 9.0 * s),
-                Face::Curious => if side < 0.0 { block(x, ey - 1.0 * s, 7.0 * s, 11.0 * s) } else { block(x, ey + 1.0 * s, 7.0 * s, 6.0 * s) },
+                Face::Curious => {
+                    let (left, right) = curious_eyes(e.gaze.0);
+                    let h = if side < 0.0 { left } else { right };
+                    // Bottoms line up, so the big eye grows upward.
+                    block(x, ey + (4.5 - h / 2.0) * s, 7.0 * s, h * s)
+                }
                 Face::Wink if side < 0.0 => block(x, ey, 7.0 * s, 9.0 * s),
                 Face::Happy | Face::Wink => stroke(&[p(x - 4.0 * u, ey + 3.0 * u), p(x, ey - 2.0 * u), p(x + 4.0 * u, ey + 3.0 * u)], 2.0)?,
                 Face::Excited => {

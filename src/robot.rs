@@ -34,12 +34,19 @@ pub enum Face {
     Excited,
     /// Round eyes, o mouth.
     Surprised,
-    /// One tall eye, one short, flat mouth.
+    /// The eye on the side it looks toward big, the other small (`curious_eyes`), flat mouth.
     Curious,
     /// Drooping eyes, frown.
     Sad,
     /// Closed arcs, flat mouth, a z drifting up.
     Sleep,
+}
+
+/// Curious face: (left, right) eye heights in logical px for a sideways gaze; the eye on the
+/// side it looks toward is the big one (looking right: right eye 11, left 6).
+pub fn curious_eyes(gaze_x: f32) -> (f32, f32) {
+    let t = gaze_x.clamp(-1.0, 1.0);
+    (8.5 - 2.5 * t, 8.5 + 2.5 * t)
 }
 
 /// What the battery says about the robot's mood.
@@ -264,6 +271,17 @@ mod tests {
         assert!(normal > faces.len() / 2, "mostly the plain face: {normal}/{}", faces.len());
         assert!(play > 0, "now and then curious / wink / excited");
         assert_eq!(normal + play, faces.len(), "no other face while idle and fine");
+    }
+
+    #[test]
+    fn curious_eye_on_the_side_it_looks_is_bigger() {
+        let (l, r) = curious_eyes(1.0);
+        assert!(r > l, "looking right: right eye big ({r}), left small ({l})");
+        let (l, r) = curious_eyes(-1.0);
+        assert!(l > r, "looking left: left eye big");
+        let (l, r) = curious_eyes(0.0);
+        assert_eq!(l, r, "straight ahead: same size");
+        assert_eq!(curious_eyes(5.0), curious_eyes(1.0), "clamped");
     }
 
     #[test]
