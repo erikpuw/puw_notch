@@ -378,12 +378,34 @@ fn glow_bottom((r, g, b): (f32, f32, f32)) -> (f32, f32, f32) {
     (r * k, g * k, b * k)
 }
 
-/// Secondary text: grey, or on the Music page white leaning towards the cover's tint so it sits
-/// in the glow instead of looking pasted on.
-fn soft_text(tint: Option<(f32, f32, f32)>, grey_v: f32, a: f32) -> D2D1_COLOR_F {
-    match tint {
-        Some((r, g, b)) => color(0.8 + 0.2 * r, 0.8 + 0.2 * g, 0.8 + 0.2 * b, a),
-        None => grey(grey_v, a),
+/// Secondary text: grey, shifting with `level` (0..1, the glow's strength) to white leaning
+/// towards the cover's tint, so it sits in the glow instead of looking pasted on.
+fn soft_text((r, g, b): (f32, f32, f32), level: f32, grey_v: f32, a: f32) -> D2D1_COLOR_F {
+    let mix = |tinted: f32| grey_v + (0.8 + 0.2 * tinted - grey_v) * level;
+    color(mix(r), mix(g), mix(b), a)
+}
+
+/// Seconds for the glow to fade in or out and to move to a new cover's colour.
+const GLOW_FADE_S: f32 = 0.3;
+
+/// One animation step of the Music-page glow towards `target` (None: fade out, keeping the last
+/// colour). Returns the new (colour, level) and whether it still has somewhere to go.
+fn glow_step(color: (f32, f32, f32), level: f32, target: Option<(f32, f32, f32)>, dt: f32) -> ((f32, f32, f32), f32, bool) {
+    let k = 1.0 - (-3.0 * dt / GLOW_FADE_S).exp();
+    let lerp = |a: f32, b: f32| a + (b - a) * k;
+    match target {
+        Some(t) => {
+            // From invisible the colour is simply set; otherwise it slides to the new one.
+            let from = if level < 0.02 { t } else { color };
+            let c = (lerp(from.0, t.0), lerp(from.1, t.1), lerp(from.2, t.2));
+            let l = lerp(level, 1.0);
+            let done = l > 0.995 && (c.0 - t.0).abs().max((c.1 - t.1).abs()).max((c.2 - t.2).abs()) < 0.005;
+            if done { (t, 1.0, false) } else { (c, l, true) }
+        }
+        None => {
+            let l = level * (1.0 - k);
+            if l < 0.005 { (color, 0.0, false) } else { (color, l, true) }
+        }
     }
 }
 
@@ -435,6 +457,8 @@ pub struct Renderer {
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
     /// Decoded cover of the current track (keyed by Track::art_key).
     cover: Option<CoverCache>,
+    /// The Music page's glow: (colour, strength 0..1, time of the last frame), see glow_step.
+    glow: ((f32, f32, f32), f32, Instant),
     /// Start-menu icon per app id (None: Windows has none for it); asked once per app.
     app_icons: HashMap<String, Option<ID2D1Bitmap>>,
     /// Icon slots that just changed glyph: (current, previous, when) for the morph.
@@ -509,7 +533,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -818,7 +842,11 @@ impl Renderer {
         self.ensure_surface(w, h)?;
         let fonts = self.fonts(scale)?;
         let cover = v.music.and_then(|t| self.cover(t));
-        let tinted = if v.live && v.page == Page::Music { self.cover.as_ref().and_then(|c| c.glow) } else { None };
+        let target = if v.live && v.page == Page::Music { self.cover.as_ref().and_then(|c| c.glow) } else { None };
+        let now = Instant::now();
+        let dt = now.duration_since(self.glow.2).as_secs_f32().min(0.1);
+        let (tint, level, glow_busy) = glow_step(self.glow.0, self.glow.1, target, dt);
+        self.glow = (tint, level, now);
         let note_icons: Vec<Option<ID2D1Bitmap>> = if v.page == Page::Notify { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         let rt = &self.rt;
         let s = scale;
@@ -902,9 +930,9 @@ impl Renderer {
             // Music page: the cover's colour rises from the bottom, black at the top. The pill stays
             // black; the glow grows in with the panel.
             let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
-            if let (Some(tint), true, true) = (tinted, open > 0.0, v.mode != Mode::Alert) {
+            if level > 0.0 && open > 0.0 && v.mode != Mode::Alert {
                 let (gr, gg, gb) = glow_bottom(tint);
-                let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open) };
+                let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level) };
                 let stops = rt.CreateGradientStopCollection(&[stop(0.0, 0.0), stop(0.4, 0.12), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                 let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
                 rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
@@ -1136,7 +1164,7 @@ impl Renderer {
                                 Some(t) => {
                                     let title = if t.title.is_empty() { tr("Đang phát", "Playing") } else { &t.title };
                                     text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
-                                    text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, soft_text(tinted, 0.65, a))?;
+                                    text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, soft_text(tint, level, 0.65, a))?;
                                     let lyric = t.lyric_now().unwrap_or_else(|| hovered.map_or(
                                         if t.duration_ms == 0 { tr("Trình phát chưa cung cấp thời gian", "The player gives no timeline") }
                                         else if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
@@ -1150,11 +1178,11 @@ impl Renderer {
                             let by = 112.0 * s;
                             let lw = 40.0 * s;
                             let (bl, brr) = (cl + lw, cr - lw);
-                            text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, soft_text(tinted, 0.6, a))?;
-                            text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, soft_text(tinted, 0.6, a))?;
+                            text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, soft_text(tint, level, 0.6, a))?;
+                            text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, soft_text(tint, level, 0.6, a))?;
                             let th = 4.0 * s;
                             let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
-                            rt.FillRoundedRectangle(&bar(brr), &brush(if tinted.is_some() { color(1.0, 1.0, 1.0, 0.3 * a) } else { grey(0.25, a) })?);
+                            rt.FillRoundedRectangle(&bar(brr), &brush({ let g = 0.25 + 0.75 * level; color(g, g, g, a * (1.0 - 0.7 * level)) })?);
                             if dur > 0 {
                                 let p = (pos as f32 / dur as f32).clamp(0.0, 1.0);
                                 rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &brush(grey(1.0, a))?);
@@ -1460,7 +1488,7 @@ impl Renderer {
                 Some(&blend),
                 ULW_ALPHA,
             )?;
-            Ok(morphing.get())
+            Ok(morphing.get() || glow_busy)
         }
     }
 }
@@ -1517,10 +1545,35 @@ mod tests {
     }
 
     #[test]
-    fn soft_text_is_grey_without_tint_and_light_with_it() {
-        assert_eq!(soft_text(None, 0.6, 1.0).r, 0.6);
-        let c = soft_text(Some((1.0, 0.0, 0.0)), 0.6, 1.0);
-        assert!(c.r > c.g && c.g >= 0.8, "light, leaning towards red");
+    fn soft_text_moves_from_grey_to_tinted_white_with_the_level() {
+        let red = (1.0, 0.0, 0.0);
+        assert_eq!(soft_text(red, 0.0, 0.6, 1.0).r, 0.6, "no glow: plain grey");
+        let c = soft_text(red, 1.0, 0.6, 1.0);
+        assert!(c.r > c.g && c.g >= 0.8, "full glow: light, leaning towards red");
+        let half = soft_text(red, 0.5, 0.6, 1.0);
+        assert!(half.g > 0.6 && half.g < c.g, "in between while fading");
+    }
+
+    #[test]
+    fn glow_step_fades_in_slides_between_covers_and_settles() {
+        let (red, blue) = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0));
+        // From nothing: takes the colour at once, fades the strength in.
+        let (c, l, busy) = glow_step(GLOW_NEUTRAL, 0.0, Some(red), 0.016);
+        assert_eq!(c, red);
+        assert!(l > 0.0 && l < 0.3 && busy);
+        // Reaches the end and stops asking for frames.
+        let (mut c, mut l, mut busy) = (red, l, true);
+        for _ in 0..120 { (c, l, busy) = glow_step(c, l, Some(red), 0.016); }
+        assert_eq!((c, l, busy), (red, 1.0, false));
+        // A new cover while lit: the colour slides, it does not jump.
+        let (c2, l2, busy2) = glow_step(red, 1.0, Some(blue), 0.016);
+        assert!(busy2 && l2 == 1.0 && c2.0 < 1.0 && c2.0 > 0.8 && c2.2 > 0.0 && c2.2 < 0.2, "{c2:?}");
+        // No cover: fades out, keeps the colour, then stops.
+        let (c3, l3, busy3) = glow_step(red, 1.0, None, 0.016);
+        assert!(c3 == red && l3 < 1.0 && l3 > 0.8 && busy3);
+        let (mut l, mut busy) = (1.0, true);
+        for _ in 0..200 { (_, l, busy) = glow_step(red, l, None, 0.016); }
+        assert_eq!((l, busy), (0.0, false));
     }
 
     #[test]
