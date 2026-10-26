@@ -581,19 +581,20 @@ impl Renderer {
         };
         let (fx, fy) = (cx + e.gaze.0 * 3.0 * s, cy + e.gaze.1 * 2.4 * s);
         let (ey, my) = (fy - 3.0 * s, fy + 6.5 * s);
+        // An open eye `h` logical px tall, squeezed by a blink (never below a thin bar).
+        let lid = |h: f32| (h * e.open).max(1.6) * s;
         let u = s;
         for side in [-1.0f32, 1.0] {
             let x = fx + side * 14.0 * s;
             match e.face {
-                Face::Normal if e.open < 0.5 => block(x, ey + 3.0 * s, 7.0 * s, 1.6 * s),
-                Face::Normal | Face::Greet => block(x, ey, 7.0 * s, 9.0 * s),
+                Face::Normal | Face::Greet => block(x, ey, 7.0 * s, lid(9.0)),
                 Face::Curious => {
                     let (left, right) = curious_eyes(e.gaze.0);
                     let h = if side < 0.0 { left } else { right };
                     // Bottoms line up, so the big eye grows upward.
-                    block(x, ey + (4.5 - h / 2.0) * s, 7.0 * s, h * s)
+                    block(x, ey + (4.5 - h / 2.0) * s, 7.0 * s, lid(h))
                 }
-                Face::Wink if side < 0.0 => block(x, ey, 7.0 * s, 9.0 * s),
+                Face::Wink if side < 0.0 => block(x, ey, 7.0 * s, lid(9.0)),
                 Face::Happy | Face::Wink => stroke(&[p(x - 4.0 * u, ey + 3.0 * u), p(x, ey - 2.0 * u), p(x + 4.0 * u, ey + 3.0 * u)], 2.0)?,
                 Face::Excited => {
                     let d = -side; // '>' on the left, '<' on the right
@@ -601,7 +602,9 @@ impl Renderer {
                 }
                 Face::Sad => {
                     let d = -side; // inner corner lower: droopy eyes
-                    let pts = [p(x - 3.5 * u, ey - 2.0 * u - d * 1.5 * u), p(x + 3.5 * u, ey - 2.0 * u + d * 1.5 * u), p(x + 3.5 * u, ey + 4.0 * u), p(x - 3.5 * u, ey + 4.0 * u)];
+                    // Blinking squeezes the eye toward its middle (ey + 1).
+                    let v = |dy: f32| ey + 1.0 * u + (dy - 1.0) * u * e.open.max(0.18);
+                    let pts = [p(x - 3.5 * u, v(-2.0 - d * 1.5)), p(x + 3.5 * u, v(-2.0 + d * 1.5)), p(x + 3.5 * u, v(4.0)), p(x - 3.5 * u, v(4.0))];
                     unsafe { rt.FillGeometry(&path(&pts, true)?, &lit, None) };
                 }
                 Face::Sleep => stroke(&quad(p(x - 4.0 * u, ey + 1.0 * u), p(x, ey + 5.0 * u), p(x + 4.0 * u, ey + 1.0 * u)), 2.0)?,

@@ -64,6 +64,21 @@ const PLAY_EVERY: f32 = 4.0;
 const PLAY_JITTER: f32 = 3.0;
 const PLAY_S: f32 = 1.8;
 
+/// A blink: the lid shuts in `BLINK_CLOSE_S` and opens again a little slower, in `BLINK_OPEN_S`.
+const BLINK_CLOSE_S: f32 = 0.07;
+const BLINK_OPEN_S: f32 = 0.11;
+/// Chance that a blink is followed at once by a second one.
+const DOUBLE_BLINK: f32 = 0.2;
+
+/// Eye openness `t` seconds into a blink (1 outside it), eased down to 0.1 and back up.
+pub fn blink_open(t: f32) -> f32 {
+    if !(0.0..BLINK_CLOSE_S + BLINK_OPEN_S).contains(&t) {
+        return 1.0;
+    }
+    let x = if t < BLINK_CLOSE_S { t / BLINK_CLOSE_S } else { 1.0 - (t - BLINK_CLOSE_S) / BLINK_OPEN_S };
+    1.0 - 0.9 * x * x * (3.0 - 2.0 * x)
+}
+
 /// What the painter needs.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Eyes {
@@ -72,7 +87,7 @@ pub struct Eyes {
     pub alpha: f32,
     /// Gaze, about -1..1 sideways and -1..1.2 up / down (down is +).
     pub gaze: (f32, f32),
-    /// 1 open, 0.15 mid-blink (plain face only).
+    /// 1 open, down to 0.1 mid-blink (`blink_open`); 1 for faces whose eyes are already shut.
     pub open: f32,
     /// Seconds since the robot showed (drives the floating z).
     pub time: f32,
@@ -119,6 +134,10 @@ impl Robot {
         };
         let changed = next != self.state;
         if changed {
+            // Coming back to work: a blink right away, as if waking up.
+            if next == State::Look {
+                self.next_blink = self.clock;
+            }
             self.state = next;
             self.since = 0.0;
         }
@@ -156,9 +175,10 @@ impl Robot {
         let k = (dt * 9.0).min(1.0);
         self.gaze.0 += (target.0 - self.gaze.0) * k;
         self.gaze.1 += (target.1 - self.gaze.1) * k;
-        // Blink every 2-4.5 s for 0.12 s.
-        if t > self.next_blink + 0.12 {
-            self.next_blink = t + 2.0 + self.random() * 2.5;
+        // A blink every 2-4.5 s, now and then two in a row.
+        if t > self.next_blink + BLINK_CLOSE_S + BLINK_OPEN_S {
+            let gap = if self.random() < DOUBLE_BLINK { 0.08 } else { 2.0 + self.random() * 2.5 };
+            self.next_blink = t + gap;
         }
         // Now and then a playful face for a moment.
         if t >= self.next_play {
@@ -179,8 +199,9 @@ impl Robot {
             _ if t < self.play_until => self.play,
             _ => Face::Normal,
         };
-        let blinking = face == Face::Normal && t >= self.next_blink && t < self.next_blink + 0.12;
-        let open = if blinking { 0.15 } else { 1.0 };
+        // Faces with open eyes blink; ^ ^, > < and sleeping eyes are already shut.
+        let blinks = matches!(face, Face::Normal | Face::Greet | Face::Wink | Face::Curious | Face::Sad);
+        let open = if blinks { blink_open(t - self.next_blink) } else { 1.0 };
         Eyes { face, alpha: self.alpha, gaze: self.gaze, open, time: t }
     }
 }
@@ -288,7 +309,53 @@ mod tests {
     fn blinks_now_and_then() {
         let mut r = Robot::default();
         r.update(SHOW_S, true);
-        let closed = (0..400).filter(|_| r.step(0.025, None, Mood::Normal).open < 0.5).count();
+        let opens: Vec<f32> = (0..400).map(|_| r.step(0.025, None, Mood::Normal).open).collect();
+        let closed = opens.iter().filter(|o| **o < 0.5).count();
         assert!((2..=40).contains(&closed), "a few short blinks in 10 s, got {closed} frames");
+        assert!(opens.iter().any(|o| *o > 0.3 && *o < 0.8), "the lid passes half-way: a smooth blink, not a cut");
+    }
+
+    #[test]
+    fn blink_closes_fast_and_opens_slower() {
+        assert_eq!(blink_open(-0.1), 1.0);
+        assert!(blink_open(BLINK_CLOSE_S * 0.5) < 1.0 && blink_open(BLINK_CLOSE_S * 0.5) > 0.2);
+        assert!(blink_open(BLINK_CLOSE_S) < 0.15, "shut at the bottom");
+        assert!(blink_open(BLINK_CLOSE_S + BLINK_OPEN_S * 0.5) > blink_open(BLINK_CLOSE_S));
+        assert_eq!(blink_open(BLINK_CLOSE_S + BLINK_OPEN_S), 1.0);
+    }
+
+    #[test]
+    fn every_open_eyed_face_blinks_and_coming_back_blinks_at_once() {
+        let mut r = Robot::default();
+        r.update(SHOW_S, true);
+        r.step(1.0, None, Mood::Normal);
+        r.update(0, true);
+        let greet: Vec<Eyes> = (0..8).map(|_| r.step(0.02, None, Mood::Normal)).collect();
+        assert_eq!(greet[0].face, Face::Greet);
+        assert!(greet.iter().any(|e| e.open < 0.5), "a blink as you come back");
+        let mut r = Robot::default();
+        r.update(SHOW_S, true);
+        let sad = (0..400).filter(|_| r.step(0.025, None, Mood::Low).open < 0.5).count();
+        assert!(sad > 0, "the sad face blinks too");
+    }
+
+    #[test]
+    fn sometimes_blinks_twice() {
+        let mut r = Robot::default();
+        r.update(SHOW_S, true);
+        // Count blinks (open falling below half) and how many come within 0.5 s of the one before.
+        let (mut blinks, mut doubles, mut last, mut shut) = (0, 0, -9.0f32, false);
+        for i in 0..24_000 {
+            let e = r.step(0.025, None, Mood::Normal);
+            if e.open < 0.5 && !shut {
+                let t = i as f32 * 0.025;
+                if t - last < 0.5 {
+                    doubles += 1;
+                }
+                (blinks, last) = (blinks + 1, t);
+            }
+            shut = e.open < 0.5;
+        }
+        assert!(blinks > 50 && doubles > 0 && doubles * 2 < blinks, "{blinks} blinks, {doubles} double");
     }
 }
