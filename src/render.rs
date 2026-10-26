@@ -355,6 +355,27 @@ struct CoverCache {
     track_key: u64,
     bytes: Option<Arc<Vec<u8>>>,
     bitmap: Option<ID2D1Bitmap>,
+    /// Colour of the glow around the notch while this cover is up.
+    glow: Option<(f32, f32, f32)>,
+}
+
+/// Cover glow: the light reaches GLOW_STEPS * GLOW_STEP px past the notch and is GLOW_ALPHA
+/// opaque at its edge. The window has 40+ px of margin to draw it in.
+const GLOW_STEPS: u32 = 12;
+const GLOW_STEP: f32 = 3.4;
+const GLOW_ALPHA: f32 = 0.36;
+
+/// One premultiplied BGRA pixel (the cover's average) -> glow colour: the same hue at full
+/// brightness. None for covers too dark or too grey to tint anything.
+fn glow_tint([b, g, r, a]: [u8; 4]) -> Option<(f32, f32, f32)> {
+    if a == 0 {
+        return None;
+    }
+    let un = |c: u8| (c as f32 / a as f32).min(1.0);
+    let (r, g, b) = (un(r), un(g), un(b));
+    let max = r.max(g).max(b);
+    let chroma = max - r.min(g).min(b);
+    (max >= 0.12 && chroma >= 0.06).then(|| (r / max, g / max, b / max))
 }
 
 pub struct Renderer {
@@ -526,9 +547,15 @@ impl Renderer {
                 let frame = decoder.GetFrame(0).ok()?;
                 let conv = wic.CreateFormatConverter().ok()?;
                 conv.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
-                self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()
+                // Average colour: the whole cover scaled down to one pixel.
+                let one = wic.CreateBitmapScaler().ok()?;
+                one.Initialize(&conv, 1, 1, WICBitmapInterpolationModeFant).ok()?;
+                let mut px = [0u8; 4];
+                one.CopyPixels(std::ptr::null(), 4, &mut px).ok()?;
+                Some((self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()?, glow_tint(px)))
             });
-            self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), bitmap: decoded });
+            let (bitmap, glow) = match decoded { Some((b, g)) => (Some(b), g), None => (None, None) };
+            self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), bitmap, glow });
         }
         self.cover.as_ref().and_then(|c| c.bitmap.clone())
     }
@@ -726,6 +753,7 @@ impl Renderer {
         self.ensure_surface(w, h)?;
         let fonts = self.fonts(scale)?;
         let cover = v.music.and_then(|t| self.cover(t));
+        let glow = if v.live { self.cover.as_ref().and_then(|c| c.glow) } else { None };
         let rt = &self.rt;
         let s = scale;
         let [nw, nh, nr] = v.size.map(|d| d * s);
@@ -803,7 +831,15 @@ impl Renderer {
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
             let ear = notch::ear(v.size[1]) * s;
-            rt.FillGeometry(&self.notch_shape(l, r, nh, nr, ear)?, &brush(grey(0.0, 1.0))?, None);
+            let shape = self.notch_shape(l, r, nh, nr, ear)?;
+            // Soft glow in the cover's colour: wide faint strokes of the outline, widest first, so
+            // the light is strongest at the edge and fades outward (the black fill covers the inside).
+            if let (Some((gr, gg, gb)), true) = (glow, v.mode != Mode::Alert) {
+                for k in (1..=GLOW_STEPS).rev() {
+                    rt.DrawGeometry(&shape, &brush(color(gr, gg, gb, GLOW_ALPHA / GLOW_STEPS as f32))?, 2.0 * GLOW_STEP * k as f32 * s, &self.round);
+                }
+            }
+            rt.FillGeometry(&shape, &brush(grey(0.0, 1.0))?, None);
 
             // Each layout fades in as the pill reaches its size.
             let fade = |from: f32, span: f32| ((nh - from * s) / (span * s)).clamp(0.0, 1.0);
@@ -1354,6 +1390,16 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glow_tint_keeps_hue_and_skips_dull_covers() {
+        assert_eq!(glow_tint([0, 0, 100, 255]), Some((1.0, 0.0, 0.0)), "dark red -> full red");
+        assert_eq!(glow_tint([0, 50, 100, 255]), Some((1.0, 0.5, 0.0)), "orange keeps its mix");
+        assert_eq!(glow_tint([0, 0, 50, 100]), Some((1.0, 0.0, 0.0)), "premultiplied alpha is undone");
+        assert_eq!(glow_tint([10, 10, 10, 255]), None, "near black");
+        assert_eq!(glow_tint([128, 128, 128, 255]), None, "grey");
+        assert_eq!(glow_tint([0, 0, 0, 0]), None, "transparent");
+    }
 
     #[test]
     fn app_initial_skips_symbols_and_uppercases() {
