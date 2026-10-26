@@ -359,11 +359,32 @@ struct CoverCache {
     glow: Option<(f32, f32, f32)>,
 }
 
-/// Cover glow: the light reaches GLOW_STEPS * GLOW_STEP px in from the notch's edge and is
-/// GLOW_ALPHA opaque there.
-const GLOW_STEPS: u32 = 10;
-const GLOW_STEP: f32 = 3.0;
-const GLOW_ALPHA: f32 = 0.30;
+/// Relative luminance of an sRGB colour (WCAG).
+fn luminance(r: f32, g: f32, b: f32) -> f32 {
+    let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+}
+
+/// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
+const GLOW_MAX_LUM: f32 = 0.17;
+
+/// Glow colour at the panel's bottom: the cover's tint, dimmed until white controls read on it.
+fn glow_bottom((r, g, b): (f32, f32, f32)) -> (f32, f32, f32) {
+    let mut k = 0.75;
+    while k > 0.05 && luminance(r * k, g * k, b * k) > GLOW_MAX_LUM {
+        k -= 0.02;
+    }
+    (r * k, g * k, b * k)
+}
+
+/// Secondary text: grey, or on the Music page white leaning towards the cover's tint so it sits
+/// in the glow instead of looking pasted on.
+fn soft_text(tint: Option<(f32, f32, f32)>, grey_v: f32, a: f32) -> D2D1_COLOR_F {
+    match tint {
+        Some((r, g, b)) => color(0.8 + 0.2 * r, 0.8 + 0.2 * g, 0.8 + 0.2 * b, a),
+        None => grey(grey_v, a),
+    }
+}
 
 /// One premultiplied BGRA pixel (the cover's average) -> glow colour: the same hue at full
 /// brightness. None for covers too dark or too grey to tint anything.
@@ -753,7 +774,7 @@ impl Renderer {
         self.ensure_surface(w, h)?;
         let fonts = self.fonts(scale)?;
         let cover = v.music.and_then(|t| self.cover(t));
-        let glow = if v.live { self.cover.as_ref().and_then(|c| c.glow) } else { None };
+        let tinted = if v.live && v.page == Page::Music { self.cover.as_ref().and_then(|c| c.glow) } else { None };
         let rt = &self.rt;
         let s = scale;
         let [nw, nh, nr] = v.size.map(|d| d * s);
@@ -833,26 +854,15 @@ impl Renderer {
             let ear = notch::ear(v.size[1]) * s;
             let shape = self.notch_shape(l, r, nh, nr, ear)?;
             rt.FillGeometry(&shape, &brush(grey(0.0, 1.0))?, None);
-            // Soft glow in the cover's colour just inside the edge: wide faint strokes of the
-            // outline, widest first, clipped to the notch so the light is strongest at the rim and
-            // fades inward.
-            if let (Some((gr, gg, gb)), true) = (glow, v.mode != Mode::Alert) {
-                let layer = rt.CreateLayer(None)?;
-                let params = D2D1_LAYER_PARAMETERS {
-                    contentBounds: rect(f32::MIN, f32::MIN, f32::MAX, f32::MAX),
-                    geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
-                    maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                    maskTransform: Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: 0.0 },
-                    opacity: 1.0,
-                    opacityBrush: std::mem::ManuallyDrop::new(None),
-                    layerOptions: D2D1_LAYER_OPTIONS_NONE,
-                };
-                rt.PushLayer(&params, &layer);
-                for k in (1..=GLOW_STEPS).rev() {
-                    rt.DrawGeometry(&shape, &brush(color(gr, gg, gb, GLOW_ALPHA / GLOW_STEPS as f32))?, 2.0 * GLOW_STEP * k as f32 * s, &self.round);
-                }
-                rt.PopLayer();
-                drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
+            // Music page: the cover's colour rises from the bottom, black at the top. The pill stays
+            // black; the glow grows in with the panel.
+            let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
+            if let (Some(tint), true, true) = (tinted, open > 0.0, v.mode != Mode::Alert) {
+                let (gr, gg, gb) = glow_bottom(tint);
+                let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open) };
+                let stops = rt.CreateGradientStopCollection(&[stop(0.0, 0.0), stop(0.4, 0.12), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
+                rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
             }
 
             // Each layout fades in as the pill reaches its size.
@@ -1081,7 +1091,7 @@ impl Renderer {
                                 Some(t) => {
                                     let title = if t.title.is_empty() { tr("Đang phát", "Playing") } else { &t.title };
                                     text(title, F_TITLE, rect(tl, top + 2.0 * s, cr, top + 20.0 * s), lead, grey(1.0, a))?;
-                                    text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, grey(0.65, a))?;
+                                    text(&t.artist, F_BODY, rect(tl, top + 20.0 * s, cr, top + 36.0 * s), lead, soft_text(tinted, 0.65, a))?;
                                     let lyric = t.lyric_now().unwrap_or_else(|| hovered.map_or(
                                         if t.duration_ms == 0 { tr("Trình phát chưa cung cấp thời gian", "The player gives no timeline") }
                                         else if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
@@ -1095,11 +1105,11 @@ impl Renderer {
                             let by = 112.0 * s;
                             let lw = 40.0 * s;
                             let (bl, brr) = (cl + lw, cr - lw);
-                            text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, grey(0.6, a))?;
-                            text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, grey(0.6, a))?;
+                            text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(cl, by - 9.0 * s, bl - 4.0 * s, by + 11.0 * s), lead, soft_text(tinted, 0.6, a))?;
+                            text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr + 4.0 * s, by - 9.0 * s, cr, by + 11.0 * s), trail, soft_text(tinted, 0.6, a))?;
                             let th = 4.0 * s;
                             let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
-                            rt.FillRoundedRectangle(&bar(brr), &brush(grey(0.25, a))?);
+                            rt.FillRoundedRectangle(&bar(brr), &brush(if tinted.is_some() { color(1.0, 1.0, 1.0, 0.3 * a) } else { grey(0.25, a) })?);
                             if dur > 0 {
                                 let p = (pos as f32 / dur as f32).clamp(0.0, 1.0);
                                 rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &brush(grey(1.0, a))?);
@@ -1427,14 +1437,28 @@ mod tests {
     #[test]
     fn app_tint_is_stable_and_white_text_readable() {
         assert_eq!(app_tint("Zalo"), app_tint("zalo"));
-        let lum = |(r, g, b): (f32, f32, f32)| {
-            let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-            0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
-        };
         for hue in 0..360 {
-            let ratio = 1.05 / (lum(hue_tint(hue as f32)) + 0.05);
+            let (r, g, b) = hue_tint(hue as f32);
+            let ratio = 1.05 / (luminance(r, g, b) + 0.05);
             assert!(ratio >= 4.5, "hue {hue}: white on tile is only {ratio:.2}:1");
         }
+    }
+
+    #[test]
+    fn glow_bottom_keeps_white_controls_readable() {
+        for tint in [(1.0, 1.0, 0.0), (1.0, 1.0, 1.0), (0.0, 1.0, 1.0), (0.0, 1.0, 0.0), (1.0, 0.2, 0.2), (0.2, 0.4, 1.0)] {
+            let (r, g, b) = glow_bottom(tint);
+            let ratio = 1.05 / (luminance(r, g, b) + 0.05);
+            assert!(ratio >= 4.5, "{tint:?}: white on the glow is only {ratio:.2}:1");
+            assert!(r.max(g).max(b) > 0.2, "{tint:?}: glow went black");
+        }
+    }
+
+    #[test]
+    fn soft_text_is_grey_without_tint_and_light_with_it() {
+        assert_eq!(soft_text(None, 0.6, 1.0).r, 0.6);
+        let c = soft_text(Some((1.0, 0.0, 0.0)), 0.6, 1.0);
+        assert!(c.r > c.g && c.g >= 0.8, "light, leaning towards red");
     }
 
     #[test]
