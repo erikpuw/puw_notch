@@ -47,6 +47,8 @@ pub struct View<'a> {
     pub robot: Option<Eyes>,
     /// Seconds, drives the equaliser bars.
     pub phase: f32,
+    /// Seconds since the current banner appeared (drives its icon's motion).
+    pub banner_age: f32,
     pub hovered: Option<Button>,
     pub page: Page,
     /// Page switch in progress: (page sliding out, progress 0..1, direction +1 next / -1 previous).
@@ -287,6 +289,81 @@ fn page_fades(t: f32) -> (f32, f32) {
     ((1.0 - t * 3.5).clamp(0.0, 1.0), ((t - 0.2) * 2.5).clamp(0.0, 1.0))
 }
 
+/// How a banner icon is drawn at one moment: rotation in degrees around a pivot `pivot_y` icon
+/// heights below its centre (negative = above), scale about the centre, shift by `dx` / `dy` icon
+/// heights, and opacity.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct IconMotion {
+    rot: f32,
+    pivot_y: f32,
+    scale: f32,
+    dx: f32,
+    dy: f32,
+    alpha: f32,
+}
+
+impl IconMotion {
+    const STILL: IconMotion = IconMotion { rot: 0.0, pivot_y: 0.0, scale: 1.0, dx: 0.0, dy: 0.0, alpha: 1.0 };
+}
+
+/// Seconds a banner icon moves for after the banner appears.
+const ICON_MOTION_S: f32 = 1.0;
+
+/// Icons of the status banners and of Bluetooth devices (the ones that move).
+#[cfg(test)]
+const STATUS_ICONS: [&str; 26] = [
+    ICON_VOLUME, ICON_MUTE, ICON_MIC, ICON_MIC_OFF, ICON_BT, ICON_BRIGHTNESS, ICON_KEYBOARD, ICON_WIFI, ICON_WIFI_OFF, ICON_NO_INTERNET,
+    ICON_AIRPLANE, ICON_ETHERNET, ICON_MOBILE, ICON_PLUG, ICON_BATTERY, ICON_BATTERY_LOW, ICON_SAVER, ICON_REMINDER, ICON_WALK, ICON_DROP,
+    ICON_HEADPHONES, ICON_SPEAKER, ICON_PHONE_DEVICE, ICON_MOUSE, ICON_GAMEPAD, ICON_BOLT,
+];
+
+/// The motion of a status / device icon `age` seconds after its banner appeared, in the spirit of
+/// itshover's hover icons (short, small, one thing per icon): every icon pops in from small and
+/// transparent, then states that are ON pulse (volume, mic, Bluetooth, Wi-Fi, Ethernet, headphones),
+/// OFF or missing ones shake sideways (mute, mic off, Wi-Fi off, no Internet), a plug slides in,
+/// a plane lifts off, a key goes down, a phone rings, a low battery blinks. Still after ICON_MOTION_S.
+fn icon_motion(icon: &str, age: f32) -> IconMotion {
+    if age >= ICON_MOTION_S {
+        return IconMotion::STILL;
+    }
+    let t = age.max(0.0);
+    let tau = std::f32::consts::TAU;
+    let decay = (-4.0 * t).exp();
+    let mut m = IconMotion { scale: 0.75 + 0.25 * ease_out_back((t / 0.3).min(1.0)), alpha: (t / 0.15).min(1.0), ..IconMotion::STILL };
+    // After the pop: one swell, or one shake.
+    let swell = |peak: f32| 1.0 + (peak - 1.0) * (std::f32::consts::PI * ((t - 0.25) / 0.5).clamp(0.0, 1.0)).sin();
+    let shake = (tau * 3.5 * t).sin() * decay;
+    match icon {
+        ICON_VOLUME | ICON_MIC | ICON_BT | ICON_WIFI | ICON_ETHERNET | ICON_HEADPHONES | ICON_SPEAKER | ICON_SAVER | ICON_BATTERY => m.scale *= swell(1.12),
+        ICON_MUTE | ICON_MIC_OFF | ICON_WIFI_OFF | ICON_NO_INTERNET => m.dx = 0.09 * shake,
+        ICON_BRIGHTNESS => {
+            m.scale *= 1.0 - 0.15 * (std::f32::consts::PI * ((t - 0.25) / 0.4).clamp(0.0, 1.0)).sin();
+            m.alpha *= 1.0 - 0.35 * (std::f32::consts::PI * ((t - 0.25) / 0.5).clamp(0.0, 1.0)).sin();
+        }
+        ICON_KEYBOARD => m.dy = 0.12 * (1.0 - (tau * ((t - 0.2) / 0.3).clamp(0.0, 1.0)).cos()) / 2.0,
+        ICON_AIRPLANE => {
+            let fly = (std::f32::consts::PI * ((t - 0.2) / 0.7).clamp(0.0, 1.0)).sin();
+            (m.dx, m.dy) = (0.14 * fly, -0.14 * fly);
+        }
+        ICON_PLUG => {
+            let slide = 1.0 - (1.0 - (t / 0.4).min(1.0)).powi(3);
+            (m.dx, m.dy) = (-0.14 * (1.0 - slide), 0.14 * (1.0 - slide));
+        }
+        ICON_BATTERY_LOW => m.alpha *= 1.0 - 0.7 * (tau * 2.0 * ((t - 0.2) / 0.8).clamp(0.0, 1.0)).sin().abs(),
+        ICON_MOBILE | ICON_PHONE_DEVICE => m.rot = 14.0 * shake,
+        ICON_GAMEPAD => m.rot = 10.0 * shake,
+        ICON_MOUSE => m.dx = 0.10 * shake,
+        ICON_REMINDER => {
+            m.rot = 24.0 * (-2.5 * t).exp() * (tau * 2.5 * t).sin();
+            m.pivot_y = -0.4;
+        }
+        ICON_WALK => m.dy = -0.10 * decay * (tau * 2.0 * t).sin().abs(),
+        ICON_DROP | ICON_BOLT => m.dy = -0.12 * decay * (tau * 2.5 * t).sin().abs(),
+        _ => {}
+    }
+    m
+}
+
 /// Overshoot easing for the page morph: arrives a touch past and settles back.
 fn ease_out_back(t: f32) -> f32 {
     let (c1, t) = (1.3, t.clamp(0.0, 1.0) - 1.0);
@@ -327,6 +404,11 @@ pub const ICON_BATTERY_LOW: &str = "\u{E850}";
 pub const ICON_SAVER: &str = "\u{EBA6}";
 pub const ICON_REMINDER: &str = "\u{EC92}";
 pub const ICON_WALK: &str = "\u{E805}";
+const ICON_HEADPHONES: &str = "\u{E7F6}";
+const ICON_SPEAKER: &str = "\u{E7F5}";
+const ICON_PHONE_DEVICE: &str = "\u{E8EA}";
+const ICON_MOUSE: &str = "\u{E962}";
+const ICON_GAMEPAD: &str = "\u{E7FC}";
 /// Not a glyph: the banner draws the water drop shape for this.
 pub const ICON_DROP: &str = "\u{1}drop";
 const ICON_GEAR: &str = "\u{E713}";
@@ -356,12 +438,12 @@ const LED: (f32, f32, f32) = (0.93, 0.97, 1.0);
 pub fn device_icon(kind: DeviceKind) -> &'static str {
     use DeviceKind::*;
     match kind {
-        Headphones => "\u{E7F6}",
-        Speaker => "\u{E7F5}",
-        Phone => "\u{E8EA}",
-        Mouse => "\u{E962}",
+        Headphones => ICON_HEADPHONES,
+        Speaker => ICON_SPEAKER,
+        Phone => ICON_PHONE_DEVICE,
+        Mouse => ICON_MOUSE,
         Keyboard => ICON_KEYBOARD,
-        Gamepad => "\u{E7FC}",
+        Gamepad => ICON_GAMEPAD,
         Other => ICON_BT,
     }
 }
@@ -1066,18 +1148,32 @@ impl Renderer {
                 }
             }
 
+            let mut icon_busy = false;
             if v.mode == Mode::Alert {
                 if let Some(t) = v.banner {
                     let a = fade(44.0, 18.0);
-                    // Icon on the left, text beside it.
+                    // Icon on the left, text beside it. Status and device icons move for a moment
+                    // after the banner appears; a Windows notification's bell stays still.
                     let d = 36.0 * s;
                     let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + 2.0 * s);
-                    if t.icon == Some(ICON_DROP) {
-                        let g = self.water_drop(ix + d / 2.0, iy + d / 2.0, 24.0 * s)?;
-                        rt.FillGeometry(&g, &brush(color(BLUE.0, BLUE.1, BLUE.2, a))?, None);
+                    let icon = t.icon.unwrap_or(ICON_BELL);
+                    let m = if t.icon.is_some() { icon_motion(icon, v.banner_age) } else { IconMotion::STILL };
+                    icon_busy = t.icon.is_some() && v.banner_age < ICON_MOTION_S;
+                    let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
+                    let (sin, cos) = m.rot.to_radians().sin_cos();
+                    let (px, py) = (mx, my + m.pivot_y * d);
+                    let turn = Matrix3x2 { M11: cos, M12: sin, M21: -sin, M22: cos, M31: px - px * cos + py * sin, M32: py - px * sin - py * cos };
+                    let size = Matrix3x2 { M11: m.scale, M12: 0.0, M21: 0.0, M22: m.scale, M31: mx * (1.0 - m.scale) + m.dx * d, M32: my * (1.0 - m.scale) + m.dy * d };
+                    let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
+                    rt.SetTransform(&(turn * size * base));
+                    let ia = a * m.alpha;
+                    if icon == ICON_DROP {
+                        let g = self.water_drop(mx, my, 24.0 * s)?;
+                        rt.FillGeometry(&g, &brush(color(BLUE.0, BLUE.1, BLUE.2, ia))?, None);
                     } else {
-                        micon("banner", t.icon.unwrap_or(ICON_BELL), F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
+                        micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, ia))?;
                     }
+                    rt.SetTransform(&base);
                     let (tl, tr) = (ix + d + 12.0 * s, r - 22.0 * s);
                     text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
                     text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
@@ -1571,7 +1667,7 @@ impl Renderer {
                 Some(&blend),
                 ULW_ALPHA,
             )?;
-            Ok(morphing.get() || glow_busy)
+            Ok(morphing.get() || glow_busy || icon_busy)
         }
     }
 }
@@ -1635,6 +1731,47 @@ mod tests {
         assert!(c.r > c.g && c.g >= 0.8, "full glow: light, leaning towards red");
         let half = soft_text(red, 0.5, 0.6, 1.0);
         assert!(half.g > 0.6 && half.g < c.g, "in between while fading");
+    }
+
+    #[test]
+    fn status_icon_motions_start_small_end_still_and_never_break() {
+        for icon in STATUS_ICONS {
+            let start = icon_motion(icon, 0.0);
+            assert!(start.scale < 1.0 && start.alpha < 1.0, "{icon:?} pops in from small and transparent: {start:?}");
+            assert_eq!(icon_motion(icon, ICON_MOTION_S), IconMotion::STILL, "{icon:?} rests when the motion is over");
+            assert_eq!(icon_motion(icon, 9.0), IconMotion::STILL);
+            for i in 0..=100 {
+                let m = icon_motion(icon, i as f32 * ICON_MOTION_S / 100.0);
+                assert!(m.rot.is_finite() && m.scale > 0.0 && m.scale < 1.4 && (0.0..=1.0).contains(&m.alpha) && m.dx.abs() < 0.3 && m.dy.abs() < 0.3,
+                    "{icon:?} t={i}: {m:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_kind_of_state_moves_its_own_way() {
+        let range = |icon: &str, f: fn(&IconMotion) -> f32| {
+            let v: Vec<f32> = (0..100).map(|i| f(&icon_motion(icon, i as f32 * 0.01))).collect();
+            (v.iter().cloned().fold(f32::MAX, f32::min), v.iter().cloned().fold(f32::MIN, f32::max))
+        };
+        // Off / muted / no connection: a shake, both ways.
+        for icon in [ICON_MUTE, ICON_MIC_OFF, ICON_WIFI_OFF, ICON_NO_INTERNET] {
+            let (lo, hi) = range(icon, |m| m.dx);
+            assert!(lo < -0.02 && hi > 0.02, "{icon:?} shakes sideways: {lo} .. {hi}");
+        }
+        // On / connected: a pulse that grows past full size.
+        for icon in [ICON_VOLUME, ICON_MIC, ICON_BT, ICON_WIFI, ICON_ETHERNET, ICON_HEADPHONES, ICON_SPEAKER] {
+            assert!(range(icon, |m| m.scale).1 > 1.05, "{icon:?} pulses");
+        }
+        // The plug slides in from the lower left; the plane lifts off to the upper right.
+        let plug = icon_motion(ICON_PLUG, 0.05);
+        assert!(plug.dx < 0.0 && plug.dy > 0.0, "{plug:?}");
+        let plane = (0..100).map(|i| icon_motion(ICON_AIRPLANE, i as f32 * 0.01)).max_by(|a, b| a.dx.total_cmp(&b.dx)).unwrap();
+        assert!(plane.dx > 0.05 && plane.dy < -0.05, "{plane:?}");
+        // A low battery blinks; a key goes down.
+        assert!(range(ICON_BATTERY_LOW, |m| m.alpha).0 < 0.5, "low battery dips");
+        assert!(range(ICON_KEYBOARD, |m| m.dy).1 > 0.05, "key press");
+        assert!(range(ICON_PHONE_DEVICE, |m| m.rot).0 < -5.0 && range(ICON_PHONE_DEVICE, |m| m.rot).1 > 5.0, "phone rings");
     }
 
     #[test]
@@ -1750,7 +1887,7 @@ mod tests {
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], notes: &[],
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
