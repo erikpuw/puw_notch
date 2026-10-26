@@ -377,10 +377,19 @@ struct CoverCache {
 
 /// Shadow of the open panel: reaches SHADOW_STEPS * SHADOW_STEP px past the edge (the window has
 /// 24+ px of margin below), SHADOW_ALPHA dark at the edge, shifted SHADOW_DY px down.
-const SHADOW_STEPS: u32 = 6;
-const SHADOW_STEP: f32 = 1.0;
-const SHADOW_ALPHA: f32 = 0.22;
-const SHADOW_DY: f32 = 1.5;
+const SHADOW_STEPS: u32 = 14;
+const SHADOW_STEP: f32 = 0.9;
+const SHADOW_ALPHA: f32 = 0.20;
+const SHADOW_DY: f32 = 2.0;
+
+/// Opacity of the k-th (1 = narrowest) shadow stroke. Together they make the darkness at distance
+/// d from the edge fall off as SHADOW_ALPHA * (1 - d / reach)^2: soft all the way out, with no
+/// visible line where the shadow starts.
+fn shadow_layer_alpha(k: u32) -> f32 {
+    let n = SHADOW_STEPS as f32;
+    let inside = |j: u32| (1.0 - j as f32 / n).max(0.0).powi(2);
+    SHADOW_ALPHA * (inside(k - 1) - inside(k))
+}
 
 /// Largest centred square of a `w` x `h` image: (x, y, side).
 fn square_crop(w: u32, h: u32) -> (u32, u32, u32) {
@@ -978,7 +987,7 @@ impl Renderer {
                 let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                 rt.SetTransform(&(Matrix3x2::translation(0.0, SHADOW_DY * s) * base));
                 for k in (1..=SHADOW_STEPS).rev() {
-                    rt.DrawGeometry(&shape, &brush(color(0.0, 0.0, 0.0, SHADOW_ALPHA / SHADOW_STEPS as f32 * open))?, 2.0 * SHADOW_STEP * k as f32 * s, &self.round);
+                    rt.DrawGeometry(&shape, &brush(color(0.0, 0.0, 0.0, shadow_layer_alpha(k) * open))?, 2.0 * SHADOW_STEP * k as f32 * s, &self.round);
                 }
                 rt.SetTransform(&base);
             }
@@ -1625,6 +1634,15 @@ mod tests {
         assert!(c.r > c.g && c.g >= 0.8, "full glow: light, leaning towards red");
         let half = soft_text(red, 0.5, 0.6, 1.0);
         assert!(half.g > 0.6 && half.g < c.g, "in between while fading");
+    }
+
+    #[test]
+    fn shadow_fades_out_smoothly() {
+        let layers: Vec<f32> = (1..=SHADOW_STEPS).map(shadow_layer_alpha).collect();
+        let total: f32 = layers.iter().sum();
+        assert!((total - SHADOW_ALPHA).abs() < 1e-5, "edge darkness is SHADOW_ALPHA, got {total}");
+        assert!(layers.windows(2).all(|w| w[0] > w[1] && w[1] > 0.0), "each wider stroke adds less: {layers:?}");
+        assert!(layers[0] < SHADOW_ALPHA * 0.2, "no single stroke makes a visible line: {}", layers[0]);
     }
 
     #[test]
