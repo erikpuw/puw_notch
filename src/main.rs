@@ -6,6 +6,7 @@ mod music;
 mod foobar;
 mod health;
 mod i18n;
+mod icons;
 mod itunes;
 mod notch;
 mod notify;
@@ -931,7 +932,7 @@ fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
     let level = Some(b.percent as f32 / 100.0);
     match e {
         Plugged => status_toast(tr("Pin", "Battery"), format!("{} {}%", tr("Đang sạc", "Charging"), b.percent), "", level, render::ICON_PLUG),
-        Unplugged => status_toast(tr("Pin", "Battery"), format!("{} · {}%", tr("Đã rút sạc", "Unplugged"), b.percent), "", level, render::ICON_BATTERY),
+        Unplugged => status_toast(tr("Pin", "Battery"), format!("{} · {}%", tr("Đã rút sạc", "Unplugged"), b.percent), "", level, render::ICON_UNPLUG),
         SaverOn => status_toast(tr("Tiết kiệm pin", "Battery saver"), on_off(true).to_string(), "", None, render::ICON_SAVER),
         SaverOff => status_toast(tr("Tiết kiệm pin", "Battery saver"), on_off(false).to_string(), "", None, render::ICON_SAVER),
         Low(p) => status_toast(tr("Pin yếu", "Low battery"), format!("{p}% · {}", tr("nên cắm sạc", "plug in soon")), "", level, render::ICON_BATTERY_LOW),
