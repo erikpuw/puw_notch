@@ -586,7 +586,7 @@ impl Renderer {
             let x = fx + side * 14.0 * s;
             match e.face {
                 Face::Normal if e.open < 0.5 => block(x, ey + 3.0 * s, 7.0 * s, 1.6 * s),
-                Face::Normal => block(x, ey, 7.0 * s, 9.0 * s),
+                Face::Normal | Face::Greet => block(x, ey, 7.0 * s, 9.0 * s),
                 Face::Curious => {
                     let (left, right) = curious_eyes(e.gaze.0);
                     let h = if side < 0.0 { left } else { right };
@@ -599,10 +599,6 @@ impl Renderer {
                     let d = -side; // '>' on the left, '<' on the right
                     stroke(&[p(x - 3.0 * d * u, ey - 3.5 * u), p(x + 3.0 * d * u, ey + 0.5 * u), p(x - 3.0 * d * u, ey + 4.5 * u)], 2.0)?
                 }
-                Face::Surprised => unsafe {
-                    let r = 3.8 * s;
-                    rt.DrawEllipse(&D2D1_ELLIPSE { point: p(x, ey), radiusX: r, radiusY: r }, &lit, 2.0 * s, None)
-                },
                 Face::Sad => {
                     let d = -side; // inner corner lower: droopy eyes
                     let pts = [p(x - 3.5 * u, ey - 2.0 * u - d * 1.5 * u), p(x + 3.5 * u, ey - 2.0 * u + d * 1.5 * u), p(x + 3.5 * u, ey + 4.0 * u), p(x - 3.5 * u, ey + 4.0 * u)];
@@ -620,9 +616,12 @@ impl Renderer {
                 pts.extend(quad(m(0.0, -1.0), m(2.0, 2.0), m(4.0, -1.0)).into_iter().skip(1));
                 stroke(&pts, 1.6)?
             }
-            Face::Surprised => unsafe {
-                rt.DrawEllipse(&D2D1_ELLIPSE { point: m(0.0, 0.0), radiusX: 1.8 * s, radiusY: 1.8 * s }, &lit, 1.6 * s, None)
-            },
+            Face::Greet => {
+                // Big open grin: a flat top and a deep curve under it, filled ("D" on its side).
+                let mut pts = vec![m(-5.5, -2.0)];
+                pts.extend(quad(m(5.5, -2.0), m(0.0, 9.0), m(-5.5, -2.0)));
+                unsafe { rt.FillGeometry(&path(&pts, true)?, &lit, None) };
+            }
             Face::Curious | Face::Sleep => stroke(&[m(-2.5, 0.0), m(2.5, 0.0)], 1.6)?,
             Face::Sad => stroke(&quad(m(-3.0, 1.0), m(0.0, -2.0), m(3.0, 1.0)), 1.6)?,
         }

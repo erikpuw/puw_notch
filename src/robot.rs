@@ -1,7 +1,7 @@
 //! Idle robot: when nobody touches the PC, an LED face (eyes and mouth, `Face`) takes the resting
 //! pill. It looks around below after `SHOW_S` seconds idle, plays a face now and then (often a
 //! happy one while charging), frowns on a low battery, falls asleep after `SLEEP_S`, and when work starts again it
-//! looks surprised at the cursor for `LOOK_S` before handing the pill back to clock and battery.
+//! grins at the cursor for `LOOK_S` before handing the pill back to clock and battery.
 
 /// Seconds without input before the eyes show / fall asleep; seconds of the glance on waking.
 pub const SHOW_S: u32 = 30;
@@ -32,8 +32,8 @@ pub enum Face {
     Wink,
     /// > < eyes, w mouth.
     Excited,
-    /// Round eyes, o mouth.
-    Surprised,
+    /// You are back: plain square eyes, a big open grin.
+    Greet,
     /// The eye on the side it looks toward big, the other small (`curious_eyes`), flat mouth.
     Curious,
     /// Drooping eyes, frown.
@@ -174,7 +174,7 @@ impl Robot {
         }
         let face = match (self.state, mood) {
             (State::Asleep, _) => Face::Sleep,
-            (State::Look, _) => Face::Surprised,
+            (State::Look, _) => Face::Greet,
             (_, Mood::Low) => Face::Sad,
             _ if t < self.play_until => self.play,
             _ => Face::Normal,
@@ -258,7 +258,7 @@ mod tests {
         r.update(SLEEP_S, true);
         assert_eq!(face(&mut r, Mood::Low), Face::Sleep);
         r.update(0, true);
-        assert_eq!(face(&mut r, Mood::Normal), Face::Surprised, "you are back: surprised");
+        assert_eq!(face(&mut r, Mood::Normal), Face::Greet, "you are back: plain eyes, a big grin");
     }
 
     #[test]
