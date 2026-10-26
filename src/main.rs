@@ -255,7 +255,12 @@ impl App {
             let cy = self.win.1 as f32 + self.notch.size()[1] * self.scale / 2.0;
             ((p.x as f32 - cx) / self.scale, (p.y as f32 - cy) / self.scale)
         });
-        Some(self.robot.step(dt, cursor))
+        let mood = match self.battery {
+            Some(b) if b.charging => robot::Mood::Charging,
+            Some(b) if b.percent <= 20 => robot::Mood::Low,
+            _ => robot::Mood::Normal,
+        };
+        Some(self.robot.step(dt, cursor, mood))
     }
 
     fn frame(&mut self) {

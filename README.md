@@ -15,7 +15,7 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không We
   - **Thông báo**: đọc lại ~30 thông báo Windows gần nhất (mới nhất trên cùng, lăn chuột để cuộn).
   - **Sức khỏe**: nhắc uống nước và đứng dậy, chỉnh được giờ và mức.
 - **Banner**: thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth, mạng, pin.
-- **Robot khi để yên**: không đụng máy 30 giây thì đôi mắt LED vuông phát sáng thay đồng hồ, nhìn quanh phía dưới, thỉnh thoảng chớp; 5 phút thì ngủ (mắt cung pixel, chữ z pixel bay lên); làm việc lại thì liếc theo chuột rồi trả về đồng hồ và pin. Bật / tắt ở tray.
+- **Robot khi để yên**: không đụng máy 30 giây thì khuôn mặt LED (mắt + miệng) thay đồng hồ, nhìn quanh phía dưới, chớp mắt và đổi biểu cảm (tò mò, nháy mắt, phấn khích; hay cười khi đang sạc; buồn khi pin yếu); 5 phút thì ngủ, chữ z pixel bay lên; làm việc lại thì ngạc nhiên nhìn theo chuột rồi trả về đồng hồ và pin. Bật / tắt ở tray.
 - **Tray**: Notch tối giản, Robot khi để yên, Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Thoát.
 
 ## Build

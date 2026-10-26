@@ -24,7 +24,7 @@ use crate::notify::{Note, Toast};
 use crate::system::Battery;
 use crate::health::{self, Health, Setting};
 use crate::i18n::tr;
-use crate::robot::Eyes;
+use crate::robot::{Eyes, Face};
 use crate::todo::{self, Item};
 
 /// Everything the painter needs for one frame (logical px).
@@ -372,6 +372,8 @@ pub struct Renderer {
     cover: Option<CoverCache>,
     /// Icon slots that just changed glyph: (current, previous, when) for the morph.
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
+    /// Round caps and joins for the robot face's strokes.
+    round: ID2D1StrokeStyle,
 }
 
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
@@ -415,7 +417,11 @@ impl Renderer {
             let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let wic = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
             let mem = CreateCompatibleDC(None);
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, morphs: RefCell::new(HashMap::new()) })
+            let round = factory.CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES {
+                startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
+                lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
+            }, None)?;
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -535,48 +541,97 @@ impl Renderer {
         }
     }
 
-    /// Idle robot: two glowing square LED eyes centred on (cx, cy), looking along `e.gaze`; a blink
-    /// squashes them to a bar. Asleep they are pixel arcs and a pixel "z" drifts up beside them.
-    fn draw_eyes(&self, e: &Eyes, cx: f32, cy: f32, s: f32, a: f32) -> Result<()> {
+    /// Idle robot's LED face centred on (cx, cy): eyes 14 px either side, the mouth below, the
+    /// whole face shifted along `e.gaze`. Strokes have round ends like the glowing lines of an LED
+    /// face; asleep a pixel "z" drifts up beside it.
+    fn draw_face(&self, e: &Eyes, cx: f32, cy: f32, s: f32, a: f32) -> Result<()> {
         let rt = &self.rt;
         let led = |alpha: f32| unsafe { rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, alpha), None) };
-        // One pixel of the sleeping face: a little square.
-        let pixel = |x: f32, y: f32, size: f32, b: &ID2D1SolidColorBrush| unsafe { rt.FillRectangle(&rect(x, y, x + size, y + size), b) };
-        unsafe {
-            let lit = led(a)?;
-            let (w, p) = (10.0 * s, 2.0 * s);
-            for side in [-1.0, 1.0] {
-                let x = cx + side * 17.0 * s + e.gaze.0 * 3.0 * s;
-                if e.asleep {
-                    // Closed eye: a pixel arc sagging in the middle.
-                    let (x0, y0, p) = ((x - 0.5 * p).round(), (cy + p).round(), p.round().max(1.0));
-                    for (dx, dy) in [(-3.0, -1.0), (-2.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0), (2.0, 0.0), (3.0, -1.0)] {
-                        pixel(x0 + dx * p, y0 + dy * p, p, &lit);
-                    }
-                    continue;
-                }
-                let h = (13.0 * e.open * s).max(2.0 * s);
-                let top = cy + e.gaze.1 * 2.4 * s - h / 2.0;
-                let eye = rect(x - w / 2.0, top, x + w / 2.0, top + h);
-                // Soft glow: two faint larger squares behind the eye.
-                for (grow, alpha) in [(3.0, 0.08), (1.5, 0.18)] {
-                    let g = grow * s;
-                    rt.FillRoundedRectangle(&rounded(rect(eye.left - g, eye.top - g, eye.right + g, eye.bottom + g), (1.5 + grow) * s), &led(a * alpha)?);
-                }
-                rt.FillRoundedRectangle(&rounded(eye, 1.5 * s), &lit);
+        let lit = led(a)?;
+        let glow = led(a * 0.12)?;
+        let p = |x: f32, y: f32| Vector2 { X: x, Y: y };
+        // Quadratic curve from `a` through control `c` to `b`, as points.
+        let quad = |a: Vector2, c: Vector2, b: Vector2| -> Vec<Vector2> {
+            (0..=8).map(|i| {
+                let t = i as f32 / 8.0;
+                let u = 1.0 - t;
+                p(u * u * a.X + 2.0 * u * t * c.X + t * t * b.X, u * u * a.Y + 2.0 * u * t * c.Y + t * t * b.Y)
+            }).collect()
+        };
+        let path = |pts: &[Vector2], closed: bool| -> Result<ID2D1PathGeometry> {
+            unsafe {
+                let geo = self.factory.CreatePathGeometry()?;
+                let sink = geo.Open()?;
+                sink.BeginFigure(pts[0], if closed { D2D1_FIGURE_BEGIN_FILLED } else { D2D1_FIGURE_BEGIN_HOLLOW });
+                sink.AddLines(&pts[1..]);
+                sink.EndFigure(if closed { D2D1_FIGURE_END_CLOSED } else { D2D1_FIGURE_END_OPEN });
+                sink.Close()?;
+                Ok(geo)
             }
-            if e.asleep {
-                // Pixel "z" on a 4x4 grid: top row, two steps down the diagonal, bottom row.
-                for k in 0..2 {
-                    let u = (e.time * 0.45 + k as f32 * 0.5).fract();
-                    // Whole device pixels keep the little squares crisp.
-                    let q = ((1.5 + u * 0.5) * s).round().max(1.0);
-                    let (x, y) = ((cx + (30.0 + u * 12.0) * s).round(), (cy + (1.0 - u * 15.0) * s).round());
-                    let zb = led(a * (1.0 - u))?;
-                    let z = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (2.0, 1.0), (1.0, 2.0), (0.0, 3.0), (1.0, 3.0), (2.0, 3.0), (3.0, 3.0)];
-                    for (i, j) in z {
-                        pixel(x + i * q, y + j * q, q, &zb);
-                    }
+        };
+        let stroke = |pts: &[Vector2], width: f32| -> Result<()> {
+            unsafe { rt.DrawGeometry(&path(pts, false)?, &lit, width * s, &self.round) };
+            Ok(())
+        };
+        let block = |x: f32, y: f32, w: f32, h: f32| unsafe {
+            // A glowing square eye: a faint larger block behind the bright one.
+            let g = 2.0 * s;
+            rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0 - g, y - h / 2.0 - g, x + w / 2.0 + g, y + h / 2.0 + g), 3.0 * s), &glow);
+            rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0), 1.5 * s), &lit);
+        };
+        let (fx, fy) = (cx + e.gaze.0 * 3.0 * s, cy + e.gaze.1 * 2.4 * s);
+        let (ey, my) = (fy - 3.0 * s, fy + 6.5 * s);
+        let u = s;
+        for side in [-1.0f32, 1.0] {
+            let x = fx + side * 14.0 * s;
+            match e.face {
+                Face::Normal if e.open < 0.5 => block(x, ey + 3.0 * s, 7.0 * s, 1.6 * s),
+                Face::Normal => block(x, ey, 7.0 * s, 9.0 * s),
+                Face::Curious => if side < 0.0 { block(x, ey - 1.0 * s, 7.0 * s, 11.0 * s) } else { block(x, ey + 1.0 * s, 7.0 * s, 6.0 * s) },
+                Face::Wink if side < 0.0 => block(x, ey, 7.0 * s, 9.0 * s),
+                Face::Happy | Face::Wink => stroke(&[p(x - 4.0 * u, ey + 3.0 * u), p(x, ey - 2.0 * u), p(x + 4.0 * u, ey + 3.0 * u)], 2.0)?,
+                Face::Excited => {
+                    let d = -side; // '>' on the left, '<' on the right
+                    stroke(&[p(x - 3.0 * d * u, ey - 3.5 * u), p(x + 3.0 * d * u, ey + 0.5 * u), p(x - 3.0 * d * u, ey + 4.5 * u)], 2.0)?
+                }
+                Face::Surprised => unsafe {
+                    let r = 3.8 * s;
+                    rt.DrawEllipse(&D2D1_ELLIPSE { point: p(x, ey), radiusX: r, radiusY: r }, &lit, 2.0 * s, None)
+                },
+                Face::Sad => {
+                    let d = -side; // inner corner lower: droopy eyes
+                    let pts = [p(x - 3.5 * u, ey - 2.0 * u - d * 1.5 * u), p(x + 3.5 * u, ey - 2.0 * u + d * 1.5 * u), p(x + 3.5 * u, ey + 4.0 * u), p(x - 3.5 * u, ey + 4.0 * u)];
+                    unsafe { rt.FillGeometry(&path(&pts, true)?, &lit, None) };
+                }
+                Face::Sleep => stroke(&quad(p(x - 4.0 * u, ey + 1.0 * u), p(x, ey + 5.0 * u), p(x + 4.0 * u, ey + 1.0 * u)), 2.0)?,
+            }
+        }
+        let m = |dx: f32, dy: f32| p(fx + dx * u, my + dy * u);
+        match e.face {
+            Face::Normal | Face::Wink => stroke(&quad(m(-3.0, -1.0), m(0.0, 2.0), m(3.0, -1.0)), 1.6)?,
+            Face::Happy => stroke(&quad(m(-4.0, -2.0), m(0.0, 3.0), m(4.0, -2.0)), 1.6)?,
+            Face::Excited => {
+                let mut pts = quad(m(-4.0, -1.0), m(-2.0, 2.0), m(0.0, -1.0));
+                pts.extend(quad(m(0.0, -1.0), m(2.0, 2.0), m(4.0, -1.0)).into_iter().skip(1));
+                stroke(&pts, 1.6)?
+            }
+            Face::Surprised => unsafe {
+                rt.DrawEllipse(&D2D1_ELLIPSE { point: m(0.0, 0.0), radiusX: 1.8 * s, radiusY: 1.8 * s }, &lit, 1.6 * s, None)
+            },
+            Face::Curious | Face::Sleep => stroke(&[m(-2.5, 0.0), m(2.5, 0.0)], 1.6)?,
+            Face::Sad => stroke(&quad(m(-3.0, 1.0), m(0.0, -2.0), m(3.0, 1.0)), 1.6)?,
+        }
+        if e.face == Face::Sleep {
+            // Pixel "z" on a 4x4 grid: top row, two steps down the diagonal, bottom row.
+            for k in 0..2 {
+                let t = (e.time * 0.45 + k as f32 * 0.5).fract();
+                // Whole device pixels keep the little squares crisp.
+                let q = ((1.5 + t * 0.5) * s).round().max(1.0);
+                let (x, y) = ((cx + (30.0 + t * 12.0) * s).round(), (cy + (1.0 - t * 15.0) * s).round());
+                let zb = led(a * (1.0 - t))?;
+                let z = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (2.0, 1.0), (1.0, 2.0), (0.0, 3.0), (1.0, 3.0), (2.0, 3.0), (3.0, 3.0)];
+                for (i, j) in z {
+                    unsafe { rt.FillRectangle(&rect(x + i * q, y + j * q, x + (i + 1.0) * q, y + (j + 1.0) * q), &zb) };
                 }
             }
         }
@@ -772,7 +827,7 @@ impl Renderer {
                     }
                 }
                 if let Some(e) = v.robot.filter(|e| e.alpha > 0.0) {
-                    self.draw_eyes(&e, cx, nh / 2.0, s, pill_a * e.alpha)?;
+                    self.draw_face(&e, cx, nh / 2.0, s, pill_a * e.alpha)?;
                 }
             }
 
