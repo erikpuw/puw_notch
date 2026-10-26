@@ -334,8 +334,8 @@ const YELLOW: (f32, f32, f32) = (1.0, 0.8, 0.2);
 const GREEN: (f32, f32, f32) = (0.2, 0.84, 0.29);
 const BLUE: (f32, f32, f32) = (0.3, 0.62, 1.0);
 const ORANGE: (f32, f32, f32) = (1.0, 0.6, 0.2);
-/// Idle robot's LED eyes.
-const LED: (f32, f32, f32) = (0.37, 0.92, 0.83);
+/// Idle robot's LED eyes: near-white, like a small LED face.
+const LED: (f32, f32, f32) = (0.93, 0.97, 1.0);
 
 /// Banner icon for a Bluetooth device.
 pub fn device_icon(kind: DeviceKind) -> &'static str {
@@ -535,43 +535,48 @@ impl Renderer {
         }
     }
 
-    /// Idle robot: two rounded LED eyes with dark scan lines across, centred on (cx, cy), looking
-    /// along `e.gaze`; closed they are one bar (blink, sleep), asleep a "z" drifts up beside them.
+    /// Idle robot: two glowing square LED eyes centred on (cx, cy), looking along `e.gaze`; a blink
+    /// squashes them to a bar. Asleep they are pixel arcs and a pixel "z" drifts up beside them.
     fn draw_eyes(&self, e: &Eyes, cx: f32, cy: f32, s: f32, a: f32) -> Result<()> {
         let rt = &self.rt;
+        let led = |alpha: f32| unsafe { rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, alpha), None) };
+        // One pixel of the sleeping face: a little square.
+        let pixel = |x: f32, y: f32, size: f32, b: &ID2D1SolidColorBrush| unsafe { rt.FillRectangle(&rect(x, y, x + size, y + size), b) };
         unsafe {
-            let lit = rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, a), None)?;
-            let line = rt.CreateSolidColorBrush(&color(0.0, 0.0, 0.0, 0.55 * a), None)?;
-            let (w, rad) = (12.0 * s, 5.0 * s);
+            let lit = led(a)?;
+            let (w, p) = (10.0 * s, 2.0 * s);
             for side in [-1.0, 1.0] {
                 let x = cx + side * 17.0 * s + e.gaze.0 * 3.0 * s;
-                if e.open < 0.2 {
-                    let y = cy + 3.0 * s;
-                    rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0, y, x + w / 2.0, y + 2.4 * s), 1.2 * s), &lit);
+                if e.asleep {
+                    // Closed eye: a pixel arc sagging in the middle.
+                    let (x0, y0, p) = ((x - 0.5 * p).round(), (cy + p).round(), p.round().max(1.0));
+                    for (dx, dy) in [(-3.0, -1.0), (-2.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0), (2.0, 0.0), (3.0, -1.0)] {
+                        pixel(x0 + dx * p, y0 + dy * p, p, &lit);
+                    }
                     continue;
                 }
-                let h = 14.0 * e.open * s;
+                let h = (13.0 * e.open * s).max(2.0 * s);
                 let top = cy + e.gaze.1 * 2.4 * s - h / 2.0;
-                rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0, top, x + w / 2.0, top + h), rad), &lit);
-                // Scan lines, kept inside the rounded corners.
-                let mut ly = top + 1.6 * s;
-                while ly + 0.9 * s < top + h {
-                    let mid = ly + 0.45 * s;
-                    let edge = (mid - top).min(top + h - mid);
-                    let inset = if edge < rad { rad - (rad * rad - (rad - edge) * (rad - edge)).max(0.0).sqrt() } else { 0.0 };
-                    rt.FillRectangle(&rect(x - w / 2.0 + inset, ly, x + w / 2.0 - inset, ly + 0.9 * s), &line);
-                    ly += 2.6 * s;
+                let eye = rect(x - w / 2.0, top, x + w / 2.0, top + h);
+                // Soft glow: two faint larger squares behind the eye.
+                for (grow, alpha) in [(3.0, 0.08), (1.5, 0.18)] {
+                    let g = grow * s;
+                    rt.FillRoundedRectangle(&rounded(rect(eye.left - g, eye.top - g, eye.right + g, eye.bottom + g), (1.5 + grow) * s), &led(a * alpha)?);
                 }
+                rt.FillRoundedRectangle(&rounded(eye, 1.5 * s), &lit);
             }
             if e.asleep {
+                // Pixel "z" on a 4x4 grid: top row, two steps down the diagonal, bottom row.
                 for k in 0..2 {
                     let u = (e.time * 0.45 + k as f32 * 0.5).fract();
-                    let (x, y, z) = (cx + (30.0 + u * 12.0) * s, cy + (1.0 - u * 15.0) * s, (3.0 + u * 3.0) * s);
-                    let zb = rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, a * (1.0 - u)), None)?;
-                    let p = |px: f32, py: f32| Vector2 { X: px, Y: py };
-                    rt.DrawLine(p(x, y), p(x + z, y), &zb, 1.2 * s, None);
-                    rt.DrawLine(p(x + z, y), p(x, y + z), &zb, 1.2 * s, None);
-                    rt.DrawLine(p(x, y + z), p(x + z, y + z), &zb, 1.2 * s, None);
+                    // Whole device pixels keep the little squares crisp.
+                    let q = ((1.5 + u * 0.5) * s).round().max(1.0);
+                    let (x, y) = ((cx + (30.0 + u * 12.0) * s).round(), (cy + (1.0 - u * 15.0) * s).round());
+                    let zb = led(a * (1.0 - u))?;
+                    let z = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (2.0, 1.0), (1.0, 2.0), (0.0, 3.0), (1.0, 3.0), (2.0, 3.0), (3.0, 3.0)];
+                    for (i, j) in z {
+                        pixel(x + i * q, y + j * q, q, &zb);
+                    }
                 }
             }
         }
