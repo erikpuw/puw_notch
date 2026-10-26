@@ -305,6 +305,8 @@ const F_BODY_WRAP: usize = 6;
 const BANNER_TEXT_W: f32 = 420.0 - 88.0;
 const F_SMALL_ICON: usize = 7;
 const F_BIG: usize = 8;
+/// Icon of a banner: larger than the 16 px of the buttons (the banner has no ring around it).
+const F_BANNER_ICON: usize = 9;
 
 pub const ICON_VOLUME: &str = "\u{E767}";
 pub const ICON_MUTE: &str = "\u{E74F}";
@@ -635,6 +637,7 @@ impl Renderer {
                 wrap(make(ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL)?)?,
                 make(w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(ui, 24.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(w!("Segoe Fluent Icons"), 22.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -1070,10 +1073,10 @@ impl Renderer {
                     let d = 36.0 * s;
                     let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + 2.0 * s);
                     if t.icon == Some(ICON_DROP) {
-                        let g = self.water_drop(ix + d / 2.0, iy + d / 2.0, 18.0 * s)?;
+                        let g = self.water_drop(ix + d / 2.0, iy + d / 2.0, 24.0 * s)?;
                         rt.FillGeometry(&g, &brush(color(BLUE.0, BLUE.1, BLUE.2, a))?, None);
                     } else {
-                        micon("banner", t.icon.unwrap_or(ICON_BELL), F_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
+                        micon("banner", t.icon.unwrap_or(ICON_BELL), F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
                     }
                     let (tl, tr) = (ix + d + 12.0 * s, r - 22.0 * s);
                     text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
