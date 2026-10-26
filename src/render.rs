@@ -367,9 +367,18 @@ pub fn device_icon(kind: DeviceKind) -> &'static str {
 struct CoverCache {
     track_key: u64,
     bytes: Option<Arc<Vec<u8>>>,
-    bitmap: Option<ID2D1Bitmap>,
+    /// Pixel sizes the bitmaps were made for.
+    sizes: (u32, u32),
+    /// Page-size and pill-size copies of the cover.
+    bitmaps: Option<(ID2D1Bitmap, ID2D1Bitmap)>,
     /// Colour the Music page fades into while this cover is up (None: no cover).
     glow: Option<(f32, f32, f32)>,
+}
+
+/// Largest centred square of a `w` x `h` image: (x, y, side).
+fn square_crop(w: u32, h: u32) -> (u32, u32, u32) {
+    let side = w.min(h);
+    ((w - side) / 2, (h - side) / 2, side)
 }
 
 /// Relative luminance of an sRGB colour (WCAG).
@@ -617,8 +626,10 @@ impl Renderer {
     }
 
     /// Decode again when the track's asynchronous artwork arrives.
-    fn cover(&mut self, t: &Track) -> Option<ID2D1Bitmap> {
-        let cached = self.cover.as_ref().is_some_and(|cache| cache.track_key == t.art_key
+    /// The cover as two square bitmaps resampled to exactly `big` and `small` px (the Music page
+    /// and the pill), so it is drawn 1:1 instead of being shrunk by the GPU's plain linear filter.
+    fn cover(&mut self, t: &Track, big: u32, small: u32) -> Option<(ID2D1Bitmap, ID2D1Bitmap)> {
+        let cached = self.cover.as_ref().is_some_and(|cache| cache.track_key == t.art_key && cache.sizes == (big, small)
             && match (&cache.bytes, &t.art) { (None, None) => true, (Some(a), Some(b)) => Arc::ptr_eq(a, b), _ => false });
         if !cached {
             let decoded = t.art.as_ref().and_then(|bytes| unsafe {
@@ -630,16 +641,28 @@ impl Renderer {
                 let conv = wic.CreateFormatConverter().ok()?;
                 conv.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
                 // Glow colour: from the cover scaled down to 16x16.
-                let small = wic.CreateBitmapScaler().ok()?;
-                small.Initialize(&conv, 16, 16, WICBitmapInterpolationModeFant).ok()?;
+                let tiny = wic.CreateBitmapScaler().ok()?;
+                tiny.Initialize(&conv, 16, 16, WICBitmapInterpolationModeFant).ok()?;
                 let mut px = [0u8; 16 * 16 * 4];
-                small.CopyPixels(std::ptr::null(), 16 * 4, &mut px).ok()?;
-                Some((self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()?, glow_tint(&px)))
+                tiny.CopyPixels(std::ptr::null(), 16 * 4, &mut px).ok()?;
+                // Centre square, then Fant (area averaging) down or cubic up to the drawn size.
+                let (mut w, mut h) = (0, 0);
+                conv.GetSize(&mut w, &mut h).ok()?;
+                let (x, y, side) = square_crop(w, h);
+                let clip = wic.CreateBitmapClipper().ok()?;
+                clip.Initialize(&conv, &WICRect { X: x as i32, Y: y as i32, Width: side as i32, Height: side as i32 }).ok()?;
+                let fit = |px: u32| -> Option<ID2D1Bitmap> {
+                    let scaler = wic.CreateBitmapScaler().ok()?;
+                    let mode = if px < side { WICBitmapInterpolationModeFant } else { WICBitmapInterpolationModeHighQualityCubic };
+                    scaler.Initialize(&clip, px, px, mode).ok()?;
+                    self.rt.CreateBitmapFromWicBitmap(&scaler, None).ok()
+                };
+                Some(((fit(big)?, fit(small)?), glow_tint(&px)))
             });
-            let (bitmap, glow) = match decoded { Some((b, g)) => (Some(b), Some(g)), None => (None, None) };
-            self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), bitmap, glow });
+            let (bitmaps, glow) = match decoded { Some((b, g)) => (Some(b), Some(g)), None => (None, None) };
+            self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), sizes: (big, small), bitmaps, glow });
         }
-        self.cover.as_ref().and_then(|c| c.bitmap.clone())
+        self.cover.as_ref().and_then(|c| c.bitmaps.clone())
     }
 
     /// The icon Windows shows for this app id (the shell's AppsFolder knows packaged and
@@ -853,7 +876,7 @@ impl Renderer {
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
         self.ensure_surface(w, h)?;
         let fonts = self.fonts(scale)?;
-        let cover = v.music.and_then(|t| self.cover(t));
+        let cover = v.music.and_then(|t| self.cover(t, (COVER * scale).round() as u32, (20.0 * scale).round() as u32));
         let target = if v.live && v.page == Page::Music { self.cover.as_ref().and_then(|c| c.glow) } else { None };
         let now = Instant::now();
         let dt = now.duration_since(self.glow.2).as_secs_f32().min(0.1);
@@ -876,13 +899,15 @@ impl Renderer {
             // Cover art clipped to a rounded square, or a note glyph when there is none.
             let draw_cover = |box_: D2D_RECT_F, radius: f32, a: f32| -> Result<()> {
                 match &cover {
-                    Some(bmp) => {
+                    Some((big, small)) => {
+                        // Made at exactly the drawn size: placed on whole pixels, 1:1, so it stays sharp.
+                        let bmp = if box_.right - box_.left > 40.0 * s { big } else { small };
                         let size = bmp.GetSize();
+                        let (x, y) = (box_.left.round(), box_.top.round());
                         let b = rt.CreateBitmapBrush(bmp, None, None)?;
-                        let (sx, sy) = ((box_.right - box_.left) / size.width, (box_.bottom - box_.top) / size.height);
-                        b.SetTransform(&Matrix3x2 { M11: sx, M12: 0.0, M21: 0.0, M22: sy, M31: box_.left, M32: box_.top });
+                        b.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: x, M32: y });
                         b.SetOpacity(a);
-                        rt.FillRoundedRectangle(&rounded(box_, radius), &b);
+                        rt.FillRoundedRectangle(&rounded(rect(x, y, x + size.width, y + size.height), radius), &b);
                     }
                     None => {
                         rt.FillRoundedRectangle(&rounded(box_, radius), &brush(grey(0.2, a))?);
@@ -1585,6 +1610,14 @@ mod tests {
     }
 
     #[test]
+    fn square_crop_is_the_centred_largest_square() {
+        assert_eq!(square_crop(300, 300), (0, 0, 300));
+        assert_eq!(square_crop(640, 360), (140, 0, 360));
+        assert_eq!(square_crop(300, 301), (0, 0, 300));
+        assert_eq!(square_crop(100, 400), (0, 150, 100));
+    }
+
+    #[test]
     fn page_change_never_shows_both_pages_strongly() {
         assert_eq!(page_fades(0.0), (1.0, 0.0));
         assert_eq!(page_fades(1.0), (0.0, 1.0));
@@ -1625,7 +1658,7 @@ mod tests {
             let mut renderer = Renderer::new().unwrap();
             renderer.ensure_surface(2, 2).unwrap();
             let mut track = Track { art_key: 1, ..Default::default() };
-            assert!(renderer.cover(&track).is_none());
+            assert!(renderer.cover(&track, 120, 20).is_none());
             let mut bmp = Vec::from(&b"BM"[..]);
             bmp.extend_from_slice(&58u32.to_le_bytes()); bmp.extend_from_slice(&[0; 4]);
             bmp.extend_from_slice(&54u32.to_le_bytes()); bmp.extend_from_slice(&40u32.to_le_bytes());
@@ -1634,8 +1667,8 @@ mod tests {
             bmp.extend_from_slice(&[0; 24]); bmp.extend_from_slice(&[0, 0, 255, 255]);
             assert_eq!(bmp.len(), 58);
             track.art = Some(std::sync::Arc::new(bmp));
-            assert!(renderer.cover(&track).is_some(), "late cover data must invalidate the cached empty image");
-            assert!(renderer.cover(&track).is_some());
+            assert!(renderer.cover(&track, 120, 20).is_some(), "late cover data must invalidate the cached empty image");
+            assert!(renderer.cover(&track, 120, 20).is_some());
         }
     }
 
