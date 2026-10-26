@@ -359,11 +359,11 @@ struct CoverCache {
     glow: Option<(f32, f32, f32)>,
 }
 
-/// Cover glow: the light reaches GLOW_STEPS * GLOW_STEP px past the notch and is GLOW_ALPHA
-/// opaque at its edge. The window has 40+ px of margin to draw it in.
-const GLOW_STEPS: u32 = 12;
-const GLOW_STEP: f32 = 3.4;
-const GLOW_ALPHA: f32 = 0.36;
+/// Cover glow: the light reaches GLOW_STEPS * GLOW_STEP px in from the notch's edge and is
+/// GLOW_ALPHA opaque there.
+const GLOW_STEPS: u32 = 10;
+const GLOW_STEP: f32 = 3.0;
+const GLOW_ALPHA: f32 = 0.30;
 
 /// One premultiplied BGRA pixel (the cover's average) -> glow colour: the same hue at full
 /// brightness. None for covers too dark or too grey to tint anything.
@@ -832,14 +832,28 @@ impl Renderer {
 
             let ear = notch::ear(v.size[1]) * s;
             let shape = self.notch_shape(l, r, nh, nr, ear)?;
-            // Soft glow in the cover's colour: wide faint strokes of the outline, widest first, so
-            // the light is strongest at the edge and fades outward (the black fill covers the inside).
+            rt.FillGeometry(&shape, &brush(grey(0.0, 1.0))?, None);
+            // Soft glow in the cover's colour just inside the edge: wide faint strokes of the
+            // outline, widest first, clipped to the notch so the light is strongest at the rim and
+            // fades inward.
             if let (Some((gr, gg, gb)), true) = (glow, v.mode != Mode::Alert) {
+                let layer = rt.CreateLayer(None)?;
+                let params = D2D1_LAYER_PARAMETERS {
+                    contentBounds: rect(f32::MIN, f32::MIN, f32::MAX, f32::MAX),
+                    geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
+                    maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    maskTransform: Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: 0.0 },
+                    opacity: 1.0,
+                    opacityBrush: std::mem::ManuallyDrop::new(None),
+                    layerOptions: D2D1_LAYER_OPTIONS_NONE,
+                };
+                rt.PushLayer(&params, &layer);
                 for k in (1..=GLOW_STEPS).rev() {
                     rt.DrawGeometry(&shape, &brush(color(gr, gg, gb, GLOW_ALPHA / GLOW_STEPS as f32))?, 2.0 * GLOW_STEP * k as f32 * s, &self.round);
                 }
+                rt.PopLayer();
+                drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
             }
-            rt.FillGeometry(&shape, &brush(grey(0.0, 1.0))?, None);
 
             // Each layout fades in as the pill reaches its size.
             let fade = |from: f32, span: f32| ((nh - from * s) / (span * s)).clamp(0.0, 1.0);
