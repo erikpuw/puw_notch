@@ -10,6 +10,7 @@ mod itunes;
 mod notch;
 mod notify;
 mod render;
+mod robot;
 mod screen;
 mod status;
 mod system;
@@ -62,6 +63,7 @@ const MENU_AUTOSTART: usize = 11;
 const MENU_QUIT: usize = 12;
 const MENU_LANG_VI: usize = 13;
 const MENU_LANG_EN: usize = 14;
+const MENU_ROBOT: usize = 15;
 
 struct App {
     hwnd: HWND,
@@ -91,6 +93,10 @@ struct App {
     mic_muted: Option<bool>,
     music: music::Music,
     track: Option<music::Track>,
+    /// Idle robot eyes, the tray switch for them and when they last moved.
+    robot: robot::Robot,
+    robot_on: bool,
+    robot_at: Instant,
     /// When the current track was paused (None while playing or with no player).
     paused_since: Option<Instant>,
     started: Instant,
@@ -154,6 +160,7 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        let eyes = self.robot_eyes();
         let (x, y, w, h) = self.win;
         let now = system::now_stamp();
         let view = View {
@@ -165,6 +172,7 @@ impl App {
             banner: self.banner.as_ref(),
             music: self.track.as_ref(),
             live: self.notch.live,
+            robot: eyes,
             phase: self.started.elapsed().as_secs_f32(),
             hovered: self.hovered_button,
             page: self.page,
@@ -212,9 +220,42 @@ impl App {
         self.set_frame_interval(VSYNC);
     }
 
-    /// The equaliser in the resting pill keeps frames coming while music plays.
+    /// The equaliser in the resting pill keeps frames coming while music plays; so do the idle
+    /// robot's eyes while they show or fade.
     fn bars_active(&self) -> bool {
-        !self.hidden && self.track.as_ref().is_some_and(|t| t.playing) && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek)
+        let bars = self.track.as_ref().is_some_and(|t| t.playing) && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek);
+        !self.hidden && (bars || self.robot.visible())
+    }
+
+    fn settings(&self) -> system::Settings {
+        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on }
+    }
+
+    /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
+    /// fullscreen game), from the time since the last key or mouse input.
+    fn refresh_robot(&mut self) {
+        let allowed = self.robot_on && !self.hidden && self.notch.mode == Mode::Collapsed && !self.notch.live;
+        if self.robot.update(idle_seconds(), allowed) || self.robot.visible() {
+            self.kick();
+        }
+    }
+
+    /// The robot's eyes for this frame (None while it is away), with the cursor relative to the
+    /// pill centre for the glance.
+    fn robot_eyes(&mut self) -> Option<robot::Eyes> {
+        if !self.robot.visible() {
+            self.robot_at = Instant::now();
+            return None;
+        }
+        let dt = self.robot_at.elapsed().as_secs_f32().min(0.1);
+        self.robot_at = Instant::now();
+        let mut p = POINT::default();
+        let cursor = unsafe { GetCursorPos(&mut p) }.is_ok().then(|| {
+            let cx = (self.win.0 + self.win.2 / 2) as f32;
+            let cy = self.win.1 as f32 + self.notch.size()[1] * self.scale / 2.0;
+            ((p.x as f32 - cx) / self.scale, (p.y as f32 - cy) / self.scale)
+        });
+        Some(self.robot.step(dt, cursor))
     }
 
     fn frame(&mut self) {
@@ -304,6 +345,7 @@ impl App {
         }
         self.refresh_audio();
         self.refresh_music();
+        self.refresh_robot();
         // Progress bar and lyric line move on their own while the panel is open.
         changed |= self.notch.mode == Mode::Expanded && self.track.as_ref().is_some_and(|t| t.playing);
 
@@ -613,6 +655,7 @@ impl App {
             let text = |s: &str| windows::core::HSTRING::from(s);
             let english = i18n::english();
             let _ = AppendMenuW(menu, MF_STRING | check(self.notch.minimal), MENU_MINIMAL, &text(tr("Notch tối giản", "Minimal notch")));
+            let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
             let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, &text(tr("Khởi động cùng Windows", "Start with Windows")));
             if let Ok(langs) = CreatePopupMenu() {
                 let _ = AppendMenuW(langs, MF_STRING | check(!english), MENU_LANG_VI, w!("Tiếng Việt"));
@@ -630,13 +673,18 @@ impl App {
                 MENU_MINIMAL => {
                     let on = !self.notch.minimal;
                     self.notch.set_minimal(on);
-                    system::save_settings(system::Settings { minimal: on, english: i18n::english() });
+                    system::save_settings(self.settings());
                     self.kick();
                 }
                 MENU_AUTOSTART => system::set_autostart(!system::autostart_enabled()),
+                MENU_ROBOT => {
+                    self.robot_on = !self.robot_on;
+                    system::save_settings(self.settings());
+                    self.refresh_robot();
+                }
                 MENU_LANG_VI | MENU_LANG_EN => {
                     i18n::set_english(cmd == MENU_LANG_EN);
-                    system::save_settings(system::Settings { minimal: self.notch.minimal, english: i18n::english() });
+                    system::save_settings(self.settings());
                     // Everything shown is rebuilt from the new language on the next frame.
                     (self.time, self.date) = system::clock();
                     self.redraw();
@@ -972,6 +1020,9 @@ fn main() -> windows::core::Result<()> {
             mic_muted: None,
             music: music::Music::start(hwnd),
             track: None,
+            robot: robot::Robot::default(),
+            robot_on: settings.robot,
+            robot_at: Instant::now(),
             paused_since: None,
             started: Instant::now(),
             frame_ms: 0,

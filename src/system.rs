@@ -104,10 +104,18 @@ fn settings_path() -> Option<PathBuf> {
 }
 
 /// Tray choices kept in settings.txt.
-#[derive(Clone, Copy, Default, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Settings {
     pub minimal: bool,
     pub english: bool,
+    /// Idle robot eyes (on unless turned off).
+    pub robot: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { minimal: false, english: false, robot: true }
+    }
 }
 
 fn parse_settings(text: &str) -> Settings {
@@ -116,6 +124,7 @@ fn parse_settings(text: &str) -> Settings {
         match line.trim() {
             "minimal=1" => s.minimal = true,
             "lang=en" => s.english = true,
+            "robot=0" => s.robot = false,
             _ => {}
         }
     }
@@ -131,7 +140,7 @@ pub fn save_settings(s: Settings) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\n", s.minimal as u8, if s.english { "en" } else { "vi" }));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\n", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8));
     }
 }
 
@@ -165,8 +174,9 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\n"), Settings { minimal: true, english: true });
-        assert_eq!(parse_settings("minimal=0\n"), Settings::default(), "old files without lang stay Vietnamese");
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\n"), Settings { minimal: true, english: true, robot: false });
+        assert_eq!(parse_settings("minimal=0\n"), Settings::default(), "old files: Vietnamese, idle robot on");
+        assert!(Settings::default().robot);
     }
 
     #[test]

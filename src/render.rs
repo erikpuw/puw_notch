@@ -24,6 +24,7 @@ use crate::notify::{Note, Toast};
 use crate::system::Battery;
 use crate::health::{self, Health, Setting};
 use crate::i18n::tr;
+use crate::robot::Eyes;
 use crate::todo::{self, Item};
 
 /// Everything the painter needs for one frame (logical px).
@@ -41,6 +42,8 @@ pub struct View<'a> {
     pub music: Option<&'a Track>,
     /// Resting pill uses the music layout (cover, bars); see `music::shows_pill`.
     pub live: bool,
+    /// Idle robot eyes in the resting pill (they replace clock and battery while shown).
+    pub robot: Option<Eyes>,
     /// Seconds, drives the equaliser bars.
     pub phase: f32,
     pub hovered: Option<Button>,
@@ -331,6 +334,8 @@ const YELLOW: (f32, f32, f32) = (1.0, 0.8, 0.2);
 const GREEN: (f32, f32, f32) = (0.2, 0.84, 0.29);
 const BLUE: (f32, f32, f32) = (0.3, 0.62, 1.0);
 const ORANGE: (f32, f32, f32) = (1.0, 0.6, 0.2);
+/// Idle robot's LED eyes.
+const LED: (f32, f32, f32) = (0.37, 0.92, 0.83);
 
 /// Banner icon for a Bluetooth device.
 pub fn device_icon(kind: DeviceKind) -> &'static str {
@@ -530,6 +535,49 @@ impl Renderer {
         }
     }
 
+    /// Idle robot: two rounded LED eyes with dark scan lines across, centred on (cx, cy), looking
+    /// along `e.gaze`; closed they are one bar (blink, sleep), asleep a "z" drifts up beside them.
+    fn draw_eyes(&self, e: &Eyes, cx: f32, cy: f32, s: f32, a: f32) -> Result<()> {
+        let rt = &self.rt;
+        unsafe {
+            let lit = rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, a), None)?;
+            let line = rt.CreateSolidColorBrush(&color(0.0, 0.0, 0.0, 0.55 * a), None)?;
+            let (w, rad) = (12.0 * s, 5.0 * s);
+            for side in [-1.0, 1.0] {
+                let x = cx + side * 17.0 * s + e.gaze.0 * 3.0 * s;
+                if e.open < 0.2 {
+                    let y = cy + 3.0 * s;
+                    rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0, y, x + w / 2.0, y + 2.4 * s), 1.2 * s), &lit);
+                    continue;
+                }
+                let h = 14.0 * e.open * s;
+                let top = cy + e.gaze.1 * 2.4 * s - h / 2.0;
+                rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0, top, x + w / 2.0, top + h), rad), &lit);
+                // Scan lines, kept inside the rounded corners.
+                let mut ly = top + 1.6 * s;
+                while ly + 0.9 * s < top + h {
+                    let mid = ly + 0.45 * s;
+                    let edge = (mid - top).min(top + h - mid);
+                    let inset = if edge < rad { rad - (rad * rad - (rad - edge) * (rad - edge)).max(0.0).sqrt() } else { 0.0 };
+                    rt.FillRectangle(&rect(x - w / 2.0 + inset, ly, x + w / 2.0 - inset, ly + 0.9 * s), &line);
+                    ly += 2.6 * s;
+                }
+            }
+            if e.asleep {
+                for k in 0..2 {
+                    let u = (e.time * 0.45 + k as f32 * 0.5).fract();
+                    let (x, y, z) = (cx + (30.0 + u * 12.0) * s, cy + (1.0 - u * 15.0) * s, (3.0 + u * 3.0) * s);
+                    let zb = rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, a * (1.0 - u)), None)?;
+                    let p = |px: f32, py: f32| Vector2 { X: px, Y: py };
+                    rt.DrawLine(p(x, y), p(x + z, y), &zb, 1.2 * s, None);
+                    rt.DrawLine(p(x + z, y), p(x, y + z), &zb, 1.2 * s, None);
+                    rt.DrawLine(p(x, y + z), p(x + z, y + z), &zb, 1.2 * s, None);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Water drop icon `size` tall centred on (cx, cy): pointed top, round bottom.
     fn water_drop(&self, cx: f32, cy: f32, size: f32) -> Result<ID2D1PathGeometry> {
         let p = |x: f32, y: f32| Vector2 { X: cx + x * size, Y: cy + y * size };
@@ -674,6 +722,10 @@ impl Renderer {
             let small_a = 1.0 - fade(39.0, 20.0);
             if nh >= 20.0 * s && small_a > 0.0 && v.mode != Mode::Alert {
                 let pill_music = v.music.filter(|_| v.live);
+                // The idle robot fades the clock and battery out as its eyes fade in.
+                let robot_a = v.robot.map_or(0.0, |e| e.alpha);
+                let pill_a = small_a;
+                let small_a = small_a * (1.0 - robot_a);
                 text(v.time, F_SMALL, rect(l, 0.0, r, nh), center, grey(1.0, small_a))?;
                 if let Some(b) = v.battery {
                     let d = 18.0 * s;
@@ -713,6 +765,9 @@ impl Renderer {
                         let my = nh / 2.0;
                         rt.FillRoundedRectangle(&rounded(rect(bx, my - bh / 2.0, bx + bw, my + bh / 2.0), bw / 2.0), &brush(grey(1.0, small_a * 0.9))?);
                     }
+                }
+                if let Some(e) = v.robot.filter(|e| e.alpha > 0.0) {
+                    self.draw_eyes(&e, cx, nh / 2.0, s, pill_a * e.alpha)?;
                 }
             }
 
@@ -1253,7 +1308,7 @@ mod tests {
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), live: true, phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], notes: &[],
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };

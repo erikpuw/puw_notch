@@ -15,7 +15,8 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
   - **Notifications**: read back the ~30 latest Windows notifications (newest first, scroll with the wheel).
   - **Health**: water and stand-up reminders with adjustable times and amounts.
 - **Banners**: Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth, network, battery.
-- **Tray**: Minimal notch, Start with Windows, Language (Tiếng Việt / English), Quit.
+- **Idle robot**: after 30 s without input, two LED eyes with scan lines replace the clock, look around below and blink now and then; after 5 min they fall asleep with a drifting z; when you are back they glance at the cursor, then hand the pill back to clock and battery. Toggle in the tray.
+- **Tray**: Minimal notch, Idle robot, Start with Windows, Language (Tiếng Việt / English), Quit.
 
 ## Build
 
