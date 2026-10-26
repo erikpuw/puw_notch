@@ -384,6 +384,27 @@ fn grey(v: f32, a: f32) -> D2D1_COLOR_F {
     color(v, v, v, a)
 }
 
+/// First letter or digit of an app name, upper-cased; "?" when it has none.
+fn app_initial(app: &str) -> String {
+    app.chars().find(|c| c.is_alphanumeric()).map_or_else(|| "?".to_string(), |c| c.to_uppercase().collect())
+}
+
+/// Tile colour of an app: hue from its name, lightness fixed so white text stays readable.
+fn app_tint(app: &str) -> (f32, f32, f32) {
+    let hash = app.to_lowercase().bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
+    hue_tint((hash % 360) as f32)
+}
+
+/// HSL (saturation 0.55, lightness 0.30) at `hue` degrees.
+fn hue_tint(hue: f32) -> (f32, f32, f32) {
+    let (s, l) = (0.55, 0.30);
+    let c = (1.0 - (2.0 * l - 1.0f32).abs()) * s;
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (hue / 60.0) as u32 { 0 => (c, x, 0.0), 1 => (x, c, 0.0), 2 => (0.0, c, x), 3 => (0.0, x, c), 4 => (x, 0.0, c), _ => (c, 0.0, x) };
+    let m = l - c / 2.0;
+    (r + m, g + m, b + m)
+}
+
 fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {
     D2D_RECT_F { left: l, top: t, right: r, bottom: b }
 }
@@ -1078,8 +1099,12 @@ impl Renderer {
                                     rect(cl, y + 26.0 * s, cr, y + 44.0 * s), lead, grey(0.5, a))?;
                             } else {
                                 if v.todos.is_empty() {
-                                    let area = rect(cl, ROW_Y * s, cr, (ROW_Y + ROW_H * LIST_ROWS as f32) * s);
-                                    text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, area, center, grey(0.55, a))?;
+                                    let mid = (cl + cr) / 2.0;
+                                    let ring = D2D1_ELLIPSE { point: Vector2 { X: mid, Y: (ROW_Y + 12.0) * s }, radiusX: 11.0 * s, radiusY: 11.0 * s };
+                                    rt.DrawEllipse(&ring, &brush(grey(0.3, a))?, 1.5 * s, None);
+                                    text(ICON_CHECK, F_TINY_ICON, rect(mid - 11.0 * s, (ROW_Y + 1.0) * s, mid + 11.0 * s, (ROW_Y + 23.0) * s), center, grey(0.3, a))?;
+                                    text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, rect(cl, (ROW_Y + 28.0) * s, cr, (ROW_Y + 46.0) * s), center, grey(0.7, a))?;
+                                    text(tr("Gõ vào ô trên rồi nhấn Enter", "Type above and press Enter"), F_LABEL, rect(cl, (ROW_Y + 46.0) * s, cr, (ROW_Y + 62.0) * s), center, grey(0.5, a))?;
                                 }
                                 for (b, br) in btns.iter() {
                                     let Button::ListToggle(i) = *b else { continue };
@@ -1135,10 +1160,16 @@ impl Renderer {
                                 let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
                                     else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }
                                     else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
+                                // App tile: its initial on a colour taken from its name.
+                                let tile = rect(cl, y + 3.0 * s, cl + 30.0 * s, y + 33.0 * s);
+                                let (tr_, tg, tb) = app_tint(&n.app);
+                                rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &brush(color(tr_, tg, tb, a))?);
+                                text(&app_initial(&n.app), F_TITLE, tile, center, grey(1.0, a))?;
+                                let tx = cl + 38.0 * s;
                                 text(&when, F_LABEL, rect(cr - 64.0 * s, y, cr, y + 20.0 * s), trail, grey(0.55, a))?;
-                                text(&n.title, F_TITLE, rect(cl, y, cr - 68.0 * s, y + 20.0 * s), lead, grey(1.0, a))?;
+                                text(&n.title, F_TITLE, rect(tx, y, cr - 68.0 * s, y + 20.0 * s), lead, grey(1.0, a))?;
                                 let line2 = if n.body.is_empty() { n.app.clone() } else { format!("{} · {}", n.app, n.body) };
-                                text(&line2, F_BODY, rect(cl, y + 19.0 * s, cr, y + 37.0 * s), lead, grey(0.65, a))?;
+                                text(&line2, F_BODY, rect(tx, y + 19.0 * s, cr, y + 37.0 * s), lead, grey(0.65, a))?;
                             }
                             scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
                         }
@@ -1247,7 +1278,8 @@ impl Renderer {
                                     let hot = hovered == Some(ab);
                                     let k = if hot { 1.0 } else { 0.82 };
                                     rt.FillRoundedRectangle(&rounded(pb, 12.0 * s), &brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
-                                    text(&action, F_SMALL, pb, center, grey(1.0, a))?;
+                                    // Dark label on the orange button: white on it is only 3.1:1.
+                                    text(&action, F_SMALL, pb, center, if card == Card::Sit { grey(0.06, a) } else { grey(1.0, a) })?;
                                 }
                                 if let Some(sb) = rect_of(Button::Snooze) {
                                     if card == Card::Water {
@@ -1322,6 +1354,28 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_initial_skips_symbols_and_uppercases() {
+        assert_eq!(app_initial("zalo"), "Z");
+        assert_eq!(app_initial("  (Telegram)"), "T");
+        assert_eq!(app_initial("ép"), "É");
+        assert_eq!(app_initial("..."), "?");
+        assert_eq!(app_initial(""), "?");
+    }
+
+    #[test]
+    fn app_tint_is_stable_and_white_text_readable() {
+        assert_eq!(app_tint("Zalo"), app_tint("zalo"));
+        let lum = |(r, g, b): (f32, f32, f32)| {
+            let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+            0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+        };
+        for hue in 0..360 {
+            let ratio = 1.05 / (lum(hue_tint(hue as f32)) + 0.05);
+            assert!(ratio >= 4.5, "hue {hue}: white on tile is only {ratio:.2}:1");
+        }
+    }
 
     #[test]
     #[ignore = "uses native Direct2D/WIC; run explicitly for delayed cover loading"]
