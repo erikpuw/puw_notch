@@ -479,7 +479,7 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 
 /// The glow's smoke: how much lighter than the glow, how strong at a blob's heart, and each blob's
 /// (x speed, x phase, y speed, y phase, width, height) with sizes as fractions of the panel.
-const SMOKE_LIGHTEN: f32 = 0.35;
+const SMOKE_LIGHTEN: f32 = 0.30;
 const SMOKE_ALPHA: f32 = 0.30;
 /// How fast a blob fades towards its rim (the exponent of its gaussian falloff).
 const SMOKE_SHARP: f32 = 4.5;
@@ -1246,7 +1246,7 @@ impl Renderer {
                 rt.FillRectangle(&rect(l - 1.0, (0.58 * nh).max(0.0), r + 1.0, nh + 1.0), &grad);
                 for (sx, px, sy, py, wf, hf) in SMOKE {
                     let cx = l + (r - l) * (0.5 + 0.5 * (t * sx + px).sin());
-                    let cy = nh * (0.78 + 0.13 * (t * sy + py).sin());
+                    let cy = nh * (0.82 + 0.10 * (t * sy + py).sin());
                     let (rx, ry) = ((r - l) * wf, nh * hf);
                     wisp.SetTransform(&Matrix3x2 { M11: rx, M12: 0.0, M21: 0.0, M22: ry, M31: cx, M32: cy });
                     rt.FillRectangle(&rect(cx - rx, cy - ry, cx + rx, cy + ry), &wisp);
