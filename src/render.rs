@@ -482,20 +482,6 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 const COVER_SHADOW: [f32; 3] = [0.14, 0.09, 0.05];
 const COVER_SHADOW_STEP: f32 = 0.8;
 
-/// The glow's smoke: how much lighter than the glow, how strong at a blob's heart, and each blob's
-/// (x speed, x phase, y speed, y phase, width, height) with sizes as fractions of the panel.
-const SMOKE_LIGHTEN: f32 = 0.30;
-const SMOKE_ALPHA: f32 = 0.25;
-/// How fast a blob fades towards its rim (the exponent of its gaussian falloff).
-const SMOKE_SHARP: f32 = 4.5;
-const SMOKE: [(f32, f32, f32, f32, f32, f32); 5] = [
-    (0.21, 0.0, 0.33, 1.0, 0.30, 0.20),
-    (0.17, 2.1, 0.27, 4.0, 0.26, 0.16),
-    (0.26, 4.2, 0.19, 2.0, 0.34, 0.22),
-    (0.13, 1.0, 0.31, 5.0, 0.24, 0.14),
-    (0.23, 5.5, 0.24, 3.3, 0.28, 0.18),
-];
-
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
 
@@ -589,9 +575,7 @@ pub struct Renderer {
     cover: Option<CoverCache>,
     /// The Music page's glow: (colour, strength 0..1, time of the last frame), see glow_step.
     glow: ((f32, f32, f32), f32, Instant),
-    /// Start of the renderer, the clock of the glow's wave.
-    t0: Instant,
-    /// The last frame showed something that moves slowly (glow wave, lyrics): frames at a relaxed pace will do.
+    /// The last frame showed the lyrics scrolling with the song: frames at a relaxed pace will do.
     pub slow_frames: bool,
     /// Geometry of each line-icon path, by its path data.
     line_geoms: HashMap<&'static str, ID2D1PathGeometry>,
@@ -604,8 +588,6 @@ pub struct Renderer {
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
     /// Round caps and joins for the robot face's strokes.
     round: ID2D1StrokeStyle,
-    /// The glow's gradient brush and its smoke brush, by (tint, panel height, strength).
-    glow_brush: RefCell<Option<(([u32; 3], u32, u8), ID2D1LinearGradientBrush, ID2D1RadialGradientBrush)>>,
 }
 
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
@@ -674,7 +656,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), t0: Instant::now(), slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round, glow_brush: RefCell::new(None) })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -1213,58 +1195,10 @@ impl Renderer {
             };
             if level > 0.0 && open > 0.0 && v.mode != Mode::Alert {
                 let (gr, gg, gb) = glow_bottom(tint);
-                // The strength is baked into the stops, so a steady glow asks for the same stops
-                // every frame: the brush is cached by (tint, height, strength) and only rebuilt
-                // while the glow is still fading.
-                let strength = open * level * gate;
-                let key = ([gr.to_bits(), gg.to_bits(), gb.to_bits()], nh.to_bits(), (strength.clamp(0.0, 1.0) * 255.0).round() as u8);
-                let cached = self.glow_brush.borrow().as_ref().filter(|(k, ..)| *k == key).map(|(_, g, w)| (g.clone(), w.clone()));
-                let (grad, wisp) = match cached {
-                    Some(b) => b,
-                    None => {
-                        let s = key.2 as f32 / 255.0;
-                        let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * s) };
-                        let stops = rt.CreateGradientStopCollection(&[stop(0.58, 0.0), stop(0.68, 0.08), stop(0.82, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
-                        let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
-                        let g = rt.CreateLinearGradientBrush(&line, None, &stops)?;
-                        let lighter = |c: f32| c + (1.0 - c) * SMOKE_LIGHTEN;
-                        let fade = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(lighter(gr), lighter(gg), lighter(gb), a * s) };
-                        // Gaussian falloff with long, faint tails (shifted to end at exactly 0): a blob
-                        // has no rim to show where it overlaps another, only a bump that melts away.
-                        let tail = (-SMOKE_SHARP).exp();
-                        let falloff: Vec<_> = (0..=16).map(|i| { let r = i as f32 / 16.0; fade(r, SMOKE_ALPHA * ((-SMOKE_SHARP * r * r).exp() - tail) / (1.0 - tail)) }).collect();
-                        let stops = rt.CreateGradientStopCollection(&falloff, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
-                        let disc = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES { center: Vector2 { X: 0.0, Y: 0.0 }, gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 }, radiusX: 1.0, radiusY: 1.0 };
-                        let w = rt.CreateRadialGradientBrush(&disc, None, &stops)?;
-                        *self.glow_brush.borrow_mut() = Some((key, g.clone(), w.clone()));
-                        (g, w)
-                    }
-                };
-                // The gradient with thin smoke drifting through it: a few big soft blobs of a lighter
-                // tint wander slowly through the lower half, clipped to the notch shape.
-                let t = now.duration_since(self.t0).as_secs_f32();
-                let layer = rt.CreateLayer(None)?;
-                rt.PushLayer(
-                    &D2D1_LAYER_PARAMETERS {
-                        contentBounds: rect(l - 1.0, -1.0, r + 1.0, nh + 1.0),
-                        geometricMask: std::mem::ManuallyDrop::new(Some(windows_core::Interface::cast::<ID2D1Geometry>(&shape)?)),
-                        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                        maskTransform: Matrix3x2::identity(),
-                        opacity: 1.0,
-                        opacityBrush: std::mem::ManuallyDrop::new(None),
-                        layerOptions: D2D1_LAYER_OPTIONS_NONE,
-                    },
-                    &layer,
-                );
-                rt.FillRectangle(&rect(l - 1.0, (0.58 * nh).max(0.0), r + 1.0, nh + 1.0), &grad);
-                for (sx, px, sy, py, wf, hf) in SMOKE {
-                    let cx = l + (r - l) * (0.5 + 0.5 * (t * sx + px).sin());
-                    let cy = nh * (0.82 + 0.10 * (t * sy + py).sin());
-                    let (rx, ry) = ((r - l) * wf, nh * hf);
-                    wisp.SetTransform(&Matrix3x2 { M11: rx, M12: 0.0, M21: 0.0, M22: ry, M31: cx, M32: cy });
-                    rt.FillRectangle(&rect(cx - rx, cy - ry, cx + rx, cy + ry), &wisp);
-                }
-                rt.PopLayer();
+                let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level * gate) };
+                let stops = rt.CreateGradientStopCollection(&[stop(0.58, 0.0), stop(0.68, 0.08), stop(0.82, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
+                rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
             }
 
             // Each layout fades in as the pill reaches its size.
@@ -1911,12 +1845,11 @@ impl Renderer {
                 Some(&blend),
                 ULW_ALPHA,
             )?;
-            // Lyrics and the glow's wave need frames while they show, but a slow trickle is enough
-            // for the wave and for the lyrics between lines; only a lyric gliding to the next line
-            // asks for full-speed frames.
+            // The lyrics need frames while they show and the song plays, but a slow trickle is enough
+            // between lines; only a lyric gliding to the next line asks for full-speed frames.
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
             let lyric_glide = lyrics_run && v.music.is_some_and(|t| lyrics::phase(&t.lyrics, t.position_ms()).fract() != 0.0);
-            self.slow_frames = lyrics_run || (level > 0.0 && v.mode != Mode::Alert && nh > 59.0 * s);
+            self.slow_frames = lyrics_run;
             Ok(morphing.get() || glow_busy || icon_busy || lyric_glide)
         }
     }
