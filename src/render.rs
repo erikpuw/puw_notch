@@ -483,13 +483,12 @@ const SMOKE_LIGHTEN: f32 = 0.4;
 const SMOKE_ALPHA: f32 = 0.26;
 /// How fast a blob fades towards its rim (the exponent of its gaussian falloff).
 const SMOKE_SHARP: f32 = 4.5;
-/// Wide, flat, slow: layers of fog rather than separate puffs.
-const SMOKE: [(f32, f32, f32, f32, f32, f32); 4] = [
-    (0.09, 0.0, 0.16, 1.0, 0.62, 0.17),
-    (0.07, 2.1, 0.12, 4.0, 0.55, 0.14),
-    (0.11, 4.2, 0.10, 2.0, 0.70, 0.19),
-    (0.06, 1.0, 0.15, 5.0, 0.50, 0.12),
-];
+/// Two fog layers, the far one fainter and higher, which gives the black behind them some depth:
+/// (middle height, swing, wave length (in panels), speed, strength, blob height), heights as fractions of the panel.
+const FOG: [(f32, f32, f32, f32, f32, f32); 2] = [(0.72, 0.06, 1.2, 0.30, 0.6, 0.14), (0.84, 0.07, 0.9, -0.24, 1.0, 0.15)];
+/// Blobs per layer, and how far each reaches into its neighbours (1 = touching).
+const FOG_BLOBS: usize = 4;
+const FOG_OVERLAP: f32 = 1.7;
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
@@ -1211,7 +1210,7 @@ impl Renderer {
                     None => {
                         let s = key.2 as f32 / 255.0;
                         let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * s) };
-                        let stops = rt.CreateGradientStopCollection(&[stop(0.5, 0.0), stop(0.6, 0.08), stop(0.75, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                        let stops = rt.CreateGradientStopCollection(&[stop(0.58, 0.0), stop(0.68, 0.08), stop(0.82, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                         let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
                         let g = rt.CreateLinearGradientBrush(&line, None, &stops)?;
                         let lighter = |c: f32| c + (1.0 - c) * SMOKE_LIGHTEN;
@@ -1243,13 +1242,23 @@ impl Renderer {
                     },
                     &layer,
                 );
-                rt.FillRectangle(&rect(l - 1.0, (0.5 * nh).max(0.0), r + 1.0, nh + 1.0), &grad);
-                for (sx, px, sy, py, wf, hf) in SMOKE {
-                    let cx = l + (r - l) * (0.5 + 0.5 * (t * sx + px).sin());
-                    let cy = nh * (0.74 + 0.14 * (t * sy + py).sin());
-                    let (rx, ry) = ((r - l) * wf, nh * hf);
-                    wisp.SetTransform(&Matrix3x2 { M11: rx, M12: 0.0, M21: 0.0, M22: ry, M31: cx, M32: cy });
-                    rt.FillRectangle(&rect(cx - rx, cy - ry, cx + rx, cy + ry), &wisp);
+                rt.FillRectangle(&rect(l - 1.0, (0.58 * nh).max(0.0), r + 1.0, nh + 1.0), &grad);
+                // Each fog layer is a ribbon of overlapping blobs along a travelling sine, every blob
+                // tilted to the slope there, so the layer bends up and down like a slow wave.
+                let (width, tau) = (r - l, std::f32::consts::TAU);
+                for (base, amp, length, speed, strength, height) in FOG {
+                    for i in 0..FOG_BLOBS {
+                        let u = (i as f32 + 0.5) / FOG_BLOBS as f32;
+                        let angle = tau * u / length + t * speed;
+                        let (cx, cy) = (l + width * u, nh * (base + amp * angle.sin()));
+                        let tilt = (nh * amp * angle.cos() * tau / (length * width)).atan();
+                        let (rx, ry) = (width * 0.5 / FOG_BLOBS as f32 * FOG_OVERLAP, nh * height);
+                        let (sin, cos) = tilt.sin_cos();
+                        wisp.SetOpacity(strength);
+                        wisp.SetTransform(&Matrix3x2 { M11: rx * cos, M12: rx * sin, M21: -ry * sin, M22: ry * cos, M31: cx, M32: cy });
+                        let reach = rx * sin.abs() + ry * cos.abs();
+                        rt.FillRectangle(&rect(cx - rx, cy - reach, cx + rx, cy + reach), &wisp);
+                    }
                 }
                 rt.PopLayer();
             }
