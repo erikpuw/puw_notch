@@ -20,8 +20,9 @@ use std::time::Instant;
 
 use crate::connectivity::DeviceKind;
 use crate::icons::{self, Seg};
+use crate::lyrics;
 use crate::music::Track;
-use crate::notch::{self, target, Mode};
+use crate::notch::{self, target, Mode, LYRICS_EXTRA_W};
 use crate::notify::{Note, Toast};
 use crate::system::Battery;
 use crate::health::{self, Health, Setting};
@@ -50,6 +51,8 @@ pub struct View<'a> {
     pub phase: f32,
     /// Seconds since the current banner appeared (drives its icon's motion).
     pub banner_age: f32,
+    /// The lyrics are open beside the player (Music page, open panel): the panel is wider.
+    pub lyrics: bool,
     pub hovered: Option<Button>,
     pub page: Page,
     /// Page switch in progress: (page sliding out, progress 0..1, direction +1 next / -1 previous).
@@ -130,6 +133,8 @@ pub enum Button {
     PlayPause,
     Next,
     Seek,
+    /// Show / hide the lyrics beside the player.
+    Lyrics,
     PagePrev,
     PageNext,
     ListInput,
@@ -154,6 +159,7 @@ impl Button {
         match self {
             Self::Previous => tr("Bài trước", "Previous"), Self::PlayPause => tr("Phát / Tạm dừng", "Play / Pause"),
             Self::Next => tr("Bài tiếp theo", "Next"), Self::Seek => tr("Bấm để tua", "Click to seek"),
+            Self::Lyrics => tr("Lời bài hát", "Lyrics"),
             _ => "",
         }
     }
@@ -163,6 +169,7 @@ impl Button {
             Self::PlayPause => track.is_some_and(|t| t.can_toggle),
             Self::Next => track.is_some_and(|t| t.can_next),
             Self::Seek => track.is_some_and(|t| t.can_seek && t.duration_ms > 0),
+            Self::Lyrics => track.is_some_and(|t| !t.lyrics.is_empty()),
             _ => true,
         }
     }
@@ -176,6 +183,7 @@ const COVER: f32 = 120.0;
 const COVER_GAP: f32 = 16.0;
 const PLAY_BTN: f32 = 38.0;
 const SKIP_BTN: f32 = 32.0;
+const LYRICS_BTN: f32 = 28.0;
 const CONTROLS_Y: f32 = 148.0;
 const BAR_Y: f32 = 108.0;
 /// Page content sits between the side arrows (logical px from the panel edge).
@@ -202,15 +210,32 @@ const CARD_GAP: f32 = 8.0;
 const SET_ROW: f32 = 18.0;
 const SET_Y: f32 = 62.0;
 
-/// Media controls of the music page, in window px for the settled panel centred at `cx`.
-pub fn buttons(cx: f32, scale: f32) -> [(Button, D2D_RECT_F); 4] {
-    let w = target(Mode::Expanded, false)[0];
-    let left = cx / scale - w / 2.0;
-    let (x0, x1) = (SIDE + COVER + COVER_GAP, w - SIDE);
+/// Width of the settled open panel; `wide` = the lyrics show beside the player.
+pub fn panel_w(wide: bool) -> f32 {
+    target(Mode::Expanded, false)[0] + if wide { LYRICS_EXTRA_W } else { 0.0 }
+}
+
+/// Media controls of the music page, in window px for the settled panel centred at `cx`. The
+/// player is the left 440 px of the panel; with the lyrics open (`wide`) the panel is wider and
+/// the lyrics take the part on the right.
+pub fn buttons(cx: f32, scale: f32, wide: bool) -> [(Button, D2D_RECT_F); 5] {
+    buttons_from(cx / scale - panel_w(wide) / 2.0, scale)
+}
+
+/// The same controls for a panel whose left edge is at `left` (logical px): follows the panel
+/// while it grows or shrinks.
+fn buttons_from(left: f32, scale: f32) -> [(Button, D2D_RECT_F); 5] {
+    let (x0, x1) = (SIDE + COVER + COVER_GAP, target(Mode::Expanded, false)[0] - SIDE);
     let mid = (x0 + x1) / 2.0;
     let round = |x: f32, size: f32| rect((left + x - size / 2.0) * scale, (CONTROLS_Y - size / 2.0) * scale, (left + x + size / 2.0) * scale, (CONTROLS_Y + size / 2.0) * scale);
     let seek = rect((left + x0) * scale, (BAR_Y - 8.0) * scale, (left + x1) * scale, (BAR_Y + 8.0) * scale);
-    [(Button::Previous, round(mid - 58.0, SKIP_BTN)), (Button::PlayPause, round(mid, PLAY_BTN)), (Button::Next, round(mid + 58.0, SKIP_BTN)), (Button::Seek, seek)]
+    [
+        (Button::Previous, round(mid - 58.0, SKIP_BTN)),
+        (Button::PlayPause, round(mid, PLAY_BTN)),
+        (Button::Next, round(mid + 58.0, SKIP_BTN)),
+        (Button::Seek, seek),
+        (Button::Lyrics, round(x1 - LYRICS_BTN / 2.0, LYRICS_BTN)),
+    ]
 }
 
 /// Settings rows of a health card: (setting, is a switch).
@@ -224,14 +249,16 @@ fn setting_rows(card: Card) -> &'static [(Setting, bool)] {
 
 /// Every clickable rect of the open panel on `page`. `rows` / `scroll` place list rows,
 /// `settings` = health card showing its settings.
-pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize, settings: Option<Card>) -> Vec<(Button, D2D_RECT_F)> {
-    let w = target(Mode::Expanded, false)[0];
+pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize, settings: Option<Card>, wide: bool) -> Vec<(Button, D2D_RECT_F)> {
+    // Only the Music page can be wide.
+    let wide = wide && page == Page::Music;
+    let w = panel_w(wide);
     let left = cx / scale - w / 2.0;
     let r = |x: f32, y: f32, bw: f32, bh: f32| rect((left + x) * scale, y * scale, (left + x + bw) * scale, (y + bh) * scale);
     let mut out = vec![(Button::PagePrev, r(10.0, ARROW_Y, ARROW, ARROW)), (Button::PageNext, r(w - 10.0 - ARROW, ARROW_Y, ARROW, ARROW))];
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {
-        Page::Music => out.extend(buttons(cx, scale)),
+        Page::Music => out.extend(buttons(cx, scale, wide)),
         Page::Todo => {
             out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
             out.push((Button::Gear(Card::Tasks), r(cl + cw - 20.0, COUNT_Y - 2.0, 20.0, 18.0)));
@@ -274,13 +301,13 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     out
 }
 
-pub fn seek_at(cx: f32, scale: f32, x: f32, duration: u64) -> u64 {
-    let (_, r) = buttons(cx, scale)[3];
+pub fn seek_at(cx: f32, scale: f32, x: f32, duration: u64, wide: bool) -> u64 {
+    let (_, r) = buttons(cx, scale, wide)[3];
     (((x - r.left) / (r.right - r.left)).clamp(0.0, 1.0) as f64 * duration as f64) as u64
 }
 
-pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, page: Page, rows: usize, scroll: usize, settings: Option<Card>) -> Option<Button> {
-    page_buttons(cx, scale, page, rows, scroll, settings).into_iter().find(|(b, r)| b.enabled(track)
+pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, page: Page, rows: usize, scroll: usize, settings: Option<Card>, wide: bool) -> Option<Button> {
+    page_buttons(cx, scale, page, rows, scroll, settings, wide).into_iter().find(|(b, r)| b.enabled(track)
         && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom).map(|(b, _)| b)
 }
 
@@ -327,6 +354,13 @@ const F_SMALL_ICON: usize = 7;
 const F_BIG: usize = 8;
 /// Icon of a banner: larger than the 16 px of the buttons (the banner has no ring around it).
 const F_BANNER_ICON: usize = 9;
+/// A line of lyrics: wraps onto more lines instead of being cut short.
+const F_LYRIC: usize = 10;
+/// Lyrics area beside the player, logical px: its top and bottom in the panel, and its width.
+const LYRIC_TOP: f32 = 30.0;
+const LYRIC_BOTTOM: f32 = 168.0;
+const LYRIC_GAP: f32 = 6.0;
+const LYRIC_W: f32 = LYRICS_EXTRA_W - LYRIC_GAP - SIDE;
 
 pub const ICON_VOLUME: &str = "\u{E767}";
 pub const ICON_MUTE: &str = "\u{E74F}";
@@ -530,6 +564,9 @@ pub struct Renderer {
     glow: ((f32, f32, f32), f32, Instant),
     /// Geometry of each line-icon path, by its path data.
     line_geoms: HashMap<&'static str, ID2D1PathGeometry>,
+    /// Height of each lyric line wrapped to the lyrics area, for one song (the lyrics' address)
+    /// and width: measured once, not every frame.
+    lyric_heights: Option<(usize, u32, Vec<f32>)>,
     /// Start-menu icon per app id (None: Windows has none for it); asked once per app.
     app_icons: HashMap<String, Option<ID2D1Bitmap>>,
     /// Icon slots that just changed glyph: (current, previous, when) for the morph.
@@ -604,7 +641,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), line_geoms: HashMap::new(), app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -670,6 +707,15 @@ impl Renderer {
                 make(w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(ui, 24.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(w!("Segoe Fluent Icons"), 22.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+                {
+                    let f = make(ui, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?;
+                    unsafe {
+                        f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+                        f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                        f.SetTrimming(&DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_NONE, delimiter: 0, delimiterCount: 0 }, None)?;
+                    }
+                    f
+                },
             ];
             self.fonts = Some((scale, set));
         }
@@ -760,6 +806,29 @@ impl Renderer {
         };
         self.line_geoms.insert(d, geo.clone());
         Some(geo)
+    }
+
+    /// Height in px of each lyric line wrapped to `width` px (at least `min_h`, for blank lines).
+    fn lyric_heights(&mut self, lines: &Arc<Vec<(u64, String)>>, width: f32, min_h: f32, fonts: &[IDWriteTextFormat]) -> Vec<f32> {
+        let (key, w) = (Arc::as_ptr(lines) as usize, width.round() as u32);
+        if let Some((k, kw, heights)) = &self.lyric_heights {
+            if *k == key && *kw == w {
+                return heights.clone();
+            }
+        }
+        let heights: Vec<f32> = lines
+            .iter()
+            .map(|(_, text)| unsafe {
+                let units: Vec<u16> = text.encode_utf16().collect();
+                let mut m = DWRITE_TEXT_METRICS::default();
+                match self.dw.CreateTextLayout(&units, &fonts[F_LYRIC], width, 4000.0) {
+                    Ok(layout) if layout.GetMetrics(&mut m).is_ok() => m.height.max(min_h),
+                    _ => min_h,
+                }
+            })
+            .collect();
+        self.lyric_heights = Some((key, w, heights.clone()));
+        heights
     }
 
     /// The icon Windows shows for this app id (the shell's AppsFolder knows packaged and
@@ -986,6 +1055,12 @@ impl Renderer {
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();
+        // Height of each wrapped lyric line, while the panel is wider than the player.
+        let lyric_heights: Vec<f32> = match v.music {
+            Some(t) if v.page == Page::Music && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
+                self.lyric_heights(&t.lyrics, LYRIC_W * scale, 20.0 * scale, &fonts),
+            _ => Vec::new(),
+        };
         let note_icons: Vec<Option<ID2D1Bitmap>> = if v.page == Page::Notify { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         let rt = &self.rt;
         let s = scale;
@@ -1264,7 +1339,7 @@ impl Renderer {
                     let scroll = if current { lv.scroll } else { 0 };
                     let settings = if current { v.health.settings } else { None };
                     let hovered = if current { v.hovered } else { None };
-                    let btns = page_buttons(cx, s, page, rows_of(page), scroll, settings);
+                    let btns = page_buttons(cx, s, page, rows_of(page), scroll, settings, v.lyrics);
                     let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
                     rt.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: dx, M32: 0.0 });
 
@@ -1344,6 +1419,8 @@ impl Renderer {
                     match page {
                         Page::Music => {
                             let top = 40.0 * s;
+                            // The player is the left 440 px of the panel, wider or not.
+                            let cr = l + (notch::target(Mode::Expanded, false)[0] - SIDE) * s;
                             draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 14.0 * s, a)?;
                             let tl = cl + (COVER + COVER_GAP) * s;
                             match v.music {
@@ -1374,14 +1451,30 @@ impl Renderer {
                                 rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &brush(grey(1.0, a))?);
                             }
                             let playing = v.music.is_some_and(|t| t.playing);
-                            for (b, br) in buttons(cx, s) {
+                            for (b, br) in buttons_from(l / s, s) {
+                                let on = b.enabled(v.music);
+                                if b == Button::Lyrics {
+                                    // A speech bubble with two lines; filled while the lyrics are open.
+                                    let (bx, by) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
+                                    let bubble = rect(bx - 9.0 * s, by - 7.0 * s, bx + 9.0 * s, by + 7.0 * s);
+                                    let ink = if !on { grey(0.3, a) } else if v.lyrics { grey(0.05, a) } else if hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
+                                    if on && v.lyrics {
+                                        rt.FillRoundedRectangle(&rounded(bubble, 4.0 * s), &brush(grey(1.0, a))?);
+                                    } else {
+                                        rt.DrawRoundedRectangle(&rounded(bubble, 4.0 * s), &brush(ink)?, 1.6 * s, None);
+                                    }
+                                    for (k, len) in [10.0, 6.0].into_iter().enumerate() {
+                                        let y = by - 2.2 * s + k as f32 * 4.4 * s;
+                                        rt.DrawLine(Vector2 { X: bx - 5.0 * s, Y: y }, Vector2 { X: bx - 5.0 * s + len * s, Y: y }, &brush(ink)?, 1.5 * s, &self.round);
+                                    }
+                                    continue;
+                                }
                                 let icon = match b {
                                     Button::Previous => ICON_PREV,
                                     Button::PlayPause => if playing { ICON_PAUSE } else { ICON_PLAY },
                                     Button::Next => ICON_NEXT,
                                     _ => continue,
                                 };
-                                let on = b.enabled(v.music);
                                 if b == Button::PlayPause {
                                     // The main action: a white disc with a dark glyph.
                                     let fill = if !on { grey(0.25, a) } else if hovered == Some(b) { grey(0.85, a) } else { grey(1.0, a) };
@@ -1394,6 +1487,35 @@ impl Renderer {
                                 let c = if !on { grey(0.3, a) }
                                     else if hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
                                 micon(if b == Button::Previous { "prev" } else { "next" }, icon, F_ICON, br, c)?;
+                            }
+                            // Lyrics beside the player, fading in as the panel widens: the line being
+                            // sung is bright and centred, the others dim; the whole column glides up
+                            // as the song moves on. Long lines wrap onto more lines.
+                            let player_w = notch::target(Mode::Expanded, false)[0];
+                            let grow = ((v.size[0] - player_w) / LYRICS_EXTRA_W).clamp(0.0, 1.0);
+                            if grow > 0.02 {
+                                let appear = grow * grow * (3.0 - 2.0 * grow);
+                                let (x0, y0, y1) = (l + (player_w + LYRIC_GAP) * s, LYRIC_TOP * s, LYRIC_BOTTOM * s);
+                                let x1 = x0 + LYRIC_W * s;
+                                match v.music {
+                                    Some(t) if !lyric_heights.is_empty() => {
+                                        let tops = lyrics::tops(&lyric_heights, 8.0 * s);
+                                        let phase = lyrics::phase(&t.lyrics, t.position_ms());
+                                        let focus = lyrics::focus(&tops, &lyric_heights, phase);
+                                        let middle = (y0 + y1) / 2.0;
+                                        for (j, (_, line)) in t.lyrics.iter().enumerate() {
+                                            let (top, h) = (middle + tops[j] - focus, lyric_heights[j]);
+                                            if top + h < y0 || top > y1 {
+                                                continue;
+                                            }
+                                            let alpha = a * appear * lyrics::edge_fade(top + h / 2.0, y0, y1, 28.0 * s) * lyrics::line_alpha(j, phase);
+                                            if alpha > 0.01 {
+                                                text(line, F_LYRIC, rect(x0, top, x1, top + h), lead, soft_text(tint, level, 1.0, alpha))?;
+                                            }
+                                        }
+                                    }
+                                    _ => text(tr("Không có lời cho bài này", "No lyrics for this song"), F_BODY, rect(x0, y0, x1, y1), center, grey(0.6, a * appear))?,
+                                }
                             }
                         }
                         Page::Todo => {
@@ -1647,7 +1769,11 @@ impl Renderer {
                 rt.PopAxisAlignedClip();
 
                 // Side arrows and page dots.
-                let nav = page_buttons(cx, s, v.page, 0, 0, None);
+                // They sit on the panel's own edges, so they follow it while it widens or narrows.
+                let nav = [
+                    (Button::PagePrev, rect(l + 10.0 * s, ARROW_Y * s, l + (10.0 + ARROW) * s, (ARROW_Y + ARROW) * s)),
+                    (Button::PageNext, rect(r - (10.0 + ARROW) * s, ARROW_Y * s, r - 10.0 * s, (ARROW_Y + ARROW) * s)),
+                ];
                 for (b, icon) in [(Button::PagePrev, ICON_LEFT), (Button::PageNext, ICON_RIGHT)] {
                     if let Some((_, br)) = nav.iter().find(|(x, _)| *x == b) {
                         let hot = v.hovered == Some(b);
@@ -1684,7 +1810,9 @@ impl Renderer {
                 Some(&blend),
                 ULW_ALPHA,
             )?;
-            Ok(morphing.get() || glow_busy || icon_busy)
+            // The lyrics scroll with the song: keep frames coming while they show and it plays.
+            let lyric_busy = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
+            Ok(morphing.get() || glow_busy || icon_busy || lyric_busy)
         }
     }
 }
@@ -1824,29 +1952,98 @@ mod tests {
 
     #[test]
     fn seek_and_icon_hit_areas_follow_dpi_and_capabilities() {
-        let track = Track { duration_ms: 120_000, can_seek: true, can_toggle: true, can_previous: true, can_next: true, ..Default::default() };
+        let track = Track { duration_ms: 120_000, can_seek: true, can_toggle: true, can_previous: true, can_next: true,
+            lyrics: Arc::new(vec![(0, "la la".into())]), ..Default::default() };
         for scale in [1.0, 1.5, 2.0] {
             let cx = 265.0 * scale;
-            let [(_, prev), (_, play), (_, next), (_, seek)] = buttons(cx, scale);
+            let [(_, prev), (_, play), (_, next), (_, seek), (_, lyr)] = buttons(cx, scale, false);
             let mid = |r: D2D_RECT_F| ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0);
-            assert_eq!(seek_at(cx, scale, seek.left - 100.0, track.duration_ms), 0);
-            assert_eq!(seek_at(cx, scale, seek.right + 100.0, track.duration_ms), 120_000);
-            assert_eq!(seek_at(cx, scale, (seek.left + seek.right) / 2.0, track.duration_ms), 60_000);
+            assert_eq!(seek_at(cx, scale, seek.left - 100.0, track.duration_ms, false), 0);
+            assert_eq!(seek_at(cx, scale, seek.right + 100.0, track.duration_ms, false), 120_000);
+            assert_eq!(seek_at(cx, scale, (seek.left + seek.right) / 2.0, track.duration_ms, false), 60_000);
             let (px, py) = mid(play);
-            assert_eq!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None), Some(Button::PlayPause));
-            assert_eq!(hit_button(cx, scale, mid(prev).0, mid(prev).1, Some(&track), Page::Music, 0, 0, None), Some(Button::Previous));
-            assert_eq!(hit_button(cx, scale, mid(next).0, mid(next).1, Some(&track), Page::Music, 0, 0, None), Some(Button::Next));
-            assert_eq!(hit_button(cx, scale, mid(seek).0, mid(seek).1, Some(&track), Page::Music, 0, 0, None), Some(Button::Seek));
-            assert_eq!(hit_button(cx, scale, px, py, None, Page::Music, 0, 0, None), None);
-            assert!(buttons(cx, scale).iter().all(|(_, r)| r.bottom <= DOTS_Y * scale));
+            assert_eq!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, false), Some(Button::PlayPause));
+            assert_eq!(hit_button(cx, scale, mid(prev).0, mid(prev).1, Some(&track), Page::Music, 0, 0, None, false), Some(Button::Previous));
+            assert_eq!(hit_button(cx, scale, mid(next).0, mid(next).1, Some(&track), Page::Music, 0, 0, None, false), Some(Button::Next));
+            assert_eq!(hit_button(cx, scale, mid(seek).0, mid(seek).1, Some(&track), Page::Music, 0, 0, None, false), Some(Button::Seek));
+            assert_eq!(hit_button(cx, scale, mid(lyr).0, mid(lyr).1, Some(&track), Page::Music, 0, 0, None, false), Some(Button::Lyrics));
+            assert_eq!(hit_button(cx, scale, px, py, None, Page::Music, 0, 0, None, false), None);
+            assert!(buttons(cx, scale, false).iter().all(|(_, r)| r.bottom <= DOTS_Y * scale));
             // Controls live in the right column: right of the cover, left of the side arrow, no overlaps.
             let left = cx - 220.0 * scale;
             let cover_right = left + (SIDE + COVER) * scale;
-            for r in [prev, play, next, seek] {
+            for r in [prev, play, next, seek, lyr] {
                 assert!(r.left > cover_right && r.right <= left + (440.0 - SIDE) * scale, "{r:?}");
             }
-            assert!(prev.right <= play.left && play.right <= next.left, "round buttons must not overlap");
-            assert!(seek.bottom <= prev.top.min(play.top), "bar above the buttons");
+            assert!(prev.right <= play.left && play.right <= next.left && next.right <= lyr.left, "buttons must not overlap");
+            assert!(seek.bottom <= prev.top.min(play.top).min(lyr.top), "bar above the buttons");
+            // The lyrics button works only when the song has lyrics.
+            let bare = Track { lyrics: Arc::new(Vec::new()), ..track.clone() };
+            assert_eq!(hit_button(cx, scale, mid(lyr).0, mid(lyr).1, Some(&bare), Page::Music, 0, 0, None, false), None);
+        }
+    }
+
+    #[test]
+    fn with_the_lyrics_open_the_player_keeps_its_place_in_the_left_part() {
+        let track = Track { duration_ms: 120_000, can_seek: true, can_toggle: true, can_previous: true, can_next: true,
+            lyrics: Arc::new(vec![(0, "la la".into())]), ..Default::default() };
+        for scale in [1.0, 1.5] {
+            let cx = 400.0 * scale; // the panel stays centred on the same point
+            let (narrow, wide) = (buttons(cx, scale, false), buttons(cx, scale, true));
+            let shift = LYRICS_EXTRA_W / 2.0 * scale;
+            for ((b, n), (_, w)) in narrow.iter().zip(wide.iter()) {
+                assert!((n.left - shift - w.left).abs() < 0.01 && (n.right - shift - w.right).abs() < 0.01 && n.top == w.top, "{b:?}: moves left by half the extra width");
+            }
+            // Clicks follow it.
+            let (_, play) = wide[1];
+            let (px, py) = ((play.left + play.right) / 2.0, (play.top + play.bottom) / 2.0);
+            assert_eq!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, true), Some(Button::PlayPause));
+            assert_ne!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, false), Some(Button::PlayPause), "the old place is no longer the button");
+            // The page arrows sit on the edges of the wider panel.
+            let arrows: Vec<_> = page_buttons(cx, scale, Page::Music, 0, 0, None, true).into_iter().filter(|(b, _)| matches!(b, Button::PagePrev | Button::PageNext)).collect();
+            let left = cx - (440.0 + LYRICS_EXTRA_W) / 2.0 * scale;
+            assert!(arrows.iter().any(|(b, r)| *b == Button::PagePrev && r.left < left + 12.0 * scale), "{arrows:?}");
+            assert!(arrows.iter().any(|(b, r)| *b == Button::PageNext && r.right > left + (440.0 + LYRICS_EXTRA_W - 12.0) * scale), "{arrows:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "writes a Direct2D preview of the lyrics view for visual review"]
+    fn lyrics_preview() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (820, 210);
+            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Lyrics preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let lines = [
+                (0, "Đêm nay phố vắng người qua"), (6_000, "Ngọn đèn vàng đổ bóng nghiêng nghiêng trên con đường quen thuộc nơi ta từng đi"),
+                (12_000, "Em đi giữa những con đường quen"), (18_000, "Mà nghe lòng nhẹ như gió thoảng, như một lời hứa chưa kịp nói thành tên"),
+                (24_000, "Có những điều chưa kịp nói ra"), (30_000, "Cứ theo tháng ngày trôi mất"),
+                (36_000, "Nếu mai này ta còn gặp lại"), (42_000, "Xin cho nhau một nụ cười hiền"),
+            ];
+            let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 14_000, playing: true,
+                can_toggle: true, can_next: true, can_previous: true, can_seek: true,
+                lyrics: Arc::new(lines.iter().map(|(t, s)| (*t as u64, s.to_string())).collect()), ..Default::default() };
+            let mut size = target(Mode::Expanded, false);
+            size[0] += LYRICS_EXTRA_W;
+            let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
+                leaving: None, todos: &[], notes: &[],
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+            let mut renderer = Renderer::new().unwrap();
+            renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+            let mut dib = DIBSECTION::default();
+            assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
+            let pixels = std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize);
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-h).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(pixels);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/lyrics-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
         }
     }
 
@@ -1863,7 +2060,7 @@ mod tests {
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, hovered: Some(Button::PlayPause), page: Page::Music,
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], notes: &[],
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };

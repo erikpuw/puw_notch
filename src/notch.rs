@@ -48,9 +48,12 @@ pub fn alert_size(lines: u8) -> [f32; 3] {
     [420.0, BANNER_TEXT_TOP + n * BANNER_LINE_H + 7.0, 24.0]
 }
 
+/// Extra width of the open panel while the lyrics show beside the player.
+pub const LYRICS_EXTRA_W: f32 = 320.0;
+
 /// Window must fit the largest target plus the hover margin.
 /// Includes room for the spring overshoot and the ears.
-pub const MAX_W: f32 = 530.0;
+pub const MAX_W: f32 = 820.0;
 pub const MAX_H: f32 = 210.0;
 /// How long a notification banner stays.
 pub const ALERT_MS: u32 = 5000;
@@ -119,6 +122,8 @@ pub struct Notch {
     pub live: bool,
     /// Lines of text in the current notification banner (0 = status banner), see `alert_size`.
     alert_lines: u8,
+    /// The lyrics show beside the player: the open panel is LYRICS_EXTRA_W wider.
+    wide: bool,
     obstructed: bool,
     clear_checks: u8,
     busy_checks: u8,
@@ -127,7 +132,7 @@ pub struct Notch {
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, wide: false, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
         for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
@@ -146,7 +151,7 @@ impl Notch {
 
     /// Resting at its pill size, springs stopped: the only time the area beside it is our own business.
     pub fn is_settled_rest(&self) -> bool {
-        self.is_resting() && self.size() == target(self.mode, self.live)
+        self.is_resting() && self.size() == self.goal()
     }
 
     /// Current (w, h, r). The bounce can swing past zero when shrinking to the mini line; clamp.
@@ -202,7 +207,21 @@ impl Notch {
 
     /// Size the springs head for right now.
     fn goal(&self) -> [f32; 3] {
-        if self.mode == Mode::Alert { alert_size(self.alert_lines) } else { target(self.mode, self.live) }
+        if self.mode == Mode::Alert {
+            return alert_size(self.alert_lines);
+        }
+        let mut t = target(self.mode, self.live);
+        if self.wide && self.mode == Mode::Expanded {
+            t[0] += LYRICS_EXTRA_W;
+        }
+        t
+    }
+
+    /// Lyrics view on / off. Returns true if it changed.
+    pub fn set_wide(&mut self, wide: bool) -> bool {
+        let changed = self.wide != wide;
+        self.wide = wide;
+        changed
     }
 
     pub fn on_alert_end(&mut self) {
@@ -325,6 +344,28 @@ mod tests {
         assert!(!n.set_live(true));
         settle(&mut n);
         assert_eq!(n.size(), target(Mode::Collapsed, true));
+    }
+
+    #[test]
+    fn lyrics_widen_only_the_open_panel_and_keep_its_height() {
+        let mut n = Notch::new(false);
+        // Not open: the flag changes nothing about the pill.
+        assert!(n.set_wide(true));
+        assert!(!n.set_wide(true), "no change the second time");
+        settle(&mut n);
+        assert_eq!(n.size(), target(Mode::Collapsed, false));
+        // Open: wider by LYRICS_EXTRA_W, same height and corner, still centred (width only).
+        n.on_enter();
+        n.on_dwell(true);
+        settle(&mut n);
+        let [w, h, r] = target(Mode::Expanded, false);
+        assert_eq!(n.size(), [w + LYRICS_EXTRA_W, h, r]);
+        // Narrow again.
+        n.set_wide(false);
+        settle(&mut n);
+        assert_eq!(n.size(), [w, h, r]);
+        // The window has room for it plus the shadow.
+        assert!(w + LYRICS_EXTRA_W + 2.0 * 14.0 <= MAX_W);
     }
 
     #[test]

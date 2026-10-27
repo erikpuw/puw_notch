@@ -8,6 +8,7 @@ mod health;
 mod i18n;
 mod icons;
 mod itunes;
+mod lyrics;
 mod notch;
 mod notify;
 mod render;
@@ -93,6 +94,8 @@ struct App {
     banner: Option<Toast>,
     /// When the banner appeared.
     banner_at: Instant,
+    /// The lyrics button was pressed in this visit of the open panel.
+    lyrics_open: bool,
     /// The last USB change shown (device, change, when), to drop a repeat of it.
     usb_last: Option<(String, usb::Change, Instant)>,
     /// Last brightness Windows reported; the first report (sent on registering) is not a change.
@@ -183,6 +186,7 @@ impl App {
             robot: eyes,
             phase: self.started.elapsed().as_secs_f32(),
             banner_age: self.banner_at.elapsed().as_secs_f32(),
+            lyrics: self.lyrics_wide(),
             hovered: self.hovered_button,
             page: self.page,
             leaving: self.page_anim.map(|(from, t0, dir)| (from, (t0.elapsed().as_secs_f32() / PAGE_MORPH_S).min(1.0), dir)),
@@ -276,6 +280,11 @@ impl App {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
+        // The lyrics view belongs to one visit of the open panel.
+        if self.notch.mode != Mode::Expanded {
+            self.lyrics_open = false;
+        }
+        self.notch.set_wide(self.lyrics_wide());
         let moving = self.notch.step(dt);
         // The page morph runs on the same frames; drop it once it has played out.
         let morphing = match self.page_anim {
@@ -517,7 +526,12 @@ impl App {
     }
 
     fn hit(&self, x: f32, y: f32) -> Option<Button> {
-        render::hit_button(self.win.2 as f32 / 2.0, self.scale, x, y, self.track.as_ref(), self.page, self.rows(), self.scroll(), self.settings_open)
+        render::hit_button(self.win.2 as f32 / 2.0, self.scale, x, y, self.track.as_ref(), self.page, self.rows(), self.scroll(), self.settings_open, self.lyrics_wide())
+    }
+
+    /// The lyrics show beside the player: asked for on the Music page of the open panel.
+    fn lyrics_wide(&self) -> bool {
+        self.lyrics_open && self.page == Page::Music && self.notch.mode == Mode::Expanded
     }
 
     fn click(&mut self, x: f32, y: f32) {
@@ -531,7 +545,11 @@ impl App {
             Button::Previous => self.music.send(music::Cmd::Previous),
             Button::PlayPause => self.music.send(music::Cmd::PlayPause),
             Button::Next => self.music.send(music::Cmd::Next),
-            Button::Seek => self.music.send(music::Cmd::Seek(render::seek_at(cx, self.scale, x, duration))),
+            Button::Seek => self.music.send(music::Cmd::Seek(render::seek_at(cx, self.scale, x, duration, self.lyrics_wide()))),
+            Button::Lyrics => {
+                self.lyrics_open = !self.lyrics_open;
+                self.kick();
+            }
             Button::PagePrev | Button::PageNext => {
                 self.cancel_task_edit();
                 self.end_edit();
@@ -1093,6 +1111,7 @@ fn main() -> windows::core::Result<()> {
             notifications: notify::Reader::open(),
             banner: None,
             banner_at: Instant::now(),
+            lyrics_open: false,
             usb_last: None,
             last_brightness: None,
             audio: audio::Audio::new(),
