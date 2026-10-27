@@ -1069,9 +1069,10 @@ impl Renderer {
             let shape = self.notch_shape(l, r, nh, nr, ear)?;
             // How far the pill has grown into the panel (0: pill, 1: open).
             let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
-            // A thin soft shadow under the open panel (the pill and banners have none): faint black
-            // strokes of the outline, widest first, drawn a little lower; the fill covers the inside.
-            if open > 0.0 && v.mode != Mode::Alert {
+            // A thin soft shadow under the open panel and the banners (the resting pill has none):
+            // faint black strokes of the outline, widest first, drawn a little lower; the fill
+            // covers the inside.
+            if open > 0.0 {
                 let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                 rt.SetTransform(&(Matrix3x2::translation(0.0, SHADOW_DY * s) * base));
                 for k in (1..=SHADOW_STEPS).rev() {
