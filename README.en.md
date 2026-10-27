@@ -34,6 +34,14 @@ The collapsed pill:
 |---|---|---|---|
 | ![](assets/screenshots/pill-music.png) | ![](assets/screenshots/pill-idle.png) | ![](assets/screenshots/robot.png) | ![](assets/screenshots/robot-happy.png) |
 
+## Download and run
+
+Get `puw_notch.exe` from [Releases](https://github.com/erikpuw/puw_notch/releases) and run it. The app is not code-signed yet, so Windows may block it:
+
+- **SmartScreen** ("Windows protected your PC"): click **More info** → **Run anyway**.
+- **File marked as downloaded**: right-click the file → **Properties** → tick **Unblock** → OK.
+- **Smart App Control** (Windows 11, shows "App blocked" with no way to continue): turn it off in Settings → Privacy & security → Windows Security → App & browser control → Smart App Control settings → **Off**. Once off it cannot be turned back on without reinstalling Windows, so think first. The alternative is to build from source (next section); a build made on your own machine usually runs.
+
 ## Build
 
 ```bash
