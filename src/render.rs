@@ -477,9 +477,17 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
     0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-/// The glow's wave: how far (logical px) its gradient rises and falls, and the length of one wave.
-const WAVE_AMP: f32 = 9.0;
-const WAVE_LEN: f32 = 280.0;
+/// The glow's smoke: how much lighter than the glow, how strong at a blob's heart, and each blob's
+/// (x speed, x phase, y speed, y phase, width, height) with sizes as fractions of the panel.
+const SMOKE_LIGHTEN: f32 = 0.35;
+const SMOKE_ALPHA: f32 = 0.30;
+const SMOKE: [(f32, f32, f32, f32, f32, f32); 5] = [
+    (0.21, 0.0, 0.33, 1.0, 0.30, 0.20),
+    (0.17, 2.1, 0.27, 4.0, 0.26, 0.16),
+    (0.26, 4.2, 0.19, 2.0, 0.34, 0.22),
+    (0.13, 1.0, 0.31, 5.0, 0.24, 0.14),
+    (0.23, 5.5, 0.24, 3.3, 0.28, 0.18),
+];
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
@@ -589,8 +597,8 @@ pub struct Renderer {
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
     /// Round caps and joins for the robot face's strokes.
     round: ID2D1StrokeStyle,
-    /// The glow's gradient brush, by (tint, panel height, strength).
-    glow_brush: RefCell<Option<(([u32; 3], u32, u8), ID2D1LinearGradientBrush)>>,
+    /// The glow's gradient brush and its smoke brush, by (tint, panel height, strength).
+    glow_brush: RefCell<Option<(([u32; 3], u32, u8), ID2D1LinearGradientBrush, ID2D1RadialGradientBrush)>>,
 }
 
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
@@ -1195,21 +1203,26 @@ impl Renderer {
                 // while the glow is still fading.
                 let strength = open * level * gate;
                 let key = ([gr.to_bits(), gg.to_bits(), gb.to_bits()], nh.to_bits(), (strength.clamp(0.0, 1.0) * 255.0).round() as u8);
-                let cached = self.glow_brush.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, b)| b.clone());
-                let grad = match cached {
+                let cached = self.glow_brush.borrow().as_ref().filter(|(k, ..)| *k == key).map(|(_, g, w)| (g.clone(), w.clone()));
+                let (grad, wisp) = match cached {
                     Some(b) => b,
                     None => {
                         let s = key.2 as f32 / 255.0;
                         let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * s) };
                         let stops = rt.CreateGradientStopCollection(&[stop(0.5, 0.0), stop(0.6, 0.08), stop(0.75, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                         let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
-                        let b = rt.CreateLinearGradientBrush(&line, None, &stops)?;
-                        *self.glow_brush.borrow_mut() = Some((key, b.clone()));
-                        b
+                        let g = rt.CreateLinearGradientBrush(&line, None, &stops)?;
+                        let lighter = |c: f32| c + (1.0 - c) * SMOKE_LIGHTEN;
+                        let fade = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(lighter(gr), lighter(gg), lighter(gb), a * s) };
+                        let stops = rt.CreateGradientStopCollection(&[fade(0.0, SMOKE_ALPHA), fade(0.5, SMOKE_ALPHA * 0.4), fade(1.0, 0.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                        let disc = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES { center: Vector2 { X: 0.0, Y: 0.0 }, gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 }, radiusX: 1.0, radiusY: 1.0 };
+                        let w = rt.CreateRadialGradientBrush(&disc, None, &stops)?;
+                        *self.glow_brush.borrow_mut() = Some((key, g.clone(), w.clone()));
+                        (g, w)
                     }
                 };
-                // The gradient drifts like a slow wave: narrow vertical strips, each with the same
-                // gradient shifted up or down by two travelling sines, clipped to the notch shape.
+                // The gradient with thin smoke drifting through it: a few big soft blobs of a lighter
+                // tint wander slowly through the lower half, clipped to the notch shape.
                 let t = now.duration_since(self.t0).as_secs_f32();
                 let layer = rt.CreateLayer(None)?;
                 rt.PushLayer(
@@ -1224,17 +1237,13 @@ impl Renderer {
                     },
                     &layer,
                 );
-                let (step, amp, k) = ((8.0 * s).round().max(2.0), WAVE_AMP * s, std::f32::consts::TAU / (WAVE_LEN * s));
-                // Above the gradient's first stop the alpha is 0 for every wave offset, so the
-                // strips start there: the transparent top half is never filled.
-                let top = (0.5 * nh - amp).max(0.0);
-                let mut x = l.floor();
-                while x < r {
-                    let phase = k * x;
-                    let dy = amp * (0.6 * (phase + t * 0.9).sin() + 0.4 * (phase * 1.7 - t * 0.6).sin());
-                    grad.SetTransform(&translate(0.0, dy));
-                    rt.FillRectangle(&rect(x, top, x + step, nh + 1.0), &grad);
-                    x += step;
+                rt.FillRectangle(&rect(l - 1.0, (0.5 * nh).max(0.0), r + 1.0, nh + 1.0), &grad);
+                for (sx, px, sy, py, wf, hf) in SMOKE {
+                    let cx = l + (r - l) * (0.5 + 0.5 * (t * sx + px).sin());
+                    let cy = nh * (0.74 + 0.14 * (t * sy + py).sin());
+                    let (rx, ry) = ((r - l) * wf, nh * hf);
+                    wisp.SetTransform(&Matrix3x2 { M11: rx, M12: 0.0, M21: 0.0, M22: ry, M31: cx, M32: cy });
+                    rt.FillRectangle(&rect(cx - rx, cy - ry, cx + rx, cy + ry), &wisp);
                 }
                 rt.PopLayer();
             }
@@ -2111,7 +2120,8 @@ mod tests {
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             // The cover loads and the glow fades in over a second or two.
-            for _ in 0..(if track.art.is_some() { 120 } else { 1 }) {
+            let frames = std::env::var("PUW_PREVIEW_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(120);
+            for _ in 0..(if track.art.is_some() { frames } else { 1 }) {
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }

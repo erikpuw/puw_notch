@@ -10,7 +10,7 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không We
 
 - **Notch**: giờ, vòng pin, sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi viên thuốc (ngắn hay dài theo nhạc) đè lên tab hoặc chữ bên dưới, hiện lại khi hết, ẩn khi chơi game / xem phim toàn màn hình.
 - **4 trang** (chuyển bằng ‹ ›):
-  - **Nhạc**: ảnh bìa, lời bài hát (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời bài hát giãn bảng ngang ra để xem lời chạy theo bài (dòng đang hát sáng ở giữa, dòng dài tự xuống dòng), nền trang Nhạc ngả dần sang màu ảnh bìa ở phía dưới khi đang phát, dải màu lượn sóng nhẹ. Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
+  - **Nhạc**: ảnh bìa, lời bài hát (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời bài hát giãn bảng ngang ra để xem lời chạy theo bài (dòng đang hát sáng ở giữa, dòng dài tự xuống dòng), nền trang Nhạc ngả dần sang màu ảnh bìa ở phía dưới khi đang phát, dải màu có khói mỏng trôi nhẹ. Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
   - **Việc**: một danh sách cho cả việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00" (chỉ giờ = hôm nay) hay "Khám răng 28/10 14:30", "Gọi mẹ mai 9h" (có ngày = theo lịch). Tick / sửa / xóa; quá giờ chưa xong thì giữ lại, tô đỏ. ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
   - **Thông báo**: đọc lại ~30 thông báo Windows gần nhất (mới nhất trên cùng, lăn chuột để cuộn), kèm icon của từng app.
   - **Sức khỏe**: nhắc uống nước và đứng dậy, chỉnh được giờ và mức.
