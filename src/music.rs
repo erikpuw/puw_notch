@@ -338,7 +338,12 @@ fn fetch_lyrics(title: &str, artist: &str, duration_s: u64) -> Vec<(u64, String)
         let Some(body) = http_get(&url) else { continue };
         let Ok(items) = JsonArray::Parse(&HSTRING::from(body)) else { continue };
         let n = items.Size().unwrap_or(0);
-        if let Some(lines) = (0..n).filter_map(|i| items.GetObjectAt(i).ok()).find_map(|o| synced(&o)) {
+        let found = (0..n).filter_map(|i| items.GetObjectAt(i).ok()).filter_map(|o| {
+            let lines = synced(&o)?;
+            let length = o.GetNamedNumber(&HSTRING::from("duration")).unwrap_or(0.0);
+            Some((lines, length))
+        });
+        if let Some(lines) = closest_length(found.collect(), duration_s) {
             return lines;
         }
     }
@@ -395,6 +400,20 @@ pub fn clean_names(title: &str, artist: &str) -> (String, String) {
         }
     }
     (t.trim().to_string(), artist)
+}
+
+/// A version of the song is wrong when its length is far from the playing one (extended mixes, loops):
+/// its time stamps would run ahead or behind. Pick the closest length; none within this many seconds
+/// means no lyrics. Unknown playing length: the first.
+const LENGTH_TOLERANCE_S: f64 = 20.0;
+
+fn closest_length(mut found: Vec<(Vec<(u64, String)>, f64)>, duration_s: u64) -> Option<Vec<(u64, String)>> {
+    if duration_s == 0 {
+        return found.into_iter().next().map(|(lines, _)| lines);
+    }
+    let gap = |length: f64| (length - duration_s as f64).abs();
+    found.sort_by(|a, b| gap(a.1).total_cmp(&gap(b.1)));
+    found.into_iter().next().filter(|(_, length)| gap(*length) <= LENGTH_TOLERANCE_S).map(|(lines, _)| lines)
 }
 
 fn synced(o: &JsonObject) -> Option<Vec<(u64, String)>> {
@@ -595,6 +614,16 @@ mod tests {
         let lines = fetch_lyrics("Lạc Trôi", "Sơn Tùng M-TP", 0);
         assert!(lines.len() > 10, "got {} lines", lines.len());
         eprintln!("first: {:?}", &lines[..3]);
+    }
+
+    #[test]
+    fn lyrics_version_is_the_one_closest_in_length() {
+        let v = |name: &str, length: f64| (vec![(0, name.to_string())], length);
+        let found = vec![v("extended", 890.0), v("album", 302.0), v("mv", 289.0)];
+        assert_eq!(closest_length(found.clone(), 275).unwrap()[0].1, "mv");
+        assert_eq!(closest_length(found.clone(), 301).unwrap()[0].1, "album");
+        assert_eq!(closest_length(found.clone(), 0).unwrap()[0].1, "extended", "unknown length: first");
+        assert!(closest_length(found, 120).is_none(), "nothing near 120 s");
     }
 
     #[test]
