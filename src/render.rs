@@ -474,6 +474,10 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
     0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
+/// The glow's wave: how far (logical px) its gradient rises and falls, and the length of one wave.
+const WAVE_AMP: f32 = 9.0;
+const WAVE_LEN: f32 = 280.0;
+
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
 
@@ -567,6 +571,8 @@ pub struct Renderer {
     cover: Option<CoverCache>,
     /// The Music page's glow: (colour, strength 0..1, time of the last frame), see glow_step.
     glow: ((f32, f32, f32), f32, Instant),
+    /// Start of the renderer, the clock of the glow's wave.
+    t0: Instant,
     /// Geometry of each line-icon path, by its path data.
     line_geoms: HashMap<&'static str, ID2D1PathGeometry>,
     /// Height of each lyric line wrapped to the lyrics area, for one song (the lyrics' address)
@@ -646,7 +652,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), t0: Instant::now(), line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -1175,7 +1181,33 @@ impl Renderer {
                 let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level * gate) };
                 let stops = rt.CreateGradientStopCollection(&[stop(0.0, 0.0), stop(0.4, 0.12), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                 let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
-                rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
+                let grad = rt.CreateLinearGradientBrush(&line, None, &stops)?;
+                // The gradient drifts like a slow wave: narrow vertical strips, each with the same
+                // gradient shifted up or down by two travelling sines, clipped to the notch shape.
+                let t = now.duration_since(self.t0).as_secs_f32();
+                let layer = rt.CreateLayer(None)?;
+                rt.PushLayer(
+                    &D2D1_LAYER_PARAMETERS {
+                        contentBounds: rect(l - 1.0, -1.0, r + 1.0, nh + 1.0),
+                        geometricMask: std::mem::ManuallyDrop::new(Some(windows_core::Interface::cast::<ID2D1Geometry>(&shape)?)),
+                        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                        maskTransform: Matrix3x2::identity(),
+                        opacity: 1.0,
+                        opacityBrush: std::mem::ManuallyDrop::new(None),
+                        layerOptions: D2D1_LAYER_OPTIONS_NONE,
+                    },
+                    &layer,
+                );
+                let (step, amp, k) = ((4.0 * s).round().max(2.0), WAVE_AMP * s, std::f32::consts::TAU / (WAVE_LEN * s));
+                let mut x = l.floor();
+                while x < r {
+                    let phase = k * x;
+                    let dy = amp * (0.6 * (phase + t * 0.9).sin() + 0.4 * (phase * 1.7 - t * 0.6).sin());
+                    grad.SetTransform(&translate(0.0, dy));
+                    rt.FillRectangle(&rect(x, -1.0, x + step, nh + 1.0), &grad);
+                    x += step;
+                }
+                rt.PopLayer();
             }
 
             // Each layout fades in as the pill reaches its size.
@@ -1824,7 +1856,9 @@ impl Renderer {
             )?;
             // The lyrics scroll with the song: keep frames coming while they show and it plays.
             let lyric_busy = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
-            Ok(morphing.get() || glow_busy || icon_busy || lyric_busy)
+            // The glow's wave never rests while the glow shows.
+            let wave_busy = level > 0.0 && v.mode != Mode::Alert && nh > 59.0 * s;
+            Ok(morphing.get() || glow_busy || icon_busy || lyric_busy || wave_busy)
         }
     }
 }
