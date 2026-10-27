@@ -372,8 +372,15 @@ pub fn clean_names(title: &str, artist: &str) -> (String, String) {
     let mut t = match parts.as_slice() {
         [] => t.trim().to_string(),
         [one] => one.clone(),
-        many => many.iter().find(|p| !p.eq_ignore_ascii_case(&artist) && p.to_lowercase() != artist.to_lowercase()).cloned().unwrap_or_else(|| many[0].clone()),
+        // A part that merely mentions the artist ("PHƯƠNG MỸ CHI x DTAP") is not the song either.
+        many => {
+            let artist_l = artist.to_lowercase();
+            let names_artist = |p: &&String| !artist_l.is_empty() && p.to_lowercase().contains(&artist_l);
+            many.iter().find(|p| !names_artist(p)).or_else(|| many.iter().find(|p| p.to_lowercase() != artist_l)).unwrap_or(&many[0]).clone()
+        }
     };
+    // Quotes around the song name: 'THIÊN ANH HÙNG CA'.
+    let mut t = t.trim_matches(|c: char| matches!(c, '\'' | '"' | '‘' | '’' | '“' | '”')).to_string();
     // "Artist - Title": take the artist from the title when the channel is not a person's name.
     if let Some((a, rest)) = t.split_once(" - ") {
         if artist.is_empty() || a.to_lowercase().contains(&artist.to_lowercase()) || artist.to_lowercase().contains(&a.to_lowercase()) {
@@ -597,6 +604,8 @@ mod tests {
         assert_eq!(clean_names("Shape of You [Official Video]", "Ed Sheeran"), ("Shape of You".into(), "Ed Sheeran".into()));
         assert_eq!(clean_names("Blinding Lights", "The Weeknd - Topic"), ("Blinding Lights".into(), "The Weeknd".into()));
         assert_eq!(clean_names("Lạc Trôi", "Sơn Tùng M-TP"), ("Lạc Trôi".into(), "Sơn Tùng M-TP".into()));
+        // The part that only mentions the artist and a collaborator is not the song; quotes go.
+        assert_eq!(clean_names("PHƯƠNG MỸ CHI x DTAP | 'THIÊN ANH HÙNG CA' | Official MV", "Phương Mỹ Chi"), ("THIÊN ANH HÙNG CA".into(), "Phương Mỹ Chi".into()));
     }
 
     /// Network: `cargo test lrclib_video_title -- --ignored --nocapture`
