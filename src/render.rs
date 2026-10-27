@@ -255,7 +255,12 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     let w = panel_w(wide);
     let left = cx / scale - w / 2.0;
     let r = |x: f32, y: f32, bw: f32, bh: f32| rect((left + x) * scale, y * scale, (left + x + bw) * scale, (y + bh) * scale);
-    let mut out = vec![(Button::PagePrev, r(10.0, ARROW_Y, ARROW, ARROW)), (Button::PageNext, r(w - 10.0 - ARROW, ARROW_Y, ARROW, ARROW))];
+    let mut out = Vec::new();
+    // The arrows are hidden while the lyrics are open.
+    if !wide {
+        out.push((Button::PagePrev, r(10.0, ARROW_Y, ARROW, ARROW)));
+        out.push((Button::PageNext, r(w - 10.0 - ARROW, ARROW_Y, ARROW, ARROW)));
+    }
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {
         Page::Music => out.extend(buttons(cx, scale, wide)),
@@ -1774,7 +1779,14 @@ impl Renderer {
                     (Button::PagePrev, rect(l + 10.0 * s, ARROW_Y * s, l + (10.0 + ARROW) * s, (ARROW_Y + ARROW) * s)),
                     (Button::PageNext, rect(r - (10.0 + ARROW) * s, ARROW_Y * s, r - 10.0 * s, (ARROW_Y + ARROW) * s)),
                 ];
+                // While the lyrics are open the arrows are hidden (they fade as the panel widens), so the
+                // way back is the lyrics button: shrinking the panel never leaves the mouse outside it.
+                let arrow_a = a * (1.0 - ((v.size[0] - 440.0) / notch::LYRICS_EXTRA_W).clamp(0.0, 1.0));
                 for (b, icon) in [(Button::PagePrev, ICON_LEFT), (Button::PageNext, ICON_RIGHT)] {
+                    if arrow_a < 0.01 {
+                        break;
+                    }
+                    let a = arrow_a;
                     if let Some((_, br)) = nav.iter().find(|(x, _)| *x == b) {
                         let hot = v.hovered == Some(b);
                         let circle = D2D1_ELLIPSE {
@@ -1999,11 +2011,10 @@ mod tests {
             let (px, py) = ((play.left + play.right) / 2.0, (play.top + play.bottom) / 2.0);
             assert_eq!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, true), Some(Button::PlayPause));
             assert_ne!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, false), Some(Button::PlayPause), "the old place is no longer the button");
-            // The page arrows sit on the edges of the wider panel.
-            let arrows: Vec<_> = page_buttons(cx, scale, Page::Music, 0, 0, None, true).into_iter().filter(|(b, _)| matches!(b, Button::PagePrev | Button::PageNext)).collect();
-            let left = cx - (440.0 + LYRICS_EXTRA_W) / 2.0 * scale;
-            assert!(arrows.iter().any(|(b, r)| *b == Button::PagePrev && r.left < left + 12.0 * scale), "{arrows:?}");
-            assert!(arrows.iter().any(|(b, r)| *b == Button::PageNext && r.right > left + (440.0 + LYRICS_EXTRA_W - 12.0) * scale), "{arrows:?}");
+            // The page arrows are gone while the lyrics are open, and back when they close.
+            let has_arrows = |wide| page_buttons(cx, scale, Page::Music, 0, 0, None, wide).iter().any(|(b, _)| matches!(b, Button::PagePrev | Button::PageNext));
+            assert!(!has_arrows(true));
+            assert!(has_arrows(false));
         }
     }
 
