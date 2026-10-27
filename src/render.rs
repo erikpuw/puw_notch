@@ -477,6 +477,11 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
     0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
+/// The cover's shadow: strokes of growing width centred on its edge (the inner half hides under the
+/// cover), with the darkness of each from the narrowest out, and the step in px.
+const COVER_SHADOW: [f32; 3] = [0.14, 0.09, 0.05];
+const COVER_SHADOW_STEP: f32 = 0.8;
+
 /// The glow's smoke: how much lighter than the glow, how strong at a blob's heart, and each blob's
 /// (x speed, x phase, y speed, y phase, width, height) with sizes as fractions of the panel.
 const SMOKE_LIGHTEN: f32 = 0.30;
@@ -1110,6 +1115,14 @@ impl Renderer {
             };
             // Cover art clipped to a rounded square, or a note glyph when there is none.
             let draw_cover = |box_: D2D_RECT_F, radius: f32, a: f32| -> Result<()> {
+                // The big cover gets a very thin shadow all round, so it stands off the glow behind it.
+                if box_.right - box_.left > 40.0 * s {
+                    let (x, y) = (box_.left.round(), box_.top.round());
+                    let edge = rect(x, y, x + (box_.right - box_.left), y + (box_.bottom - box_.top));
+                    for (k, alpha) in COVER_SHADOW.iter().enumerate().rev() {
+                        rt.DrawRoundedRectangle(&rounded(edge, radius), &self.brush(color(0.0, 0.0, 0.0, alpha * a))?, 2.0 * COVER_SHADOW_STEP * (k as f32 + 1.0) * s, None);
+                    }
+                }
                 match &cover {
                     Some((big, small)) => {
                         // Made at exactly the drawn size: placed on whole pixels, 1:1, so it stays sharp.
