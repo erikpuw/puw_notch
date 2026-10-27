@@ -479,16 +479,17 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 
 /// The glow's smoke: how much lighter than the glow, how strong at a blob's heart, and each blob's
 /// (x speed, x phase, y speed, y phase, width, height) with sizes as fractions of the panel.
-const SMOKE_LIGHTEN: f32 = 0.4;
-const SMOKE_ALPHA: f32 = 0.26;
+const SMOKE_LIGHTEN: f32 = 0.35;
+const SMOKE_ALPHA: f32 = 0.30;
 /// How fast a blob fades towards its rim (the exponent of its gaussian falloff).
 const SMOKE_SHARP: f32 = 4.5;
-/// Two fog layers, the far one fainter and higher, which gives the black behind them some depth:
-/// (middle height, swing, wave length (in panels), speed, strength, blob height), heights as fractions of the panel.
-const FOG: [(f32, f32, f32, f32, f32, f32); 2] = [(0.72, 0.06, 1.2, 0.30, 0.6, 0.14), (0.84, 0.07, 0.9, -0.24, 1.0, 0.15)];
-/// Blobs per layer, and how far each reaches into its neighbours (1 = touching).
-const FOG_BLOBS: usize = 4;
-const FOG_OVERLAP: f32 = 1.7;
+const SMOKE: [(f32, f32, f32, f32, f32, f32); 5] = [
+    (0.21, 0.0, 0.33, 1.0, 0.30, 0.20),
+    (0.17, 2.1, 0.27, 4.0, 0.26, 0.16),
+    (0.26, 4.2, 0.19, 2.0, 0.34, 0.22),
+    (0.13, 1.0, 0.31, 5.0, 0.24, 0.14),
+    (0.23, 5.5, 0.24, 3.3, 0.28, 0.18),
+];
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
@@ -1243,22 +1244,12 @@ impl Renderer {
                     &layer,
                 );
                 rt.FillRectangle(&rect(l - 1.0, (0.58 * nh).max(0.0), r + 1.0, nh + 1.0), &grad);
-                // Each fog layer is a ribbon of overlapping blobs along a travelling sine, every blob
-                // tilted to the slope there, so the layer bends up and down like a slow wave.
-                let (width, tau) = (r - l, std::f32::consts::TAU);
-                for (base, amp, length, speed, strength, height) in FOG {
-                    for i in 0..FOG_BLOBS {
-                        let u = (i as f32 + 0.5) / FOG_BLOBS as f32;
-                        let angle = tau * u / length + t * speed;
-                        let (cx, cy) = (l + width * u, nh * (base + amp * angle.sin()));
-                        let tilt = (nh * amp * angle.cos() * tau / (length * width)).atan();
-                        let (rx, ry) = (width * 0.5 / FOG_BLOBS as f32 * FOG_OVERLAP, nh * height);
-                        let (sin, cos) = tilt.sin_cos();
-                        wisp.SetOpacity(strength);
-                        wisp.SetTransform(&Matrix3x2 { M11: rx * cos, M12: rx * sin, M21: -ry * sin, M22: ry * cos, M31: cx, M32: cy });
-                        let reach = rx * sin.abs() + ry * cos.abs();
-                        rt.FillRectangle(&rect(cx - rx, cy - reach, cx + rx, cy + reach), &wisp);
-                    }
+                for (sx, px, sy, py, wf, hf) in SMOKE {
+                    let cx = l + (r - l) * (0.5 + 0.5 * (t * sx + px).sin());
+                    let cy = nh * (0.78 + 0.13 * (t * sy + py).sin());
+                    let (rx, ry) = ((r - l) * wf, nh * hf);
+                    wisp.SetTransform(&Matrix3x2 { M11: rx, M12: 0.0, M21: 0.0, M22: ry, M31: cx, M32: cy });
+                    rt.FillRectangle(&rect(cx - rx, cy - ry, cx + rx, cy + ry), &wisp);
                 }
                 rt.PopLayer();
             }
