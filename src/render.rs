@@ -1179,7 +1179,7 @@ impl Renderer {
             if level > 0.0 && open > 0.0 && v.mode != Mode::Alert {
                 let (gr, gg, gb) = glow_bottom(tint);
                 let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level * gate) };
-                let stops = rt.CreateGradientStopCollection(&[stop(0.0, 0.0), stop(0.2, 0.08), stop(0.5, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                let stops = rt.CreateGradientStopCollection(&[stop(0.5, 0.0), stop(0.6, 0.08), stop(0.75, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                 let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
                 let grad = rt.CreateLinearGradientBrush(&line, None, &stops)?;
                 // The gradient drifts like a slow wave: narrow vertical strips, each with the same
