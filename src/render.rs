@@ -448,8 +448,11 @@ struct CoverCache {
 
 /// Shadow of the open panel: reaches SHADOW_STEPS * SHADOW_STEP px past the edge (the window has
 /// 24+ px of margin below), SHADOW_ALPHA dark at the edge, shifted SHADOW_DY px down.
-const SHADOW_STEPS: u32 = 14;
-const SHADOW_STEP: f32 = 0.9;
+/// Ten wide strokes instead of fourteen narrow ones: the reach is the same 12.6 px, so the
+/// falloff keeps its shape, for 4 fewer stroked outlines a frame. Fewer steps than this put more
+/// than SHADOW_ALPHA * 0.2 on the innermost stroke, which reads as a line (see the shadow test).
+const SHADOW_STEPS: u32 = 10;
+const SHADOW_STEP: f32 = 1.26;
 const SHADOW_ALPHA: f32 = 0.20;
 const SHADOW_DY: f32 = 2.0;
 
@@ -573,6 +576,8 @@ pub struct Renderer {
     glow: ((f32, f32, f32), f32, Instant),
     /// Start of the renderer, the clock of the glow's wave.
     t0: Instant,
+    /// The last frame showed something that moves slowly (glow wave, lyrics): frames at a relaxed pace will do.
+    pub slow_frames: bool,
     /// Geometry of each line-icon path, by its path data.
     line_geoms: HashMap<&'static str, ID2D1PathGeometry>,
     /// Height of each lyric line wrapped to the lyrics area, for one song (the lyrics' address)
@@ -584,6 +589,8 @@ pub struct Renderer {
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
     /// Round caps and joins for the robot face's strokes.
     round: ID2D1StrokeStyle,
+    /// The glow's gradient brush, by (tint, panel height, strength).
+    glow_brush: RefCell<Option<(([u32; 3], u32, u8), ID2D1LinearGradientBrush)>>,
 }
 
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
@@ -652,7 +659,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), t0: Instant::now(), line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), t0: Instant::now(), slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round, glow_brush: RefCell::new(None) })
         }
     }
 
@@ -859,6 +866,12 @@ impl Renderer {
             self.app_icons.insert(id.to_string(), bitmap);
         }
         self.app_icons[id].clone()
+    }
+
+    /// A solid brush of this colour. D2D makes them cheaply (measured: caching them saved
+    /// nothing), so nothing is kept between frames.
+    fn brush(&self, c: D2D1_COLOR_F) -> Result<ID2D1SolidColorBrush> {
+        unsafe { self.rt.CreateSolidColorBrush(&c, None) }
     }
 
     /// iPhone-style notch: flat top on the screen edge, concave "ears" flaring into it,
@@ -1079,11 +1092,10 @@ impl Renderer {
         let cx = w as f32 / 2.0;
         let (l, r) = (cx - nw / 2.0, cx + nw / 2.0);
         unsafe {
-            let brush = |c: D2D1_COLOR_F| rt.CreateSolidColorBrush(&c, None);
             let text = |t: &str, f: usize, b: D2D_RECT_F, align: DWRITE_TEXT_ALIGNMENT, c: D2D1_COLOR_F| -> Result<()> {
                 let t: Vec<u16> = t.encode_utf16().collect();
                 fonts[f].SetTextAlignment(align)?;
-                rt.DrawText(&t, &fonts[f], &b, &brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                rt.DrawText(&t, &fonts[f], &b, &self.brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
                 Ok(())
             };
             // Cover art clipped to a rounded square, or a note glyph when there is none.
@@ -1100,7 +1112,7 @@ impl Renderer {
                         rt.FillRoundedRectangle(&rounded(rect(x, y, x + size.width, y + size.height), radius), &b);
                     }
                     None => {
-                        rt.FillRoundedRectangle(&rounded(box_, radius), &brush(grey(0.2, a))?);
+                        rt.FillRoundedRectangle(&rounded(box_, radius), &self.brush(grey(0.2, a))?);
                         text(ICON_NOTE, F_ICON, box_, DWRITE_TEXT_ALIGNMENT_CENTER, grey(1.0, a * 0.8))?;
                     }
                 }
@@ -1162,11 +1174,11 @@ impl Renderer {
                 let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                 rt.SetTransform(&(Matrix3x2::translation(0.0, SHADOW_DY * s) * base));
                 for k in (1..=SHADOW_STEPS).rev() {
-                    rt.DrawGeometry(&shape, &brush(color(0.0, 0.0, 0.0, shadow_layer_alpha(k) * open))?, 2.0 * SHADOW_STEP * k as f32 * s, &self.round);
+                    rt.DrawGeometry(&shape, &self.brush(color(0.0, 0.0, 0.0, shadow_layer_alpha(k) * open))?, 2.0 * SHADOW_STEP * k as f32 * s, &self.round);
                 }
                 rt.SetTransform(&base);
             }
-            rt.FillGeometry(&shape, &brush(grey(0.0, 1.0))?, None);
+            rt.FillGeometry(&shape, &self.brush(grey(0.0, 1.0))?, None);
             // Music page: the cover's colour rises from the bottom, black at the top. The pill stays
             // black; the glow grows in with the panel.
             // During a page change the glow follows the Music page's own fade, so it never shows
@@ -1178,10 +1190,24 @@ impl Renderer {
             };
             if level > 0.0 && open > 0.0 && v.mode != Mode::Alert {
                 let (gr, gg, gb) = glow_bottom(tint);
-                let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level * gate) };
-                let stops = rt.CreateGradientStopCollection(&[stop(0.5, 0.0), stop(0.6, 0.08), stop(0.75, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
-                let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
-                let grad = rt.CreateLinearGradientBrush(&line, None, &stops)?;
+                // The strength is baked into the stops, so a steady glow asks for the same stops
+                // every frame: the brush is cached by (tint, height, strength) and only rebuilt
+                // while the glow is still fading.
+                let strength = open * level * gate;
+                let key = ([gr.to_bits(), gg.to_bits(), gb.to_bits()], nh.to_bits(), (strength.clamp(0.0, 1.0) * 255.0).round() as u8);
+                let cached = self.glow_brush.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, b)| b.clone());
+                let grad = match cached {
+                    Some(b) => b,
+                    None => {
+                        let s = key.2 as f32 / 255.0;
+                        let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * s) };
+                        let stops = rt.CreateGradientStopCollection(&[stop(0.5, 0.0), stop(0.6, 0.08), stop(0.75, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                        let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
+                        let b = rt.CreateLinearGradientBrush(&line, None, &stops)?;
+                        *self.glow_brush.borrow_mut() = Some((key, b.clone()));
+                        b
+                    }
+                };
                 // The gradient drifts like a slow wave: narrow vertical strips, each with the same
                 // gradient shifted up or down by two travelling sines, clipped to the notch shape.
                 let t = now.duration_since(self.t0).as_secs_f32();
@@ -1198,13 +1224,16 @@ impl Renderer {
                     },
                     &layer,
                 );
-                let (step, amp, k) = ((4.0 * s).round().max(2.0), WAVE_AMP * s, std::f32::consts::TAU / (WAVE_LEN * s));
+                let (step, amp, k) = ((8.0 * s).round().max(2.0), WAVE_AMP * s, std::f32::consts::TAU / (WAVE_LEN * s));
+                // Above the gradient's first stop the alpha is 0 for every wave offset, so the
+                // strips start there: the transparent top half is never filled.
+                let top = (0.5 * nh - amp).max(0.0);
                 let mut x = l.floor();
                 while x < r {
                     let phase = k * x;
                     let dy = amp * (0.6 * (phase + t * 0.9).sin() + 0.4 * (phase * 1.7 - t * 0.6).sin());
                     grad.SetTransform(&translate(0.0, dy));
-                    rt.FillRectangle(&rect(x, -1.0, x + step, nh + 1.0), &grad);
+                    rt.FillRectangle(&rect(x, top, x + step, nh + 1.0), &grad);
                     x += step;
                 }
                 rt.PopLayer();
@@ -1238,8 +1267,8 @@ impl Renderer {
                     let stroke = 2.2 * s;
                     let (rcx, rcy, rr) = (bx + d / 2.0, by + d / 2.0, d / 2.0 - stroke / 2.0);
                     let track = D2D1_ELLIPSE { point: Vector2 { X: rcx, Y: rcy }, radiusX: rr, radiusY: rr };
-                    rt.DrawEllipse(&track, &brush(grey(0.3, small_a))?, stroke, None);
-                    rt.DrawGeometry(&self.ring(rcx, rcy, rr, b.percent as f32 / 100.0)?, &brush(ring_c)?, stroke, None);
+                    rt.DrawEllipse(&track, &self.brush(grey(0.3, small_a))?, stroke, None);
+                    rt.DrawGeometry(&self.ring(rcx, rcy, rr, b.percent as f32 / 100.0)?, &self.brush(ring_c)?, stroke, None);
                     if b.charging {
                         text(ICON_BOLT, F_TINY_ICON, rect(bx, by, bx + d, by + d), center, ring_c)?;
                     }
@@ -1256,7 +1285,7 @@ impl Renderer {
                         let bh = (4.0 + 10.0 * amp) * s;
                         let bx = r - 14.0 * s - (4.0 - k) * (bw + 2.0 * s);
                         let my = nh / 2.0;
-                        rt.FillRoundedRectangle(&rounded(rect(bx, my - bh / 2.0, bx + bw, my + bh / 2.0), bw / 2.0), &brush(grey(1.0, small_a * 0.9))?);
+                        rt.FillRoundedRectangle(&rounded(rect(bx, my - bh / 2.0, bx + bw, my + bh / 2.0), bw / 2.0), &self.brush(grey(1.0, small_a * 0.9))?);
                     }
                 }
                 if let Some(e) = v.robot.filter(|e| e.alpha > 0.0) {
@@ -1290,7 +1319,7 @@ impl Renderer {
                             let local = translate(-ox, -oy) * rotation(g.rot) * scaling(g.scale) * translate(ox + g.dx, oy + g.dy);
                             let alpha = a * pop_alpha * g.alpha * groups.get(part.a as usize).map_or(1.0, |m| m.alpha);
                             rt.SetTransform(&(local * view * pop * base));
-                            rt.DrawGeometry(geo, &brush(grey(1.0, alpha))?, ic.sw, &self.round);
+                            rt.DrawGeometry(geo, &self.brush(grey(1.0, alpha))?, ic.sw, &self.round);
                         }
                         rt.SetTransform(&base);
                     } else if icon == ICON_DROP {
@@ -1298,7 +1327,7 @@ impl Renderer {
                         let hop = icons::drop_motion(age).dy * (LINE_ICON * s / 24.0);
                         rt.SetTransform(&(pop * translate(0.0, hop) * base));
                         let g = self.water_drop(mx, my, 24.0 * s)?;
-                        rt.FillGeometry(&g, &brush(color(BLUE.0, BLUE.1, BLUE.2, a * pop_alpha))?, None);
+                        rt.FillGeometry(&g, &self.brush(color(BLUE.0, BLUE.1, BLUE.2, a * pop_alpha))?, None);
                         rt.SetTransform(&base);
                     } else {
                         micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
@@ -1311,8 +1340,8 @@ impl Renderer {
                             let th = 5.0 * s;
                             let my = 50.0 * s;
                             let bar = |right: f32| rounded(rect(tl, my - th / 2.0, right, my + th / 2.0), th / 2.0);
-                            rt.FillRoundedRectangle(&bar(tr), &brush(grey(0.25, a))?);
-                            rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &brush(grey(1.0, a))?);
+                            rt.FillRoundedRectangle(&bar(tr), &self.brush(grey(0.25, a))?);
+                            rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &self.brush(grey(1.0, a))?);
                         }
                         // Status banner (icon): one line under the title.
                         None if t.icon.is_some() => text(&t.body, F_BODY, rect(tl, 42.0 * s, tr, 58.0 * s), lead, grey(0.75, a))?,
@@ -1386,11 +1415,11 @@ impl Renderer {
                         let editing = current && lv.editing;
                         let edit_row = if current { lv.edit_item } else { None };
                         let focus = editing || hovered == Some(Button::ListInput);
-                        rt.FillRoundedRectangle(&rounded(ib, 13.0 * s), &brush(grey(if focus { 0.16 } else { 0.12 }, a))?);
+                        rt.FillRoundedRectangle(&rounded(ib, 13.0 * s), &self.brush(grey(if focus { 0.16 } else { 0.12 }, a))?);
                         if editing || edit_row.is_some() {
                             let inner = rect(ib.left + 0.5, ib.top + 0.5, ib.right - 0.5, ib.bottom - 0.5);
                             let c = if edit_row.is_some() { solid(YELLOW, a * 0.8) } else { grey(1.0, a * 0.35) };
-                            rt.DrawRoundedRectangle(&rounded(inner, 13.0 * s), &brush(c)?, 1.0 * s, None);
+                            rt.DrawRoundedRectangle(&rounded(inner, 13.0 * s), &self.brush(c)?, 1.0 * s, None);
                         }
                         let tag_w = if edit_row.is_some() { 58.0 * s } else { 0.0 };
                         if edit_row.is_some() {
@@ -1410,7 +1439,7 @@ impl Renderer {
                             if editing && lv.caret {
                                 let x = if tw > room { tb.right - 2.0 * s } else { tb.left + tw + 1.0 * s };
                                 let my = (ib.top + ib.bottom) / 2.0;
-                                rt.FillRectangle(&rect(x, my - 7.0 * s, x + 1.5 * s, my + 7.0 * s), &brush(grey(1.0, a))?);
+                                rt.FillRectangle(&rect(x, my - 7.0 * s, x + 1.5 * s, my + 7.0 * s), &self.brush(grey(1.0, a))?);
                             }
                         }
                         Ok(())
@@ -1439,10 +1468,10 @@ impl Renderer {
                         if n > rows {
                             let (top, bottom) = (y0 * s, (y0 + row_h * rows as f32) * s);
                             let x = cr + 6.0 * s;
-                            rt.FillRoundedRectangle(&rounded(rect(x, top, x + 3.0 * s, bottom), 1.5 * s), &brush(grey(0.2, a))?);
+                            rt.FillRoundedRectangle(&rounded(rect(x, top, x + 3.0 * s, bottom), 1.5 * s), &self.brush(grey(0.2, a))?);
                             let len = (bottom - top) * rows as f32 / n as f32;
                             let start = top + (bottom - top - len) * scroll as f32 / (n - rows) as f32;
-                            rt.FillRoundedRectangle(&rounded(rect(x, start, x + 3.0 * s, start + len), 1.5 * s), &brush(grey(0.6, a))?);
+                            rt.FillRoundedRectangle(&rounded(rect(x, start, x + 3.0 * s, start + len), 1.5 * s), &self.brush(grey(0.6, a))?);
                         }
                         Ok(())
                     };
@@ -1482,10 +1511,10 @@ impl Renderer {
                             text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr - 60.0 * s, by + 4.0 * s, brr, by + 20.0 * s), trail, times)?;
                             let th = 4.0 * s;
                             let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
-                            rt.FillRoundedRectangle(&bar(brr), &brush({ let g = 0.25 + 0.75 * level; color(g, g, g, a * (1.0 - 0.7 * level)) })?);
+                            rt.FillRoundedRectangle(&bar(brr), &self.brush({ let g = 0.25 + 0.75 * level; color(g, g, g, a * (1.0 - 0.7 * level)) })?);
                             if dur > 0 {
                                 let p = (pos as f32 / dur as f32).clamp(0.0, 1.0);
-                                rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &brush(grey(1.0, a))?);
+                                rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &self.brush(grey(1.0, a))?);
                             }
                             let playing = v.music.is_some_and(|t| t.playing);
                             for (b, br) in buttons_from(l / s, s) {
@@ -1496,13 +1525,13 @@ impl Renderer {
                                     let bubble = rect(bx - 9.0 * s, by - 7.0 * s, bx + 9.0 * s, by + 7.0 * s);
                                     let ink = if !on { grey(0.3, a) } else if v.lyrics { grey(0.05, a) } else if hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
                                     if on && v.lyrics {
-                                        rt.FillRoundedRectangle(&rounded(bubble, 4.0 * s), &brush(grey(1.0, a))?);
+                                        rt.FillRoundedRectangle(&rounded(bubble, 4.0 * s), &self.brush(grey(1.0, a))?);
                                     } else {
-                                        rt.DrawRoundedRectangle(&rounded(bubble, 4.0 * s), &brush(ink)?, 1.6 * s, None);
+                                        rt.DrawRoundedRectangle(&rounded(bubble, 4.0 * s), &self.brush(ink)?, 1.6 * s, None);
                                     }
                                     for (k, len) in [10.0, 6.0].into_iter().enumerate() {
                                         let y = by - 2.2 * s + k as f32 * 4.4 * s;
-                                        rt.DrawLine(Vector2 { X: bx - 5.0 * s, Y: y }, Vector2 { X: bx - 5.0 * s + len * s, Y: y }, &brush(ink)?, 1.5 * s, &self.round);
+                                        rt.DrawLine(Vector2 { X: bx - 5.0 * s, Y: y }, Vector2 { X: bx - 5.0 * s + len * s, Y: y }, &self.brush(ink)?, 1.5 * s, &self.round);
                                     }
                                     continue;
                                 }
@@ -1517,7 +1546,7 @@ impl Renderer {
                                     let fill = if !on { grey(0.25, a) } else if hovered == Some(b) { grey(0.85, a) } else { grey(1.0, a) };
                                     let disc = D2D1_ELLIPSE { point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
                                         radiusX: (br.right - br.left) / 2.0, radiusY: (br.bottom - br.top) / 2.0 };
-                                    rt.FillEllipse(&disc, &brush(fill)?);
+                                    rt.FillEllipse(&disc, &self.brush(fill)?);
                                     micon("play", icon, F_ICON, br, if on { grey(0.05, a) } else { grey(0.5, a) })?;
                                     continue;
                                 }
@@ -1578,7 +1607,7 @@ impl Renderer {
                                 for (b, icon) in [(Button::RemindStep(-1), ICON_MINUS), (Button::RemindStep(1), ICON_PLUS)] {
                                     if let Some(sb) = rect_of(b) {
                                         rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: (sb.left + sb.right) / 2.0, Y: (sb.top + sb.bottom) / 2.0 }, radiusX: 9.0 * s, radiusY: 9.0 * s },
-                                            &brush(grey(if hovered == Some(b) { 0.3 } else { 0.2 }, a))?);
+                                            &self.brush(grey(if hovered == Some(b) { 0.3 } else { 0.2 }, a))?);
                                         text(icon, F_TINY_ICON, sb, center, grey(1.0, a))?;
                                     }
                                 }
@@ -1588,7 +1617,7 @@ impl Renderer {
                                 if v.todos.is_empty() {
                                     let mid = (cl + cr) / 2.0;
                                     let ring = D2D1_ELLIPSE { point: Vector2 { X: mid, Y: (ROW_Y + 12.0) * s }, radiusX: 11.0 * s, radiusY: 11.0 * s };
-                                    rt.DrawEllipse(&ring, &brush(grey(0.3, a))?, 1.5 * s, None);
+                                    rt.DrawEllipse(&ring, &self.brush(grey(0.3, a))?, 1.5 * s, None);
                                     text(ICON_CHECK, F_TINY_ICON, rect(mid - 11.0 * s, (ROW_Y + 1.0) * s, mid + 11.0 * s, (ROW_Y + 23.0) * s), center, grey(0.3, a))?;
                                     text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, rect(cl, (ROW_Y + 28.0) * s, cr, (ROW_Y + 46.0) * s), center, grey(0.7, a))?;
                                     text(tr("Gõ vào ô trên rồi nhấn Enter", "Type above and press Enter"), F_LABEL, rect(cl, (ROW_Y + 46.0) * s, cr, (ROW_Y + 62.0) * s), center, grey(0.5, a))?;
@@ -1598,7 +1627,7 @@ impl Renderer {
                                     let Some(item) = v.todos.get(i) else { continue };
                                     let hot = row_hovered(i);
                                     if hot {
-                                        rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &brush(grey(0.1, a))?);
+                                        rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &self.brush(grey(0.1, a))?);
                                     }
                                     // Tick circle.
                                     let d = 14.0 * s;
@@ -1606,10 +1635,10 @@ impl Renderer {
                                     let circle = D2D1_ELLIPSE { point: Vector2 { X: ccx, Y: ccy }, radiusX: d / 2.0 - 0.75 * s, radiusY: d / 2.0 - 0.75 * s };
                                     let done = item.done.is_some();
                                     if done {
-                                        rt.FillEllipse(&circle, &brush(solid(GREEN, a))?);
+                                        rt.FillEllipse(&circle, &self.brush(solid(GREEN, a))?);
                                         text(ICON_CHECK, F_TINY_ICON, rect(ccx - d / 2.0, ccy - d / 2.0, ccx + d / 2.0, ccy + d / 2.0), center, grey(0.0, a))?;
                                     } else {
-                                        rt.DrawEllipse(&circle, &brush(grey(if hot { 0.85 } else { 0.55 }, a))?, 1.5 * s, None);
+                                        rt.DrawEllipse(&circle, &self.brush(grey(if hot { 0.85 } else { 0.55 }, a))?, 1.5 * s, None);
                                     }
                                     // When, on the right: "HH:MM" today, "Mai HH:MM", "dd/mm HH:MM" (red once past).
                                     let mut text_right = br.right;
@@ -1627,7 +1656,7 @@ impl Renderer {
                                     if done {
                                         let tw = width(&item.text, F_BODY).min(tb.right - tb.left);
                                         let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
-                                        rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &brush(grey(0.45, a))?);
+                                        rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &self.brush(grey(0.45, a))?);
                                     }
                                     row_tools(i, hot)?;
                                 }
@@ -1652,12 +1681,12 @@ impl Renderer {
                                 match note_icons.get(scroll + row).and_then(|i| i.as_ref()) {
                                     // The app's own icon on a light-grey tile, so dark logos show on black.
                                     Some(icon) => {
-                                        rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &brush(grey(0.16, a))?);
+                                        rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &self.brush(grey(0.16, a))?);
                                         rt.DrawBitmap(icon, Some(&rect(tile.left + 3.0 * s, tile.top + 3.0 * s, tile.right - 3.0 * s, tile.bottom - 3.0 * s)), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                                     }
                                     None => {
                                         let (tr_, tg, tb) = app_tint(&n.app);
-                                        rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &brush(color(tr_, tg, tb, a))?);
+                                        rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &self.brush(color(tr_, tg, tb, a))?);
                                         text(&app_initial(&n.app), F_TITLE, tile, center, grey(1.0, a))?;
                                     }
                                 }
@@ -1675,14 +1704,14 @@ impl Renderer {
                             for card in [Card::Water, Card::Sit] {
                                 let x = if card == Card::Water { cl } else { cl + (CARD_W + CARD_GAP) * s };
                                 let cb = rect(x, CARD_TOP * s, x + CARD_W * s, CARD_BOTTOM * s);
-                                rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &brush(grey(0.11, a))?);
+                                rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(grey(0.11, a))?);
                                 let accent = if card == Card::Water { BLUE } else { ORANGE };
                                 // Title row: icon, name, gear.
                                 let ty = (CARD_TOP + 4.0) * s;
                                 let ib = rect(x + 10.0 * s, ty, x + 32.0 * s, ty + 22.0 * s);
                                 if card == Card::Water {
                                     let g = self.water_drop((ib.left + ib.right) / 2.0, (ib.top + ib.bottom) / 2.0, 16.0 * s)?;
-                                    rt.FillGeometry(&g, &brush(solid(accent, a))?, None);
+                                    rt.FillGeometry(&g, &self.brush(solid(accent, a))?, None);
                                 } else {
                                     text(ICON_WALK, F_ICON, ib, center, solid(accent, a))?;
                                 }
@@ -1711,10 +1740,10 @@ impl Renderer {
                                             if let Some(sb) = rect_of(Button::Toggle(set)) {
                                                 let on = if set == Setting::WaterOn { h.water_on } else { h.sit_on };
                                                 let rad = (sb.bottom - sb.top) / 2.0;
-                                                rt.FillRoundedRectangle(&rounded(sb, rad), &brush(if on { solid(GREEN, a) } else { grey(0.3, a) })?);
+                                                rt.FillRoundedRectangle(&rounded(sb, rad), &self.brush(if on { solid(GREEN, a) } else { grey(0.3, a) })?);
                                                 let kx = if on { sb.right - rad } else { sb.left + rad };
                                                 let knob = D2D1_ELLIPSE { point: Vector2 { X: kx, Y: (sb.top + sb.bottom) / 2.0 }, radiusX: rad - 2.0 * s, radiusY: rad - 2.0 * s };
-                                                rt.FillEllipse(&knob, &brush(grey(1.0, a))?)
+                                                rt.FillEllipse(&knob, &self.brush(grey(1.0, a))?)
                                             }
                                         } else {
                                             let value = match set {
@@ -1728,7 +1757,7 @@ impl Renderer {
                                                 for (bb, icon, dir) in [(mb, ICON_MINUS, -1), (pb, ICON_PLUS, 1)] {
                                                     let hot = hovered == Some(Button::Step(set, dir));
                                                     let c = D2D1_ELLIPSE { point: Vector2 { X: (bb.left + bb.right) / 2.0, Y: (bb.top + bb.bottom) / 2.0 }, radiusX: 8.0 * s, radiusY: 8.0 * s };
-                                                    rt.FillEllipse(&c, &brush(grey(if hot { 0.32 } else { 0.2 }, a))?);
+                                                    rt.FillEllipse(&c, &self.brush(grey(if hot { 0.32 } else { 0.2 }, a))?);
                                                     text(icon, F_TINY_ICON, bb, center, grey(1.0, a))?;
                                                 }
                                                 text(&value, F_LABEL, rect(mb.right, mb.top, pb.left, pb.bottom), center, grey(1.0, a))?;
@@ -1766,21 +1795,21 @@ impl Renderer {
                                 text(&unit, F_LABEL, rect(x + 12.0 * s + bw + 2.0 * s, by + 6.0 * s, x + CARD_W * s - 8.0 * s, by + 26.0 * s), lead, grey(0.6, a))?;
                                 let (bl, br_) = (x + 12.0 * s, x + CARD_W * s - 12.0 * s);
                                 let bar = |right: f32| rounded(rect(bl, 94.0 * s, right, 98.0 * s), 2.0 * s);
-                                rt.FillRoundedRectangle(&bar(br_), &brush(grey(0.25, a))?);
-                                rt.FillRoundedRectangle(&bar(bl + (br_ - bl) * frac.clamp(0.0, 1.0)), &brush(solid(accent, a))?);
+                                rt.FillRoundedRectangle(&bar(br_), &self.brush(grey(0.25, a))?);
+                                rt.FillRoundedRectangle(&bar(bl + (br_ - bl) * frac.clamp(0.0, 1.0)), &self.brush(solid(accent, a))?);
                                 text(&status, F_LABEL, rect(bl, 101.0 * s, br_, 119.0 * s), lead, grey(0.65, a))?;
                                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                                 if let Some(pb) = rect_of(ab) {
                                     let hot = hovered == Some(ab);
                                     let k = if hot { 1.0 } else { 0.82 };
-                                    rt.FillRoundedRectangle(&rounded(pb, 12.0 * s), &brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
+                                    rt.FillRoundedRectangle(&rounded(pb, 12.0 * s), &self.brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
                                     // Dark label on the orange button: white on it is only 3.1:1.
                                     text(&action, F_SMALL, pb, center, if card == Card::Sit { grey(0.06, a) } else { grey(1.0, a) })?;
                                 }
                                 if let Some(sb) = rect_of(Button::Snooze) {
                                     if card == Card::Water {
                                         let hot = hovered == Some(Button::Snooze);
-                                        rt.FillRoundedRectangle(&rounded(sb, 12.0 * s), &brush(grey(if hot { 0.3 } else { 0.2 }, a))?);
+                                        rt.FillRoundedRectangle(&rounded(sb, 12.0 * s), &self.brush(grey(if hot { 0.3 } else { 0.2 }, a))?);
                                         text(tr("Để sau", "Later"), F_LABEL, sb, center, grey(1.0, a))?;
                                     }
                                 }
@@ -1826,7 +1855,7 @@ impl Renderer {
                             radiusX: (br.right - br.left) / 2.0,
                             radiusY: (br.bottom - br.top) / 2.0,
                         };
-                        rt.FillEllipse(&circle, &brush(grey(if hot { 0.26 } else { 0.15 }, a))?);
+                        rt.FillEllipse(&circle, &self.brush(grey(if hot { 0.26 } else { 0.15 }, a))?);
                         text(icon, F_SMALL_ICON, *br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
                     }
                 }
@@ -1836,7 +1865,7 @@ impl Renderer {
                 for p in PAGES {
                     let on = p == v.page;
                     let dw = if on { wide } else { dot };
-                    rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &brush(if on { grey(1.0, a) } else { grey(0.45, a) })?);
+                    rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &self.brush(if on { grey(1.0, a) } else { grey(0.45, a) })?);
                     dx += dw + gap;
                 }
             }
@@ -1854,11 +1883,13 @@ impl Renderer {
                 Some(&blend),
                 ULW_ALPHA,
             )?;
-            // The lyrics scroll with the song: keep frames coming while they show and it plays.
-            let lyric_busy = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
-            // The glow's wave never rests while the glow shows.
-            let wave_busy = level > 0.0 && v.mode != Mode::Alert && nh > 59.0 * s;
-            Ok(morphing.get() || glow_busy || icon_busy || lyric_busy || wave_busy)
+            // Lyrics and the glow's wave need frames while they show, but a slow trickle is enough
+            // for the wave and for the lyrics between lines; only a lyric gliding to the next line
+            // asks for full-speed frames.
+            let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
+            let lyric_glide = lyrics_run && v.music.is_some_and(|t| lyrics::phase(&t.lyrics, t.position_ms()).fract() != 0.0);
+            self.slow_frames = lyrics_run || (level > 0.0 && v.mode != Mode::Alert && nh > 59.0 * s);
+            Ok(morphing.get() || glow_busy || icon_busy || lyric_glide)
         }
     }
 }
@@ -2094,6 +2125,46 @@ mod tests {
             bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
             bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(pixels);
             std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/lyrics-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "benchmark: prints the time one Music-page frame takes"]
+    fn perf_music_page() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (820, 210);
+            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("perf"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let track = Track { title: "Bản nhạc đang phát".into(), artist: "YouTube / foobar2000".into(),
+                duration_ms: 210_000, position_ms: 14_000, playing: true, can_toggle: true, can_next: true,
+                can_previous: true, can_seek: true,
+                art: std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new), art_key: 1,
+                lyrics: Arc::new(vec![(0, "la la".into())]), ..Default::default() };
+            let mut size = target(Mode::Expanded, false);
+            size[0] += LYRICS_EXTRA_W;
+            let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10",
+                battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track),
+                live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
+                leaving: None, todos: &[], notes: &[],
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+            let mut renderer = Renderer::new().unwrap();
+            // Let the cover decode and the glow reach its steady strength.
+            for _ in 0..400 {
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+            }
+            let n = 400;
+            let mut ms: Vec<f64> = Vec::with_capacity(n);
+            for _ in 0..n {
+                let t = std::time::Instant::now();
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!("present: median {:.3} ms | p90 {:.3} ms | mean {:.3} ms | min {:.3} ms",
+                ms[n / 2], ms[n * 9 / 10], ms.iter().sum::<f64>() / n as f64, ms[0]);
             DestroyWindow(hwnd).unwrap();
         }
     }

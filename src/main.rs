@@ -298,7 +298,7 @@ impl App {
         self.redraw();
         if moving || morphing || self.icons_morphing {
             self.set_frame_interval(VSYNC);
-        } else if self.bars_active() {
+        } else if self.bars_active() || self.renderer.slow_frames {
             self.set_frame_interval(BARS_FRAME_MS);
         } else {
             self.animating = false;
