@@ -26,6 +26,8 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không We
 | ![Việc](assets/screenshots/page-tasks.png)<br>**Việc**: việc và lịch hẹn trong một danh sách | ![Thông báo](assets/screenshots/page-notifications.png)<br>**Thông báo**: kèm icon của từng app |
 | ![Sức khỏe](assets/screenshots/page-health.png)<br>**Sức khỏe**: nhắc uống nước, đứng dậy | ![Banner](assets/screenshots/banner.png)<br>**Banner** thông báo |
 
+![Nhạc với lời](assets/screenshots/page-music-lyrics.png)<br>**Nhạc** với lời bài hát: bảng giãn ngang, dòng đang hát sáng ở giữa
+
 Viên thuốc thu gọn:
 
 | Đang phát nhạc | Bình thường | Robot khi để yên | Robot vui |

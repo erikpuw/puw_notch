@@ -2068,7 +2068,9 @@ mod tests {
             ];
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 14_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true,
-                lyrics: Arc::new(lines.iter().map(|(t, s)| (*t as u64, s.to_string())).collect()), ..Default::default() };
+                lyrics: Arc::new(lines.iter().map(|(t, s)| (*t as u64, s.to_string())).collect()),
+                // A cover image for the glow and the cover slot: PUW_PREVIEW_COVER=path.
+                art: std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new), art_key: 1, ..Default::default() };
             let mut size = target(Mode::Expanded, false);
             size[0] += LYRICS_EXTRA_W;
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
@@ -2077,7 +2079,11 @@ mod tests {
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
-            renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+            // The cover loads and the glow fades in over a second or two.
+            for _ in 0..(if track.art.is_some() { 120 } else { 1 }) {
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
             let mut dib = DIBSECTION::default();
             assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
             let pixels = std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize);

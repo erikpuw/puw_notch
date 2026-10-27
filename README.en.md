@@ -26,6 +26,8 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
 | ![Tasks](assets/screenshots/page-tasks.png)<br>**Tasks**: tasks and appointments in one list | ![Notifications](assets/screenshots/page-notifications.png)<br>**Notifications**: each with its app's icon |
 | ![Health](assets/screenshots/page-health.png)<br>**Health**: water and stand-up reminders | ![Banner](assets/screenshots/banner.png)<br>Notification **banner** |
 
+![Music with lyrics](assets/screenshots/page-music-lyrics.png)<br>**Music** with lyrics: the panel widens, the line being sung lit in the middle
+
 The collapsed pill:
 
 | Music playing | Normal | Idle robot | Happy robot |
