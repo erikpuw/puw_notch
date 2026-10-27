@@ -479,14 +479,15 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 
 /// The glow's smoke: how much lighter than the glow, how strong at a blob's heart, and each blob's
 /// (x speed, x phase, y speed, y phase, width, height) with sizes as fractions of the panel.
-const SMOKE_LIGHTEN: f32 = 0.35;
-const SMOKE_ALPHA: f32 = 0.30;
-const SMOKE: [(f32, f32, f32, f32, f32, f32); 5] = [
-    (0.21, 0.0, 0.33, 1.0, 0.30, 0.20),
-    (0.17, 2.1, 0.27, 4.0, 0.26, 0.16),
-    (0.26, 4.2, 0.19, 2.0, 0.34, 0.22),
-    (0.13, 1.0, 0.31, 5.0, 0.24, 0.14),
-    (0.23, 5.5, 0.24, 3.3, 0.28, 0.18),
+const SMOKE_LIGHTEN: f32 = 0.4;
+const SMOKE_ALPHA: f32 = 0.24;
+const SMOKE: [(f32, f32, f32, f32, f32, f32); 6] = [
+    (0.09, 0.0, 0.16, 1.0, 0.62, 0.17),
+    (0.07, 2.1, 0.12, 4.0, 0.55, 0.14),
+    (0.11, 4.2, 0.10, 2.0, 0.70, 0.19),
+    (0.06, 1.0, 0.15, 5.0, 0.50, 0.12),
+    (0.10, 5.5, 0.13, 3.3, 0.60, 0.16),
+    (0.08, 3.3, 0.11, 0.5, 0.66, 0.15),
 ];
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
