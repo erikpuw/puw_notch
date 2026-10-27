@@ -4,8 +4,6 @@
 
 Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không WebView.
 
-[![Mời tôi một ly cà phê](https://img.shields.io/badge/M%E1%BB%9Di%20t%C3%B4i%20m%E1%BB%99t%20ly%20c%C3%A0%20ph%C3%AA-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/erikpuw)
-
 ## Tính năng
 
 - **Notch**: giờ, vòng pin, sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi viên thuốc (ngắn hay dài theo nhạc) đè lên tab hoặc chữ bên dưới, hiện lại khi hết, ẩn khi chơi game / xem phim toàn màn hình.

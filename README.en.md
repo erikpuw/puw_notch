@@ -4,8 +4,6 @@
 
 A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no WebView.
 
-[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/erikpuw)
-
 ## Features
 
 - **Notch**: clock, battery ring, music waves. Hover to open the panel. Shrinks to a line when the pill (short or long, depending on music) would cover tabs or text underneath, and comes back when it is clear, hides during fullscreen games and videos.
