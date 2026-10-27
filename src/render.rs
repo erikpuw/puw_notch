@@ -480,7 +480,7 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 /// The glow's smoke: how much lighter than the glow, how strong at a blob's heart, and each blob's
 /// (x speed, x phase, y speed, y phase, width, height) with sizes as fractions of the panel.
 const SMOKE_LIGHTEN: f32 = 0.35;
-const SMOKE_ALPHA: f32 = 0.30;
+const SMOKE_ALPHA: f32 = 0.36;
 const SMOKE: [(f32, f32, f32, f32, f32, f32); 5] = [
     (0.21, 0.0, 0.33, 1.0, 0.30, 0.20),
     (0.17, 2.1, 0.27, 4.0, 0.26, 0.16),
@@ -1214,7 +1214,10 @@ impl Renderer {
                         let g = rt.CreateLinearGradientBrush(&line, None, &stops)?;
                         let lighter = |c: f32| c + (1.0 - c) * SMOKE_LIGHTEN;
                         let fade = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(lighter(gr), lighter(gg), lighter(gb), a * s) };
-                        let stops = rt.CreateGradientStopCollection(&[fade(0.0, SMOKE_ALPHA), fade(0.5, SMOKE_ALPHA * 0.4), fade(1.0, 0.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                        // Falloff (1 - r²)²: flat at the heart and at the rim, so a blob has no edge to
+                        // show where it overlaps another.
+                        let falloff: Vec<_> = (0..=8).map(|i| { let r = i as f32 / 8.0; fade(r, SMOKE_ALPHA * (1.0 - r * r).powi(2)) }).collect();
+                        let stops = rt.CreateGradientStopCollection(&falloff, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                         let disc = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES { center: Vector2 { X: 0.0, Y: 0.0 }, gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 }, radiusX: 1.0, radiusY: 1.0 };
                         let w = rt.CreateRadialGradientBrush(&disc, None, &stops)?;
                         *self.glow_brush.borrow_mut() = Some((key, g.clone(), w.clone()));
