@@ -374,7 +374,7 @@ pub fn clean_names(title: &str, artist: &str) -> (String, String) {
     }
     // "A | B | Official MV": keep the parts that are not noise; the part equal to the artist goes.
     let parts: Vec<String> = t.split(['|', '｜', '•']).map(|p| p.trim().to_string()).filter(|p| !p.is_empty() && !lower_has(p, &NOISE)).collect();
-    let mut t = match parts.as_slice() {
+    let t = match parts.as_slice() {
         [] => t.trim().to_string(),
         [one] => one.clone(),
         // A part that merely mentions the artist ("PHƯƠNG MỸ CHI x DTAP") is not the song either.
