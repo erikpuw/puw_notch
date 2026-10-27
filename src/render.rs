@@ -480,13 +480,15 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 /// The glow's smoke: how much lighter than the glow, how strong at a blob's heart, and each blob's
 /// (x speed, x phase, y speed, y phase, width, height) with sizes as fractions of the panel.
 const SMOKE_LIGHTEN: f32 = 0.35;
-const SMOKE_ALPHA: f32 = 0.36;
+const SMOKE_ALPHA: f32 = 0.30;
+/// How fast a blob fades towards its rim (the exponent of its gaussian falloff).
+const SMOKE_SHARP: f32 = 4.5;
 const SMOKE: [(f32, f32, f32, f32, f32, f32); 5] = [
-    (0.21, 0.0, 0.33, 1.0, 0.30, 0.20),
-    (0.17, 2.1, 0.27, 4.0, 0.26, 0.16),
-    (0.26, 4.2, 0.19, 2.0, 0.34, 0.22),
-    (0.13, 1.0, 0.31, 5.0, 0.24, 0.14),
-    (0.23, 5.5, 0.24, 3.3, 0.28, 0.18),
+    (0.21, 0.0, 0.33, 1.0, 0.40, 0.24),
+    (0.17, 2.1, 0.27, 4.0, 0.34, 0.20),
+    (0.26, 4.2, 0.19, 2.0, 0.44, 0.26),
+    (0.13, 1.0, 0.31, 5.0, 0.32, 0.18),
+    (0.23, 5.5, 0.24, 3.3, 0.38, 0.22),
 ];
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
@@ -1214,9 +1216,10 @@ impl Renderer {
                         let g = rt.CreateLinearGradientBrush(&line, None, &stops)?;
                         let lighter = |c: f32| c + (1.0 - c) * SMOKE_LIGHTEN;
                         let fade = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(lighter(gr), lighter(gg), lighter(gb), a * s) };
-                        // Falloff (1 - r²)²: flat at the heart and at the rim, so a blob has no edge to
-                        // show where it overlaps another.
-                        let falloff: Vec<_> = (0..=8).map(|i| { let r = i as f32 / 8.0; fade(r, SMOKE_ALPHA * (1.0 - r * r).powi(2)) }).collect();
+                        // Gaussian falloff with long, faint tails (shifted to end at exactly 0): a blob
+                        // has no rim to show where it overlaps another, only a bump that melts away.
+                        let tail = (-SMOKE_SHARP).exp();
+                        let falloff: Vec<_> = (0..=16).map(|i| { let r = i as f32 / 16.0; fade(r, SMOKE_ALPHA * ((-SMOKE_SHARP * r * r).exp() - tail) / (1.0 - tail)) }).collect();
                         let stops = rt.CreateGradientStopCollection(&falloff, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                         let disc = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES { center: Vector2 { X: 0.0, Y: 0.0 }, gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 }, radiusX: 1.0, radiusY: 1.0 };
                         let w = rt.CreateRadialGradientBrush(&disc, None, &stops)?;
