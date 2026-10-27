@@ -10,11 +10,12 @@ use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Graphics::Imaging::*;
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_numerics::{Matrix3x2, Vector2};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -560,6 +561,48 @@ fn glow_tint(pixels: &[u8]) -> (f32, f32, f32) {
     (r / max, g / max, b / max)
 }
 
+/// Fetches app icons on a worker thread: the shell takes tens of ms for an app's first icon, which
+/// showed as a stutter when the Notifications page opened. Answers are (id, width, height, premultiplied BGRA).
+struct IconLoader {
+    ask: Sender<String>,
+    got: Receiver<(String, Option<(u32, u32, Vec<u8>)>)>,
+    /// Asked for, not answered yet.
+    pending: HashSet<String>,
+}
+
+impl IconLoader {
+    fn start() -> Self {
+        let (ask, asked) = channel::<String>();
+        let (answer, got) = channel();
+        std::thread::spawn(move || unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let wic: Option<IWICImagingFactory> = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
+            for id in asked {
+                let pixels = wic.as_ref().and_then(|wic| app_icon_pixels(wic, &id));
+                if answer.send((id, pixels)).is_err() {
+                    break;
+                }
+            }
+        });
+        IconLoader { ask, got, pending: HashSet::new() }
+    }
+}
+
+/// The icon Windows shows for this app id (the shell's AppsFolder knows packaged and Start-menu apps alike).
+unsafe fn app_icon_pixels(wic: &IWICImagingFactory, id: &str) -> Option<(u32, u32, Vec<u8>)> {
+    let item: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(format!("shell:AppsFolder\\{id}")), None).ok()?;
+    let hbmp = item.GetImage(SIZE { cx: 64, cy: 64 }, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY).ok()?;
+    let src = wic.CreateBitmapFromHBITMAP(hbmp, HPALETTE::default(), WICBitmapUseAlpha);
+    let _ = DeleteObject(hbmp.into());
+    let conv = wic.CreateFormatConverter().ok()?;
+    conv.Initialize(&src.ok()?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
+    let (mut w, mut h) = (0, 0);
+    conv.GetSize(&mut w, &mut h).ok()?;
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    conv.CopyPixels(std::ptr::null(), w * 4, &mut pixels).ok()?;
+    Some((w, h, pixels))
+}
+
 pub struct Renderer {
     factory: ID2D1Factory,
     rt: ID2D1DCRenderTarget,
@@ -584,6 +627,7 @@ pub struct Renderer {
     lyric_heights: Option<(usize, u32, Vec<f32>)>,
     /// Start-menu icon per app id (None: Windows has none for it); asked once per app.
     app_icons: HashMap<String, Option<ID2D1Bitmap>>,
+    icon_loader: IconLoader,
     /// Icon slots that just changed glyph: (current, previous, when) for the morph.
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
     /// Round caps and joins for the robot face's strokes.
@@ -656,7 +700,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -846,23 +890,30 @@ impl Renderer {
         heights
     }
 
-    /// The icon Windows shows for this app id (the shell's AppsFolder knows packaged and
-    /// Start-menu apps alike).
+    /// The icon Windows shows for this app id, once its loader has it (None until then, and for
+    /// apps Windows has no icon for). First asking starts the fetch.
     fn app_icon(&mut self, id: &str) -> Option<ID2D1Bitmap> {
-        if !self.app_icons.contains_key(id) {
-            let bitmap = (|| unsafe {
-                let item: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(format!("shell:AppsFolder\\{id}")), None).ok()?;
-                let hbmp = item.GetImage(SIZE { cx: 64, cy: 64 }, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY).ok()?;
-                let wic = self.wic.as_ref()?;
-                let src = wic.CreateBitmapFromHBITMAP(hbmp, HPALETTE::default(), WICBitmapUseAlpha);
-                let _ = DeleteObject(hbmp.into());
-                let conv = wic.CreateFormatConverter().ok()?;
-                conv.Initialize(&src.ok()?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
-                self.rt.CreateBitmapFromWicBitmap(&conv, None).ok()
-            })();
-            self.app_icons.insert(id.to_string(), bitmap);
+        self.prefetch_icon(id);
+        self.app_icons.get(id).cloned().flatten()
+    }
+
+    /// Ask for an app's icon ahead of time, so the Notifications page finds it ready.
+    pub fn prefetch_icon(&mut self, id: &str) {
+        if !self.app_icons.contains_key(id) && self.icon_loader.pending.insert(id.to_string()) {
+            let _ = self.icon_loader.ask.send(id.to_string());
         }
-        self.app_icons[id].clone()
+    }
+
+    /// Turn the icons the loader has finished into bitmaps.
+    fn take_icons(&mut self) {
+        while let Ok((id, pixels)) = self.icon_loader.got.try_recv() {
+            self.icon_loader.pending.remove(&id);
+            let bitmap = pixels.and_then(|(w, h, px)| unsafe {
+                let props = D2D1_BITMAP_PROPERTIES { pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED }, dpiX: 96.0, dpiY: 96.0 };
+                self.rt.CreateBitmap(D2D_SIZE_U { width: w, height: h }, Some(px.as_ptr() as *const _), w * 4, &props).ok()
+            });
+            self.app_icons.insert(id, bitmap);
+        }
     }
 
     /// A solid brush of this colour. D2D makes them cheaply (measured: caching them saved
@@ -1062,6 +1113,7 @@ impl Renderer {
 
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
         self.ensure_surface(w, h)?;
+        self.take_icons();
         let fonts = self.fonts(scale)?;
         let cover = v.music.and_then(|t| self.cover(t, (COVER * scale).round() as u32, (20.0 * scale).round() as u32));
         let target = if v.live && v.page == Page::Music { self.cover.as_ref().and_then(|c| c.glow) } else { None };
@@ -1850,7 +1902,9 @@ impl Renderer {
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
             let lyric_glide = lyrics_run && v.music.is_some_and(|t| lyrics::phase(&t.lyrics, t.position_ms()).fract() != 0.0);
             self.slow_frames = lyrics_run;
-            Ok(morphing.get() || glow_busy || icon_busy || lyric_glide)
+            // Icons still on their way to the Notifications page: come back for them.
+            let icons_coming = v.page == Page::Notify && !self.icon_loader.pending.is_empty();
+            Ok(morphing.get() || glow_busy || icon_busy || lyric_glide || icons_coming)
         }
     }
 }

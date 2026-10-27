@@ -522,6 +522,10 @@ impl App {
         if let Some(r) = &self.notifications {
             self.notes = r.recent(NOTES_MAX, system::utc_offset_min());
         }
+        // Fetch the icons now, so the page finds them ready when it is opened.
+        for n in &self.notes {
+            self.renderer.prefetch_icon(&n.id);
+        }
         self.clamp_scroll();
     }
 
@@ -1145,6 +1149,7 @@ fn main() -> windows::core::Result<()> {
             high_surrogate: None,
         };
         app.refresh_audio();
+        app.refresh_notes();
         let _ = RegisterPowerSettingNotification(HANDLE(hwnd.0), &status::VIDEO_BRIGHTNESS, DEVICE_NOTIFY_WINDOW_HANDLE);
         status::watch_lock_keys(hwnd);
         connectivity::watch(hwnd);
