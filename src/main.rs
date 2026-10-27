@@ -66,6 +66,8 @@ const MENU_QUIT: usize = 12;
 const MENU_LANG_VI: usize = 13;
 const MENU_LANG_EN: usize = 14;
 const MENU_ROBOT: usize = 15;
+const MENU_ABOUT: usize = 16;
+const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
 struct App {
     hwnd: HWND,
@@ -714,6 +716,7 @@ impl App {
                 let _ = AppendMenuW(langs, MF_STRING | check(english), MENU_LANG_EN, w!("English"));
                 let _ = AppendMenuW(menu, MF_POPUP, langs.0 as usize, &text(tr("Ngôn ngữ", "Language")));
             }
+            let _ = AppendMenuW(menu, MF_STRING, MENU_ABOUT, &text(tr("Giới thiệu PUW Notch", "About PUW Notch")));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, &text(tr("Thoát", "Quit")));
             let mut p = POINT::default();
@@ -740,6 +743,14 @@ impl App {
                     // Everything shown is rebuilt from the new language on the next frame.
                     (self.time, self.date) = system::clock();
                     self.redraw();
+                }
+                MENU_ABOUT => {
+                    let body = windows::core::HSTRING::from(format!("{}\n\n{}", about_text(env!("CARGO_PKG_VERSION")), tr("Mở trang GitHub?", "Open the GitHub page?")));
+                    let title = windows::core::HSTRING::from(tr("Giới thiệu PUW Notch", "About PUW Notch"));
+                    if MessageBoxW(Some(self.hwnd), &body, &title, MB_YESNO | MB_ICONINFORMATION) == IDYES {
+                        let url = windows::core::HSTRING::from(REPO_URL);
+                        ShellExecuteW(None, w!("open"), &url, None, None, SW_SHOWNORMAL);
+                    }
                 }
                 MENU_QUIT => { let _ = DestroyWindow(self.hwnd); }
                 _ => {}
@@ -893,6 +904,15 @@ impl App {
         }
         Some(LRESULT(0))
     }
+}
+
+/// Text of the About box.
+fn about_text(version: &str) -> String {
+    let what = tr(
+        "Notch kiểu Dynamic Island cho Windows: giờ, pin, nhạc, việc cần làm, thông báo, sức khỏe và banner trạng thái. Viết bằng Rust và Direct2D, không dùng WebView.",
+        "A Dynamic Island-style notch for Windows: clock, battery, music, tasks, notifications, health and status banners. Written in Rust and Direct2D, no WebView.",
+    );
+    format!("PUW Notch {version}\n\n{what}\n\n{REPO_URL}")
 }
 
 /// yyyymmddHHMM -> minute of the day.
@@ -1136,6 +1156,16 @@ fn main() -> windows::core::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_text_names_the_app_its_version_and_where_to_get_it() {
+        for text in [about_text("1.0.10")] {
+            assert!(text.starts_with("PUW Notch 1.0.10\n"), "{text}");
+            assert!(text.contains(REPO_URL) && text.contains("Rust"), "{text}");
+            assert!(!text.contains("Nusa"), "{text}");
+        }
+        assert_ne!(about_text("1.0.10"), about_text("1.0.11"));
+    }
 
     #[test]
     fn destroy_posts_quit_while_app_is_borrowed() {
