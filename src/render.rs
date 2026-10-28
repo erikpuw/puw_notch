@@ -497,7 +497,10 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 const COVER_SHADOW: [f32; 3] = [0.14, 0.09, 0.05];
 const COVER_SHADOW_STEP: f32 = 0.8;
 
-/// Brightest the aurora's colours may get (before the band's own transparency): it runs
+/// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
+const GLOW_MAX_LUM: f32 = 0.17;
+
+/// Brightest the aurora's colours may get (before the line's own transparency): it runs
 /// under the controls at the bottom of the panel.
 const AURORA_MAX_LUM: f32 = 0.5;
 
@@ -547,12 +550,20 @@ const AURORA_STEPS: usize = 48;
 const AURORA_LAYERS: [(f32, f32); 8] = [(2.4, 0.12), (2.0, 0.14), (1.65, 0.16), (1.3, 0.19), (1.0, 0.22), (0.72, 0.26), (0.48, 0.3), (0.26, 0.36)];
 /// The aurora is drawn this many times smaller, then stretched (the stretch blurs it).
 const AURORA_SHRINK: f32 = 8.0;
+/// Where the aurora runs, as fractions of the panel height: centre line, sway, halo thickness.
+const AURORA_Y: f32 = 0.8;
+const AURORA_AMP: f32 = 0.07;
+const AURORA_HALO: f32 = 0.09;
+/// The sharp core over the blurred halo, drawn at full size: (stroke width in px, opacity),
+/// widest first, in the colours turned towards white by AURORA_CORE_WHITE.
+const AURORA_CORE: [(f32, f32); 4] = [(9.0, 0.10), (5.0, 0.16), (2.6, 0.30), (1.2, 0.55)];
+const AURORA_CORE_WHITE: f32 = 0.35;
 
 /// The aurora at time `t` (s) and `u` across the panel (0..1): centre line offset (-1..1) and
 /// thickness (0.1..1). Slow sums of sines, so it sways and breathes without repeating soon.
 fn aurora_at(t: f32, u: f32) -> (f32, f32) {
     use std::f32::consts::TAU;
-    let c = 0.55 * (TAU * 0.8 * u + t * 0.45).sin() + 0.35 * (TAU * 1.7 * u - t * 0.3 + 1.1).sin() + 0.1 * (TAU * 3.1 * u + t * 0.7).sin();
+    let c = 0.6 * (TAU * 0.7 * u + t * 0.45).sin() + 0.3 * (TAU * 1.3 * u - t * 0.3 + 1.1).sin() + 0.1 * (TAU * 2.1 * u + t * 0.6).sin();
     let w = 0.55 + 0.45 * (TAU * 1.1 * u - t * 0.25 + 0.5).sin();
     (c, w)
 }
@@ -1187,6 +1198,25 @@ impl Renderer {
         }
     }
 
+    /// The aurora's centre line (an open polyline, for the stroked core).
+    fn aurora_line(&self, t: f32, left: f32, right: f32, yc: f32, amp: f32) -> Result<ID2D1PathGeometry> {
+        unsafe {
+            let geo = self.factory.CreatePathGeometry()?;
+            let sink = geo.Open()?;
+            let at = |i: usize| {
+                let u = i as f32 / AURORA_STEPS as f32;
+                Vector2 { X: left + (right - left) * u, Y: yc + aurora_at(t, u).0 * amp }
+            };
+            sink.BeginFigure(at(0), D2D1_FIGURE_BEGIN_HOLLOW);
+            for i in 1..=AURORA_STEPS {
+                sink.AddLine(at(i));
+            }
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            sink.Close()?;
+            Ok(geo)
+        }
+    }
+
     /// Open arc from 12 o'clock clockwise covering `frac` of the circle (battery ring).
     fn ring(&self, cx: f32, cy: f32, r: f32, frac: f32) -> Result<ID2D1PathGeometry> {
         let frac = frac.clamp(0.0, 0.9999);
@@ -1360,7 +1390,14 @@ impl Renderer {
                 Some((Page::Music, t, _)) => page_fades(t).0,
                 _ => 1.0,
             };
-            // Aurora: a soft band in the cover's two colours, swaying slowly along the bottom.
+            if level > 0.0 && open > 0.0 && v.mode != Mode::Alert {
+                let (gr, gg, gb) = dim_to_lum(tint, GLOW_MAX_LUM);
+                let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level * gate) };
+                let stops = rt.CreateGradientStopCollection(&[stop(0.58, 0.0), stop(0.68, 0.08), stop(0.82, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
+                rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
+            }
+            // Aurora over the glow: a thin glowing line in the cover's two colours, swaying slowly.
             let aurora_a = open * level * gate;
             if aurora_a > 0.01 && v.mode != Mode::Alert {
                 let [c1, c2] = self.cover.as_ref().map_or([GLOW_NEUTRAL; 2], |c| c.aurora);
@@ -1371,7 +1408,7 @@ impl Renderer {
                 let stops: Vec<D2D1_GRADIENT_STOP> = (0..=5).map(|i| {
                     let f = i as f32 / 5.0;
                     let c = (c1.0 + (c2.0 - c1.0) * f, c1.1 + (c2.1 - c1.1) * f, c1.2 + (c2.2 - c1.2) * f);
-                    let pulse = 0.25 + 0.75 * (0.5 + 0.5 * (t * 0.4 + i as f32 * 1.7).sin());
+                    let pulse = 0.45 + 0.55 * (0.5 + 0.5 * (t * 0.4 + i as f32 * 1.7).sin());
                     D2D1_GRADIENT_STOP { position: f, color: color(c.0, c.1, c.2, pulse) }
                 }).collect();
                 // Drawn at 1/AURORA_SHRINK size, then stretched with linear filtering: the stretch
@@ -1380,11 +1417,11 @@ impl Renderer {
                 small.BeginDraw();
                 small.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
                 small.SetTransform(&Matrix3x2 { M11: 1.0 / AURORA_SHRINK, M12: 0.0, M21: 0.0, M22: 1.0 / AURORA_SHRINK, M31: 0.0, M32: 0.0 });
-                let stops = small.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                 let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: l, Y: 0.0 }, endPoint: Vector2 { X: r, Y: 0.0 } };
-                let brush = small.CreateLinearGradientBrush(&line, None, &stops)?;
+                let brush = small.CreateLinearGradientBrush(&line, None, &small.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?)?;
+                let (yc, amp) = (nh * AURORA_Y, nh * AURORA_AMP);
                 for (k, alpha) in AURORA_LAYERS {
-                    let band = self.aurora_band(t, l, r, nh * 0.86, nh * 0.07, nh * 0.2, k)?;
+                    let band = self.aurora_band(t, l, r, yc, amp, nh * AURORA_HALO, k)?;
                     brush.SetOpacity(alpha);
                     small.FillGeometry(&band, &brush, None);
                 }
@@ -1405,6 +1442,15 @@ impl Renderer {
                     opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
                 rt.PushLayer(&params, None);
                 rt.DrawBitmap(&bmp, Some(&rect(0.0, 0.0, size.width * AURORA_SHRINK, size.height * AURORA_SHRINK)), aurora_a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                // The thin bright core, sharp and anti-aliased at full size.
+                let whiten = |c: D2D1_COLOR_F| color(c.r + (1.0 - c.r) * AURORA_CORE_WHITE, c.g + (1.0 - c.g) * AURORA_CORE_WHITE, c.b + (1.0 - c.b) * AURORA_CORE_WHITE, c.a);
+                let core_stops: Vec<D2D1_GRADIENT_STOP> = stops.iter().map(|st| D2D1_GRADIENT_STOP { position: st.position, color: whiten(st.color) }).collect();
+                let core = rt.CreateLinearGradientBrush(&line, None, &rt.CreateGradientStopCollection(&core_stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?)?;
+                let path = self.aurora_line(t, l, r, yc, amp)?;
+                for (width, alpha) in AURORA_CORE {
+                    core.SetOpacity(alpha * aurora_a);
+                    rt.DrawGeometry(&path, &core, width * s, &self.round);
+                }
                 rt.PopLayer();
                 drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
             }
@@ -2128,6 +2174,16 @@ mod tests {
             let (r, g, b) = hue_tint(hue as f32);
             let ratio = 1.05 / (luminance(r, g, b) + 0.05);
             assert!(ratio >= 4.5, "hue {hue}: white on tile is only {ratio:.2}:1");
+        }
+    }
+
+    #[test]
+    fn glow_keeps_white_controls_readable() {
+        for tint in [(1.0, 1.0, 0.0), (1.0, 1.0, 1.0), (0.0, 1.0, 1.0), (0.0, 1.0, 0.0), (1.0, 0.2, 0.2), (0.2, 0.4, 1.0)] {
+            let (r, g, b) = dim_to_lum(tint, GLOW_MAX_LUM);
+            let ratio = 1.05 / (luminance(r, g, b) + 0.05);
+            assert!(ratio >= 4.5, "{tint:?}: white on the glow is only {ratio:.2}:1");
+            assert!(r.max(g).max(b) > 0.2, "{tint:?}: glow went black");
         }
     }
 
