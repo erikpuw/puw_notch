@@ -1591,17 +1591,22 @@ impl Renderer {
                 // when it would touch the clock.
                 if let (Some((ic, geoms)), Some(n)) = (&weather_line, v.weather.now) {
                     let (icon, gap) = (14.0 * s, 3.0 * s);
-                    let label = format!("{}°", v.unit.number(n.temp));
-                    let total = icon + gap + width(&label, F_LABEL);
-                    let clock_half = width(v.time, F_SMALL) / 2.0 + 5.0 * s;
-                    let (left, room) = if pill_music.is_some() {
-                        let left = l + 38.0 * s;
-                        (left, cx - clock_half - (left + total))
-                    } else {
-                        let left = r - 13.0 * s - total;
-                        (left, left - (cx + clock_half))
+                    let clock_half = width(v.time, F_SMALL) / 2.0 + 4.0 * s;
+                    // Where the icon and `label` go, and the room left between them and the clock.
+                    let place = |label: &str| {
+                        let total = icon + gap + width(label, F_LABEL);
+                        if pill_music.is_some() {
+                            let left = l + 38.0 * s;
+                            (left, total, cx - clock_half - (left + total))
+                        } else {
+                            let left = r - 13.0 * s - total;
+                            (left, total, left - (cx + clock_half))
+                        }
                     };
-                    if room >= 0.0 {
+                    // "−12°" may not fit where "29°" does: then the degree sign goes, not the weather.
+                    let number = v.unit.number(n.temp);
+                    let fitted = [format!("{number}°"), number].into_iter().map(|label| (place(&label), label)).find(|((_, _, room), _)| *room >= 0.0);
+                    if let Some(((left, total, _), label)) = fitted {
                         draw_wx_icon(ic, geoms, left, (nh - icon) / 2.0, icon, None, small_a * 0.9, 9.0)?;
                         text(&label, F_LABEL, rect(left + icon + gap, 0.0, left + total + 4.0 * s, nh), lead, grey(0.9, small_a))?;
                     }
@@ -2082,7 +2087,15 @@ impl Renderer {
                                     text("Open-Meteo", F_LABEL, rect(cr - 94.0 * s, 68.0 * s, cr, 88.0 * s), trail, grey(0.4, a))?;
                                     // The icon, then the temperature and the sky in words.
                                     draw_wx_icon(ic, geoms, cl + 4.0 * s, 92.0 * s, 56.0 * s, Some(weather::tints(n.sky, n.day)), a, if current { v.page_age } else { 9.0 })?;
-                                    text(&format!("{}°", v.unit.number(n.temp)), F_BIG, rect(cl + 72.0 * s, 92.0 * s, cl + 134.0 * s, 124.0 * s), lead, grey(1.0, a))?;
+                                    // The big temperature, shrunk to fit before the unit chips when it is long
+                                    // ("−128°"), turning about its left end.
+                                    let temp = format!("{}°", v.unit.number(n.temp));
+                                    let (tx, ty) = (cl + 72.0 * s, 108.0 * s);
+                                    let k = (UNIT_X - 72.0 - 4.0) * s / width(&temp, F_BIG);
+                                    let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
+                                    rt.SetTransform(&(translate(-tx, -ty) * scaling(k.min(1.0)) * translate(tx, ty) * base));
+                                    text(&temp, F_BIG, rect(tx, 92.0 * s, tx + width(&temp, F_BIG) + 6.0 * s, 124.0 * s), lead, grey(1.0, a))?;
+                                    rt.SetTransform(&base);
                                     // The unit to show it in: the chosen one lit, the other lights on hover.
                                     for unit in [weather::Unit::C, weather::Unit::F] {
                                         let Some(chip) = rect_of(Button::Unit(unit)) else { continue };
@@ -2681,6 +2694,10 @@ mod tests {
                 (Mode::Expanded, false, Page::Weather, state(Sky::Fog, true, 22.0), "", weather::Unit::C),
                 (Mode::Expanded, false, Page::Weather, state(Sky::Snow, true, 1.0), "", weather::Unit::C),
                 (Mode::Expanded, false, Page::Weather, state(Sky::Clear, true, 33.0), "", weather::Unit::C),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Snow, true, -12.0), "", weather::Unit::C),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Clear, false, -89.0), "", weather::Unit::F),
+                (Mode::Collapsed, false, Page::Music, state(Sky::Snow, true, -12.0), "", weather::Unit::C),
+                (Mode::Collapsed, true, Page::Music, state(Sky::Snow, true, -26.0), "", weather::Unit::F),
             ];
             let n = frames.len() as i32;
             for (mode, music, page, st, typed, unit) in &frames {

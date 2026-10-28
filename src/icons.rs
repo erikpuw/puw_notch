@@ -1,7 +1,7 @@
 //! Line icons of the status banners and Bluetooth devices, and how they move.
 //!
 //! Each icon is a few SVG paths on a square grid, stroked with round caps. The shapes come from
-//! Tabler Icons (MIT) and, for Bluetooth, the plug, the plane and the charging battery, from the
+//! Tabler Icons (MIT) (the weather ones are Lucide, ISC) and, for Bluetooth, the plug, the plane and the charging battery, from the
 //! animated set on itshover.com; the motion is written here. Parts that move on their own sit in
 //! a group (0..3, each with an origin to turn and scale about); a group also carries an opacity.
 
@@ -246,33 +246,58 @@ static USB: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::UsbIn, origins: MID, pa
 /// A USB device pulled out: the same symbol shaking and dimming.
 static USB_OUT: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::UsbOut, origins: MID, parts: USB_PARTS };
 
-// Weather (Tabler's sun, moon, cloud, cloud-fog, cloud-rain, cloud-snow, cloud-storm). Tabler has no
-// partly cloudy icon: that one is its rain cloud, lower, with half a sun or a crescent behind.
-const CLOUD: &str = "M6.657 18c-2.572 0 -4.657 -2.007 -4.657 -4.483c0 -2.475 2.085 -4.482 4.657 -4.482c.393 -1.762 1.794 -3.2 3.675 -3.773c1.88 -.572 3.956 -.193 5.444 1c1.488 1.19 2.162 3.007 1.77 4.769h.99c1.913 0 3.464 1.56 3.464 3.486c0 1.927 -1.551 3.487 -3.465 3.487h-11.878";
-const RAIN_CLOUD: &str = "M7 18a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7";
-const LOW_CLOUD: &str = "M6 21a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7z";
-static WX_SUN: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Sun, origins: MID, parts: SUN.parts };
+// Weather icons come from Lucide (ISC), cloud-sun and cloud-moon included. Each lists its body first
+// (the cloud, the moon, the sun) and then what comes with it (rays, drops, snow, the bolt): the
+// Weather page colours the first path as the body and the rest as the accent (`weather::tints`).
+const WX_CLOUD_PLAIN: &str = "M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z";
+const WX_CLOUD_TOP: &str = "M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242";
+static WX_SUN: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Sun, origins: MID,
+    parts: &[
+        moves("M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", 0),
+        moves("M12 2v2", 1), moves("M12 20v2", 1), moves("m4.93 4.93 1.41 1.41", 1), moves("m17.66 17.66 1.41 1.41", 1),
+        moves("M2 12h2", 1), moves("M20 12h2", 1), moves("m6.34 17.66-1.41 1.41", 1), moves("m19.07 4.93-1.41 1.41", 1),
+    ],
+};
 static WX_MOON: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
-    parts: &[moves("M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454l0 .008", 0)],
+    parts: &[moves("M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401", 0)],
 };
-static WX_CLOUD: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID, parts: &[moves(CLOUD, 0)] };
+static WX_CLOUD: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID, parts: &[moves(WX_CLOUD_PLAIN, 0)] };
 static WX_PARTLY_DAY: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID,
-    parts: &[moves(LOW_CLOUD, 0), p("M13.3 8a3.2 3.2 0 0 1 6.4 0"), p("M16.5 2.5v1m4.5 1l-.7 .7m2.2 2.8h-1m-9 -3.5l.7 .7")],
+    parts: &[
+        moves("M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z", 0),
+        moves("M12 2v2", 1), moves("m4.93 4.93 1.41 1.41", 1), moves("M20 12h2", 1), moves("m19.07 4.93-1.41 1.41", 1),
+        moves("M15.947 12.65a4 4 0 0 0-5.925-4.128", 1),
+    ],
 };
 static WX_PARTLY_NIGHT: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID,
-    parts: &[moves(LOW_CLOUD, 0), p("M15 3.5a3.5 3.5 0 1 0 5.5 4.5a2.8 2.8 0 0 1 -5.5 -4.5")],
+    parts: &[
+        moves("M13 16a3 3 0 0 1 0 6H7a5 5 0 1 1 4.9-6z", 0),
+        moves("M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36", 1),
+    ],
 };
 static WX_FOG: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID,
-    parts: &[moves("M7 16a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7h-12", 0), moves("M5 20l14 0", 1)],
+    parts: &[moves(WX_CLOUD_TOP, 0), moves("M16 17H7", 1), moves("M17 21H9", 1)],
 };
-static WX_RAIN: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Fall, origins: MID, parts: &[p(RAIN_CLOUD), moves("M11 13v2m0 3v2m4 -5v2m0 3v2", 1)] };
-static WX_SNOW: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Fall, origins: MID, parts: &[p(RAIN_CLOUD), moves("M11 15v.01m0 3v.01m0 3v.01m4 -4v.01m0 3v.01", 1)] };
-static WX_STORM: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Flash, origins: MID, parts: &[p("M7 18a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7h-1"), moves("M13 14l-2 4l3 0l-2 4", 1)] };
-
+static WX_RAIN: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Fall, origins: MID,
+    parts: &[p(WX_CLOUD_TOP), moves("M16 14v6", 1), moves("M8 14v6", 1), moves("M12 16v6", 1)],
+};
+static WX_SNOW: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Fall, origins: MID,
+    parts: &[
+        p(WX_CLOUD_TOP),
+        moves("M8 15h.01", 1), moves("M8 19h.01", 1), moves("M12 17h.01", 1), moves("M12 21h.01", 1), moves("M16 15h.01", 1), moves("M16 19h.01", 1),
+    ],
+};
+static WX_STORM: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Flash, origins: MID,
+    parts: &[p("M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973"), moves("m13 12-3 5h4l-3 5", 1)],
+};
 /// The weather icon for `sky`, by day or night.
 pub fn weather(sky: crate::weather::Sky, day: bool) -> &'static Icon {
     use crate::weather::Sky;

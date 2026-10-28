@@ -57,13 +57,15 @@ impl Unit {
     }
 
     /// `celsius` as a whole number in this unit ("82"). Rounded before it is written, so -0.4 is
-    /// "0", never "-0".
+    /// "0", never "-0"; below zero it starts with a real minus sign (U+2212: as wide as a plus and
+    /// level with the digits, which a hyphen is not).
     pub fn number(self, celsius: f32) -> String {
         let v = match self {
             Unit::C => celsius,
             Unit::F => celsius * 1.8 + 32.0,
         };
-        (v.round() as i32).to_string()
+        let n = v.round() as i32;
+        if n < 0 { format!("\u{2212}{}", -n) } else { n.to_string() }
     }
 
     /// The settings file's word for it.
@@ -462,10 +464,16 @@ mod tests {
         assert_eq!(Unit::F.number(0.0), "32");
         assert_eq!(Unit::F.number(100.0), "212");
         assert_eq!(Unit::F.number(28.0), "82");
-        assert_eq!(Unit::F.number(-40.0), "-40", "the two scales meet at -40");
+        assert_eq!(Unit::F.number(-40.0), "\u{2212}40", "the two scales meet at -40");
         assert_eq!(Unit::C.number(-0.4), "0", "not -0");
+        assert_eq!(Unit::C.number(-0.5), "\u{2212}1", "-0.5 rounds away from zero");
         assert_eq!(Unit::F.number(-17.8), "0", "-17.8 C is 0.04 F: not -0 either");
-        assert_eq!(Unit::C.number(-3.2), "-3");
+        assert_eq!(Unit::C.number(-3.2), "\u{2212}3");
+        assert_eq!(Unit::C.number(-12.6), "\u{2212}13");
+        assert_eq!(Unit::F.number(-89.0), "\u{2212}128", "the coldest places on Earth: three digits");
+        assert_eq!(Unit::F.number(-89.2), "\u{2212}129", "-128.56 F rounds to -129");
+        assert_eq!(Unit::F.number(54.0), "129", "and the hottest");
+        assert!(!Unit::C.number(-3.2).contains('-'), "no hyphen-minus");
         assert_eq!((Unit::C.symbol(), Unit::F.symbol()), ("°C", "°F"));
         for u in [Unit::C, Unit::F] {
             assert_eq!(Unit::from_tag(u.tag()), Some(u));
