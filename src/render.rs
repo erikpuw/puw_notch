@@ -3,7 +3,7 @@
 
 use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY};
-use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
+use windows::Win32::Foundation::{COLORREF, GENERIC_READ, HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
@@ -360,6 +360,13 @@ const F_SMALL_ICON: usize = 7;
 const F_BIG: usize = 8;
 /// Icon of a banner: larger than the 16 px of the buttons (the banner has no ring around it).
 const F_BANNER_ICON: usize = 9;
+/// A banner that carries a picture (a screenshot) shows it in a box this wide and `BANNER_IMAGE_H`
+/// tall at the right edge, with this gap before the text.
+const BANNER_IMAGE_W: f32 = 64.0;
+const BANNER_IMAGE_H: f32 = 40.0;
+const BANNER_IMAGE_GAP: f32 = 10.0;
+/// Longest side the loader scales a banner picture to (px): the banner box at 2x.
+const BANNER_IMAGE_PX: (f32, f32) = (2.0 * BANNER_IMAGE_W, 2.0 * BANNER_IMAGE_H);
 /// A line of lyrics: wraps onto more lines instead of being cut short.
 const F_LYRIC: usize = 10;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, and its width.
@@ -578,7 +585,10 @@ impl IconLoader {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let wic: Option<IWICImagingFactory> = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
             for id in asked {
-                let pixels = wic.as_ref().and_then(|wic| app_icon_pixels(wic, &id));
+                let pixels = wic.as_ref().and_then(|wic| match id.strip_prefix("img:") {
+                    Some(path) => image_pixels(wic, path),
+                    None => app_icon_pixels(wic, &id),
+                });
                 if answer.send((id, pixels)).is_err() {
                     break;
                 }
@@ -594,8 +604,25 @@ unsafe fn app_icon_pixels(wic: &IWICImagingFactory, id: &str) -> Option<(u32, u3
     let hbmp = item.GetImage(SIZE { cx: 64, cy: 64 }, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY).ok()?;
     let src = wic.CreateBitmapFromHBITMAP(hbmp, HPALETTE::default(), WICBitmapUseAlpha);
     let _ = DeleteObject(hbmp.into());
+    bgra_pixels(wic, &src.ok()?.into())
+}
+
+/// A picture file scaled down to fit the banner's picture box (at 2x), for the loader.
+unsafe fn image_pixels(wic: &IWICImagingFactory, path: &str) -> Option<(u32, u32, Vec<u8>)> {
+    let decoder = wic.CreateDecoderFromFilename(&HSTRING::from(path), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).ok()?;
+    let frame = decoder.GetFrame(0).ok()?;
+    let (mut w, mut h) = (0, 0);
+    frame.GetSize(&mut w, &mut h).ok()?;
+    let k = (BANNER_IMAGE_PX.0 / w.max(1) as f32).min(BANNER_IMAGE_PX.1 / h.max(1) as f32).min(1.0);
+    let scaler = wic.CreateBitmapScaler().ok()?;
+    scaler.Initialize(&frame, ((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1), WICBitmapInterpolationModeFant).ok()?;
+    bgra_pixels(wic, &scaler.into())
+}
+
+/// Any WIC bitmap as premultiplied BGRA bytes.
+unsafe fn bgra_pixels(wic: &IWICImagingFactory, src: &IWICBitmapSource) -> Option<(u32, u32, Vec<u8>)> {
     let conv = wic.CreateFormatConverter().ok()?;
-    conv.Initialize(&src.ok()?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
+    conv.Initialize(src, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
     let (mut w, mut h) = (0, 0);
     conv.GetSize(&mut w, &mut h).ok()?;
     let mut pixels = vec![0u8; (w * h * 4) as usize];
@@ -1099,12 +1126,13 @@ impl Renderer {
     /// Draw one frame and push it to `hwnd` placed at screen (x, y), window size (w, h) device px.
     /// Returns true while an icon morph is still playing (the caller keeps frames coming).
     /// Lines `text` wraps to in a notification banner (its body font and width, at `scale`).
-    pub fn banner_lines(&mut self, text: &str, scale: f32) -> u32 {
+    pub fn banner_lines(&mut self, text: &str, scale: f32, with_image: bool) -> u32 {
         let Ok(fonts) = self.fonts(scale) else { return 1 };
         let u: Vec<u16> = text.encode_utf16().collect();
         let mut m = DWRITE_TEXT_METRICS::default();
+        let width = BANNER_TEXT_W - if with_image { BANNER_IMAGE_W + BANNER_IMAGE_GAP } else { 0.0 };
         unsafe {
-            match self.dw.CreateTextLayout(&u, &fonts[F_BODY_WRAP], BANNER_TEXT_W * scale, 10_000.0) {
+            match self.dw.CreateTextLayout(&u, &fonts[F_BODY_WRAP], width * scale, 10_000.0) {
                 Ok(layout) if layout.GetMetrics(&mut m).is_ok() => m.lineCount.max(1),
                 _ => 1,
             }
@@ -1135,6 +1163,8 @@ impl Renderer {
             _ => Vec::new(),
         };
         let note_icons: Vec<Option<ID2D1Bitmap>> = if v.page == Page::Notify { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
+        // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
+        let banner_image: Option<ID2D1Bitmap> = v.banner.filter(|_| v.mode == Mode::Alert).and_then(|b| b.image.as_deref()).and_then(|p| self.app_icon(&format!("img:{p}")));
         let rt = &self.rt;
         let s = scale;
         let [nw, nh, nr] = v.size.map(|d| d * s);
@@ -1346,7 +1376,27 @@ impl Renderer {
                     } else {
                         micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
                     }
-                    let (tl, tr) = (ix + d + 12.0 * s, r - 22.0 * s);
+                    let (tl, mut tr) = (ix + d + 12.0 * s, r - 22.0 * s);
+                    if t.image.is_some() {
+                        // The picture sits at the right edge, centred on the banner; text ends before it.
+                        let (bw, bh) = (BANNER_IMAGE_W * s, BANNER_IMAGE_H * s);
+                        let (bx, by) = (r - 18.0 * s - bw, nh / 2.0 - bh / 2.0 + 2.0 * s);
+                        tr = bx - BANNER_IMAGE_GAP * s;
+                        match &banner_image {
+                            Some(img) => {
+                                let size = img.GetSize();
+                                let k = (bw / size.width).min(bh / size.height);
+                                let (w, h) = (size.width * k, size.height * k);
+                                let (x, y) = (bx + (bw - w) / 2.0, by + (bh - h) / 2.0);
+                                let brush = rt.CreateBitmapBrush(img, None, None)?;
+                                brush.SetTransform(&(scaling(k) * translate(x, y)));
+                                brush.SetOpacity(a);
+                                rt.FillRoundedRectangle(&rounded(rect(x, y, x + w, y + h), 5.0 * s), &brush);
+                            }
+                            // Still loading (or gone): a quiet placeholder of the same size.
+                            None => rt.FillRoundedRectangle(&rounded(rect(bx, by, bx + bw, by + bh), 5.0 * s), &self.brush(grey(0.2, a))?),
+                        }
+                    }
                     text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
                     text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
                     match t.level {

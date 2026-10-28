@@ -16,6 +16,8 @@ pub struct Toast {
     pub level: Option<f32>,
     /// Fluent icon glyph for the banner; None = notification bell.
     pub icon: Option<&'static str>,
+    /// A picture file the notification carries (a screenshot's preview): click the banner to open it.
+    pub image: Option<String>,
 }
 
 /// One notification on the panel's Notifications page.
@@ -127,9 +129,10 @@ impl Reader {
             while (self.sql.step)(stmt) == SQLITE_ROW {
                 self.last_id = self.last_id.max((self.sql.col_int)(stmt, 0));
                 let aumid = self.text(stmt, 1);
-                let (title, body) = parse_payload(&self.text(stmt, 2));
+                let payload = self.text(stmt, 2);
+                let (title, body) = parse_payload(&payload);
                 if !title.is_empty() {
-                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None });
+                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload) });
                 }
             }
             (self.sql.finalize)(stmt);
@@ -202,6 +205,41 @@ pub fn parse_payload(xml: &str) -> (String, String) {
     (title, it.collect::<Vec<_>>().join(" "))
 }
 
+/// The picture file a toast carries: its hero image if it has one, else the first image, when that
+/// is a file on disk (`file:///C%3A%5C...` or a plain path). Snipping Tool's "Screenshot copied"
+/// toast carries the saved screenshot this way.
+pub fn parse_image(xml: &str) -> Option<String> {
+    let tags: Vec<&str> = xml.split("<image").skip(1).filter_map(|t| t.split('>').next()).collect();
+    let src_of = |tag: &str| {
+        let rest = &tag[tag.find(" src=\"")? + 6..];
+        Some(unescape(&rest[..rest.find('"')?]))
+    };
+    let hero = tags.iter().find(|t| t.contains("placement=\"hero\""));
+    let src = hero.or(tags.first()).and_then(|t| src_of(t))?;
+    let path = percent_decode(src.strip_prefix("file:///").unwrap_or(&src)).replace('/', "\\");
+    // A drive path (C:\...) or a share (\\server\...), nothing from the web.
+    let drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes()[0].is_ascii_alphabetic();
+    (drive || path.starts_with("\\\\")).then_some(path)
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
@@ -230,6 +268,19 @@ pub fn app_name(aumid: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screenshot_toast_carries_the_saved_file() {
+        // The payload Snipping Tool writes for "Screenshot copied to clipboard".
+        let xml = r#"<toast launch="ms-screensketch:edit?&amp;filePath=C%3A%5CUsers%5Cerikpuw%5CPictures%5CScreenshots%5CScreenshot%202026-10-28%20223805.png&amp;saved=true" activationType="protocol"><visual><binding template="ToastGeneric"><image placement="hero" src="file:///C%3A%5CUsers%5Cerikpuw%5CPictures%5CScreenshots%5CScreenshot%202026-10-28%20223805.png" alt="Snipped screen area"></image><text>Screenshot copied to clipboard</text><text>Automatically saved to screenshots folder.</text></binding></visual></toast>"#;
+        assert_eq!(parse_image(xml).as_deref(), Some(r"C:\Users\erikpuw\Pictures\Screenshots\Screenshot 2026-10-28 223805.png"));
+        assert_eq!(parse_payload(xml).0, "Screenshot copied to clipboard");
+        // The hero wins over a logo; web pictures and toasts without one give nothing.
+        let two = r#"<image placement="appLogoOverride" src="file:///C:/a.png"/><image placement="hero" src="file:///C:/b.png"/>"#;
+        assert_eq!(parse_image(two).as_deref(), Some(r"C:\b.png"));
+        assert_eq!(parse_image(r#"<image src="https://example.com/x.png"/>"#), None);
+        assert_eq!(parse_image("<toast><text>hi</text></toast>"), None);
+    }
 
     #[test]
     fn payload_texts() {
