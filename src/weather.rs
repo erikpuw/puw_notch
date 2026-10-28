@@ -378,7 +378,8 @@ pub fn tints(sky: Sky, day: bool) -> ((f32, f32, f32), (f32, f32, f32)) {
         Sky::Fog => (CLOUD, (0.62, 0.66, 0.74)),
         Sky::Rain => (CLOUD, (0.4, 0.7, 1.0)),
         Sky::Snow => (CLOUD, (0.88, 0.95, 1.0)),
-        Sky::Storm => ((0.72, 0.56, 1.0), (1.0, 0.85, 0.2)),
+        // A darker slate cloud under the bolt, not purple.
+        Sky::Storm => ((0.58, 0.64, 0.76), (1.0, 0.85, 0.2)),
     }
 }
 
