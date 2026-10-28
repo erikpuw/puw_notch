@@ -1641,7 +1641,7 @@ impl Renderer {
                     let c = 20.0 * s;
                     let top = (nh - c) / 2.0;
                     draw_cover(rect(l + 10.0 * s, top, l + 10.0 * s + c, top + c), 5.0 * s, small_a)?;
-                    let bw = 3.0 * s;
+                    let bw = 2.0 * s;
                     for i in 0..4 {
                         let k = i as f32;
                         let amp = if t.playing { 0.5 + 0.5 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin() } else { 0.0 };

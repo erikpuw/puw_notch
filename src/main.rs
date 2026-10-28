@@ -162,7 +162,7 @@ struct App {
 /// Animation frame intervals.
 /// `frame_ms` value for frames paced by the display (see `Vsync`).
 const VSYNC: u32 = 1;
-const BARS_FRAME_MS: u32 = 40;
+const BARS_FRAME_MS: u32 = 67;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
