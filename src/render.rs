@@ -550,6 +550,23 @@ const AURORA_STEPS: usize = 48;
 const AURORA_LAYERS: [(f32, f32); 8] = [(2.4, 0.12), (2.0, 0.14), (1.65, 0.16), (1.3, 0.19), (1.0, 0.22), (0.72, 0.26), (0.48, 0.3), (0.26, 0.36)];
 /// The aurora is drawn this many times smaller, then stretched (the stretch blurs it).
 const AURORA_SHRINK: f32 = 8.0;
+/// Battery ring strokes, widest first: (width as a multiple of the stroke, opacity). The wide
+/// faint ones are its glow, the last is the ring itself.
+const RING_GLOW: [(f32, f32); 3] = [(3.2, 0.14), (2.0, 0.3), (1.0, 1.0)];
+/// The battery ring's two shades (start, end), keeping what each colour says: green while
+/// charging, yellow in battery saver, red when low, cyan into violet otherwise.
+fn ring_colors(b: Battery) -> ((f32, f32, f32), (f32, f32, f32)) {
+    if b.charging {
+        ((0.25, 0.9, 0.45), (0.15, 0.78, 0.85))
+    } else if b.saver {
+        ((1.0, 0.86, 0.2), (1.0, 0.6, 0.1))
+    } else if b.percent <= 20 {
+        ((1.0, 0.35, 0.28), (1.0, 0.2, 0.5))
+    } else {
+        ((0.3, 0.76, 0.91), (0.61, 0.26, 0.99))
+    }
+}
+
 /// Where the aurora runs, as fractions of the panel height: centre line, sway, halo thickness.
 const AURORA_Y: f32 = 0.8;
 const AURORA_AMP: f32 = 0.07;
@@ -1470,23 +1487,34 @@ impl Renderer {
                     // Left of the time; with music the cover takes that spot, so sit before the bars.
                     let bx = if pill_music.is_some() { r - 60.0 * s } else { l + 14.0 * s };
                     let by = (nh - d) / 2.0;
-                    let ring_c = if b.charging {
-                        color(0.2, 0.84, 0.29, small_a)
-                    } else if b.saver {
-                        // battery saver: yellow, like iPhone low power mode
-                        color(1.0, 0.8, 0.0, small_a)
-                    } else if b.percent <= 20 {
-                        color(1.0, 0.27, 0.23, small_a)
-                    } else {
-                        grey(1.0, small_a)
-                    };
+                    let (c1, c2) = ring_colors(b);
                     let stroke = 2.2 * s;
                     let (rcx, rcy, rr) = (bx + d / 2.0, by + d / 2.0, d / 2.0 - stroke / 2.0);
                     let track = D2D1_ELLIPSE { point: Vector2 { X: rcx, Y: rcy }, radiusX: rr, radiusY: rr };
-                    rt.DrawEllipse(&track, &self.brush(grey(0.3, small_a))?, stroke, None);
-                    rt.DrawGeometry(&self.ring(rcx, rcy, rr, b.percent as f32 / 100.0)?, &self.brush(ring_c)?, stroke, None);
+                    rt.DrawEllipse(&track, &self.brush(grey(0.22, small_a))?, stroke, None);
+                    // A lit glass ring like React Bits' Orb, held still (an animated ring would
+                    // keep the resting pill redrawing): the two shades across it, a faint halo
+                    // under the stroke.
+                    let stops = rt.CreateGradientStopCollection(&[
+                        D2D1_GRADIENT_STOP { position: 0.0, color: color(c1.0, c1.1, c1.2, 1.0) },
+                        D2D1_GRADIENT_STOP { position: 1.0, color: color(c2.0, c2.1, c2.2, 1.0) },
+                    ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                    let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: rcx - rr, Y: rcy - rr }, endPoint: Vector2 { X: rcx + rr, Y: rcy + rr } };
+                    let brush = rt.CreateLinearGradientBrush(&line, None, &stops)?;
+                    let frac = b.percent as f32 / 100.0;
+                    let arc = self.ring(rcx, rcy, rr, frac)?;
+                    for (width, alpha) in RING_GLOW {
+                        brush.SetOpacity(alpha * small_a);
+                        rt.DrawGeometry(&arc, &brush, stroke * width, &self.round);
+                    }
+                    // A hot white spot where the arc ends.
+                    let end = frac.clamp(0.0, 0.9999) * std::f32::consts::TAU;
+                    let (ex, ey) = (rcx + rr * end.sin(), rcy - rr * end.cos());
+                    let spot = D2D1_ELLIPSE { point: Vector2 { X: ex, Y: ey }, radiusX: stroke * 0.45, radiusY: stroke * 0.45 };
+                    let hot = |c: f32| c + (1.0 - c) * 0.6;
+                    rt.FillEllipse(&spot, &self.brush(color(hot(c2.0), hot(c2.1), hot(c2.2), small_a * 0.9))?);
                     if b.charging {
-                        text(ICON_BOLT, F_TINY_ICON, rect(bx, by, bx + d, by + d), center, ring_c)?;
+                        text(ICON_BOLT, F_TINY_ICON, rect(bx, by, bx + d, by + d), center, color(c1.0, c1.1, c1.2, small_a))?;
                     }
                 }
                 if let Some(t) = pill_music {
@@ -2445,6 +2473,40 @@ mod tests {
             ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
             println!("present: median {:.3} ms | p90 {:.3} ms | mean {:.3} ms | min {:.3} ms",
                 ms[n / 2], ms[n * 9 / 10], ms.iter().sum::<f64>() / n as f64, ms[0]);
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "writes target/ring-preview.bmp: the resting pill in each battery state"]
+    fn ring_preview() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (300i32, 60i32);
+            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Ring preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let mut renderer = Renderer::new().unwrap();
+            let mut sheet = Vec::new();
+            let states = [(76, false, false), (76, true, false), (45, false, true), (15, false, false)];
+            for (percent, charging, saver) in states {
+                let view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "00:25", date: "T5, 29/10",
+                    battery: Some(Battery { percent, charging, saver }), banner: None, music: None, live: false, robot: None,
+                    phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[],
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                let mut dib = DIBSECTION::default();
+                assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
+                sheet.extend_from_slice(std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize));
+            }
+            let sh = h * states.len() as i32;
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + sheet.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-sh).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ring-preview.bmp"), bytes).unwrap();
             DestroyWindow(hwnd).unwrap();
         }
     }
