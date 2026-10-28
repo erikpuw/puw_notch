@@ -183,6 +183,7 @@ const PAD: f32 = 24.0;
 const ICON_MORPH_S: f32 = 0.25;
 /// Music page: cover on the left, a column of text, bar and controls on its right.
 const COVER: f32 = 120.0;
+const COVER_TOP: f32 = 40.0;
 const COVER_GAP: f32 = 16.0;
 const PLAY_BTN: f32 = 38.0;
 const SKIP_BTN: f32 = 32.0;
@@ -498,8 +499,11 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 }
 
 /// The cover's shadow: strokes of growing width centred on its edge (the inner half hides under the
-/// cover), with the darkness of each from the narrowest out, and the step in px.
-const COVER_SHADOW: [f32; 3] = [0.14, 0.09, 0.05];const COVER_SHADOW_STEP: f32 = 0.8;
+/// cover), with the darkness of each from the narrowest out, the step in px, and how far it drops.
+/// Soft, and short enough to end above the pages' bottom clip (see the test).
+const COVER_SHADOW: [f32; 5] = [0.14, 0.10, 0.07, 0.04, 0.02];
+const COVER_SHADOW_STEP: f32 = 1.2;
+const COVER_SHADOW_DROP: f32 = 2.0;
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
@@ -1298,9 +1302,9 @@ impl Renderer {
             };
             // Cover art clipped to a rounded square, or a note glyph when there is none.
             let draw_cover = |box_: D2D_RECT_F, radius: f32, a: f32| -> Result<()> {
-                // The big cover gets a very thin shadow all round, so it stands off the glow behind it.
+                // The big cover gets a soft shadow all round, a little lower, so it stands off the glow.
                 if box_.right - box_.left > 40.0 * s {
-                    let (x, y) = (box_.left.round(), box_.top.round());
+                    let (x, y) = (box_.left.round(), (box_.top + COVER_SHADOW_DROP * s).round());
                     let edge = rect(x, y, x + (box_.right - box_.left), y + (box_.bottom - box_.top));
                     for (k, alpha) in COVER_SHADOW.iter().enumerate().rev() {
                         rt.DrawRoundedRectangle(&rounded(edge, radius), &self.brush(color(0.0, 0.0, 0.0, alpha * a))?, 2.0 * COVER_SHADOW_STEP * (k as f32 + 1.0) * s, None);
@@ -1728,7 +1732,7 @@ impl Renderer {
 
                     match page {
                         Page::Music => {
-                            let top = 40.0 * s;
+                            let top = COVER_TOP * s;
                             // The player is the left 440 px of the panel, wider or not.
                             let cr = l + (notch::target(Mode::Expanded, false)[0] - SIDE) * s;
                             draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 14.0 * s, a)?;
@@ -2208,6 +2212,13 @@ mod tests {
             assert!(ratio >= 4.5, "{tint:?}: white on the glow is only {ratio:.2}:1");
             assert!(r.max(g).max(b) > 0.2, "{tint:?}: glow went black");
         }
+    }
+
+    #[test]
+    fn cover_shadow_ends_above_the_page_clip() {
+        // The widest stroke reaches STEP * layers past the dropped edge; pages are cut at DOTS_Y - 3.
+        let bottom = COVER_TOP + COVER + COVER_SHADOW_DROP + COVER_SHADOW_STEP * COVER_SHADOW.len() as f32;
+        assert!(bottom <= DOTS_Y - 3.0, "shadow ends at {bottom}, clipped at {}", DOTS_Y - 3.0);
     }
 
     #[test]
