@@ -6,7 +6,7 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
 
 ## Features
 
-- **Notch**: clock, battery ring (glowing, two shades by state: cyan into violet, green charging, yellow battery saver, red low), music waves. Hover to open the panel. Shrinks to a line when the pill (short or long, depending on music) would cover tabs or text underneath, and comes back when it is clear, hides during fullscreen games and videos.
+- **Notch**: clock, battery ring, music waves. Hover to open the panel. Shrinks to a line when the pill (short or long, depending on music) would cover tabs or text underneath, and comes back when it is clear, hides during fullscreen games and videos.
 - **4 pages** (switch with ‹ ›):
   - **Music**: cover art, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, click to seek, a lyrics button widens the panel sideways to show scrolling lyrics (the line being sung lit in the middle, long lines wrap), the Music page fades into the cover's colour towards the bottom, with a thin glowing aurora line in the cover's two strongest colours swaying slowly over it while playing (sharp core, halo drawn small and stretched for the blur, so it stays light). Works with any app using Windows media controls, plus iTunes and foobar2000.
   - **Tasks**: one list for tasks and appointments. Type "Buy milk", "Call 20:00" (time only = today) or "Dentist 28/10 14:30", "Call mom tomorrow 9h" (with a date = scheduled). Tick / edit / delete; overdue tasks stay, marked red. ⚙ picks an early reminder of 0–60 min, plus one on time.
