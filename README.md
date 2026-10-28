@@ -48,7 +48,7 @@ cargo build --release
 target/release/puw_notch.exe
 ```
 
-Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`.
+Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`. App ghi lúc khởi động, thoát, lỗi và lúc tự ẩn vào `%APPDATA%\PuwNotch\notch.log` (tối đa 64 KB), để biết vì sao app không chạy khi khởi động cùng Windows.
 
 Thông báo đọc từ trung tâm thông báo Windows, nên **thông báo Windows phải đang bật**. Muốn chỉ thấy thông báo trên notch, không hiện banner ở góc phải màn hình: bật **Không làm phiền** của Windows (Cài đặt → Hệ thống → Thông báo). Windows vẫn giữ thông báo trong trung tâm thông báo nên notch vẫn đọc và hiện banner như bình thường. Windows chưa cho app khác tự tắt banner của từng app đang chạy, nên việc này do bạn bật.
 

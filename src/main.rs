@@ -720,6 +720,9 @@ impl App {
     fn set_hidden(&mut self, hide: bool) {
         if self.hidden != hide {
             self.hidden = hide;
+            // Which window made it hide: a notch missing after start-up may be hidden, not gone.
+            let fg = unsafe { GetForegroundWindow() };
+            system::log(&if hide { format!("hidden, foreground {}", screen::class_name(fg)) } else { "shown again".to_string() });
             unsafe { let _ = ShowWindow(self.hwnd, if hide { SW_HIDE } else { SW_SHOWNOACTIVATE }); }
         }
     }
@@ -1104,10 +1107,25 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
+/// Starts, exits and failures go to notch.log: a start with Windows that dies early shows nothing
+/// on screen and leaves nothing in the event log otherwise.
 fn main() -> windows::core::Result<()> {
+    let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    system::log(&format!("start v{} pid {} cwd {cwd}", env!("CARGO_PKG_VERSION"), std::process::id()));
+    std::panic::set_hook(Box::new(|info| system::log(&format!("panic: {info}"))));
+    let result = run();
+    match &result {
+        Ok(()) => system::log("exit"),
+        Err(e) => system::log(&format!("failed: {e} ({:?})", e.code())),
+    }
+    result
+}
+
+fn run() -> windows::core::Result<()> {
     unsafe {
         let _mutex = CreateMutexW(None, false, w!("Local\\PuwNotch.SingleInstance"))?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
+            system::log("already running, leaving");
             return Ok(());
         }
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

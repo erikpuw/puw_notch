@@ -83,7 +83,7 @@ pub fn buried(own: HWND) -> bool {
 
 const SHELL_CLASSES: [&str; 4] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
 
-fn class_name(hwnd: HWND) -> String {
+pub fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 64];
     let n = unsafe { GetClassNameW(hwnd, &mut buf) }.max(0) as usize;
     String::from_utf16_lossy(&buf[..n])

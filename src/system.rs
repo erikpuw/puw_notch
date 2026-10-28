@@ -126,6 +126,25 @@ fn settings_path() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("APPDATA")?).join("PuwNotch").join("settings.txt"))
 }
 
+/// Largest notch.log may grow before it starts over.
+const LOG_MAX: u64 = 64 * 1024;
+
+/// One line in %APPDATA%\PuwNotch\notch.log: starts, exits and failures, so a start that dies
+/// before anything shows (a start with Windows) can be traced. Best effort, never fails.
+pub fn log(line: &str) {
+    use std::io::Write;
+    let Some(p) = settings_path().map(|p| p.with_file_name("notch.log")) else { return };
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let fresh = std::fs::metadata(&p).map_or(false, |m| m.len() > LOG_MAX);
+    let file = std::fs::OpenOptions::new().create(true).write(true).append(!fresh).truncate(fresh).open(&p);
+    let t = unsafe { GetLocalTime() };
+    if let Ok(mut f) = file {
+        let _ = writeln!(f, "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {line}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    }
+}
+
 /// Tray choices kept in settings.txt.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Settings {
