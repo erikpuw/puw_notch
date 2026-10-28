@@ -30,6 +30,7 @@ use crate::health::{self, Health, Setting};
 use crate::i18n::tr;
 use crate::robot::{curious_eyes, Eyes, Face};
 use crate::todo::{self, Item};
+use crate::weather;
 
 /// Everything the painter needs for one frame (logical px).
 pub struct View<'a> {
@@ -64,6 +65,10 @@ pub struct View<'a> {
     /// Notifications page, newest first.
     pub notes: &'a [Note],
     pub health: HealthView<'a>,
+    /// The weather's city and current conditions (shown on the pill and the Weather page).
+    pub weather: &'a weather::State,
+    /// Seconds since the open panel or its page appeared: the Weather page's icon moves for a moment.
+    pub page_age: f32,
 }
 
 /// Pages of the open panel, switched with the side arrows.
@@ -75,9 +80,11 @@ pub enum Page {
     /// Windows notifications, to read back.
     Notify,
     Health,
+    /// The city (typed here) and its current weather.
+    Weather,
 }
 
-pub const PAGES: [Page; 4] = [Page::Music, Page::Todo, Page::Notify, Page::Health];
+pub const PAGES: [Page; 5] = [Page::Music, Page::Todo, Page::Notify, Page::Health, Page::Weather];
 
 impl Page {
     /// Header of the page: icon, name, accent colour.
@@ -87,6 +94,7 @@ impl Page {
             Page::Todo => ("\u{E9D5}", tr("Việc", "Tasks"), GREEN),
             Page::Notify => (ICON_BELL, tr("Thông báo", "Notifications"), BLUE),
             Page::Health => ("\u{E95E}", tr("Sức khỏe", "Health"), (1.0, 0.42, 0.5)),
+            Page::Weather => (ICON_BRIGHTNESS, tr("Thời tiết", "Weather"), (1.0, 0.78, 0.25)),
         }
     }
 }
@@ -285,6 +293,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
                 }
             }
         }
+        Page::Weather => out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H))),
         Page::Notify => {
             for (row, i) in (scroll..rows.min(scroll + NOTE_ROWS)).enumerate() {
                 out.push((Button::NoteOpen(i), r(cl, NOTE_Y + row as f32 * NOTE_H, cw, NOTE_H - 4.0)));
@@ -1314,6 +1323,13 @@ impl Renderer {
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();
+        // The weather's line icon with its paths as geometry (pill and Weather page).
+        let weather_line = (|| {
+            let n = v.weather.now?;
+            let ic = icons::weather(n.sky, n.day);
+            let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
+            Some((ic, geoms))
+        })();
         // Height of each wrapped lyric line, while the panel is wider than the player.
         let lyric_heights: Vec<f32> = match v.music {
             Some(t) if v.page == Page::Music && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
@@ -1359,6 +1375,24 @@ impl Renderer {
                         text(ICON_NOTE, F_ICON, box_, DWRITE_TEXT_ALIGNMENT_CENTER, grey(1.0, a * 0.8))?;
                     }
                 }
+                Ok(())
+            };
+            // A weather line icon at (x, y), `size` px square, `age` seconds into its motion. `tint` =
+            // (colour of the first path, colour of the rest); None draws it white.
+            let draw_wx_icon = |ic: &icons::Icon, geoms: &[ID2D1PathGeometry], x: f32, y: f32, size: f32, tint: Option<((f32, f32, f32), (f32, f32, f32))>, a: f32, age: f32| -> Result<()> {
+                let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
+                let view = scaling(size / ic.vb) * translate(x, y);
+                let groups = icons::motion(ic.anim, age);
+                for (i, (part, geo)) in ic.parts.iter().zip(geoms).enumerate() {
+                    let g = groups.get(part.g as usize).copied().unwrap_or(icons::Motion::STILL);
+                    let (ox, oy) = ic.origins.get(part.g as usize).copied().unwrap_or((0.0, 0.0));
+                    let local = translate(-ox, -oy) * rotation(g.rot) * scaling(g.scale) * translate(ox + g.dx, oy + g.dy);
+                    let alpha = a * g.alpha * groups.get(part.a as usize).map_or(1.0, |m| m.alpha);
+                    let c = match tint { Some((first, rest)) => if i == 0 { first } else { rest }, None => (1.0, 1.0, 1.0) };
+                    rt.SetTransform(&(local * view * base));
+                    rt.DrawGeometry(geo, &self.brush(color(c.0, c.1, c.2, alpha))?, ic.sw, &self.round);
+                }
+                rt.SetTransform(&base);
                 Ok(())
             };
             let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
@@ -1532,6 +1566,26 @@ impl Renderer {
                     rt.DrawGeometry(&self.ring(rcx, rcy, rr, b.percent as f32 / 100.0)?, &self.brush(ring_c)?, stroke, None);
                     if b.charging {
                         text(ICON_BOLT, F_TINY_ICON, rect(bx, by, bx + d, by + d), center, ring_c)?;
+                    }
+                }
+                // Weather: icon and temperature in the room the clock leaves, to its right on the plain
+                // pill (balancing the battery ring), after the cover on the music pill. Left out
+                // when it would touch the clock.
+                if let (Some((ic, geoms)), Some(n)) = (&weather_line, v.weather.now) {
+                    let (icon, gap) = (14.0 * s, 3.0 * s);
+                    let label = format!("{:.0}°", n.temp);
+                    let total = icon + gap + width(&label, F_LABEL);
+                    let clock_half = width(v.time, F_SMALL) / 2.0 + 5.0 * s;
+                    let (left, room) = if pill_music.is_some() {
+                        let left = l + 38.0 * s;
+                        (left, cx - clock_half - (left + total))
+                    } else {
+                        let left = r - 13.0 * s - total;
+                        (left, left - (cx + clock_half))
+                    };
+                    if room >= 0.0 {
+                        draw_wx_icon(ic, geoms, left, (nh - icon) / 2.0, icon, None, small_a * 0.9, 9.0)?;
+                        text(&label, F_LABEL, rect(left + icon + gap, 0.0, left + total + 4.0 * s, nh), lead, grey(0.9, small_a))?;
                     }
                 }
                 if let Some(t) = pill_music {
@@ -1999,6 +2053,45 @@ impl Renderer {
                             }
                             scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
                         }
+                        Page::Weather => {
+                            draw_input(tr("Nhập thành phố (vd: Hà Nội, Đà Nẵng)", "Type a city (e.g. Hanoi, Da Nang)"))?;
+                            let wx = v.weather;
+                            match (&wx.place, wx.now, &weather_line) {
+                                (Some(place), Some(n), Some((ic, geoms))) => {
+                                    // City and the data's credit (Open-Meteo asks for it, CC BY 4.0).
+                                    text(&place.name, F_TITLE, rect(cl, 68.0 * s, cr - 96.0 * s, 88.0 * s), lead, grey(1.0, a))?;
+                                    text("Open-Meteo", F_LABEL, rect(cr - 94.0 * s, 68.0 * s, cr, 88.0 * s), trail, grey(0.4, a))?;
+                                    // The icon, then the temperature and the sky in words.
+                                    draw_wx_icon(ic, geoms, cl + 4.0 * s, 92.0 * s, 56.0 * s, Some(weather::tints(n.sky, n.day)), a, if current { v.page_age } else { 9.0 })?;
+                                    text(&format!("{:.0}°C", n.temp), F_BIG, rect(cl + 72.0 * s, 92.0 * s, cl + 200.0 * s, 124.0 * s), lead, grey(1.0, a))?;
+                                    text(weather::describe(n.sky), F_BODY, rect(cl + 72.0 * s, 124.0 * s, cl + 210.0 * s, 144.0 * s), lead, grey(0.7, a))?;
+                                    // Feels like, humidity, wind.
+                                    let rows = [
+                                        (tr("Cảm giác", "Feels like"), format!("{:.0}°C", n.feels)),
+                                        (tr("Độ ẩm", "Humidity"), format!("{:.0}%", n.humidity)),
+                                        (tr("Gió", "Wind"), format!("{:.0} km/h", n.wind)),
+                                    ];
+                                    for (k, (label, value)) in rows.iter().enumerate() {
+                                        let y = (96.0 + k as f32 * 20.0) * s;
+                                        text(label, F_LABEL, rect(cl + 222.0 * s, y, cl + 292.0 * s, y + 18.0 * s), lead, grey(0.55, a))?;
+                                        text(value, F_LABEL, rect(cl + 288.0 * s, y, cr, y + 18.0 * s), trail, grey(0.95, a))?;
+                                    }
+                                }
+                                _ => {
+                                    let (first, second) = if wx.looking {
+                                        (tr("Đang tìm thành phố…", "Looking for the city…").to_string(), "")
+                                    } else if let Some(city) = &wx.not_found {
+                                        (format!("{} “{city}”", tr("Không tìm thấy", "Not found:")), tr("Thử viết khác, hoặc tên tỉnh lân cận", "Try another spelling, or a nearby city"))
+                                    } else if wx.place.is_some() {
+                                        (tr("Đang lấy thời tiết…", "Getting the weather…").to_string(), "")
+                                    } else {
+                                        (tr("Nhập tên thành phố rồi nhấn Enter", "Type a city and press Enter").to_string(), tr("Có dấu hay không dấu đều được", "With or without accents"))
+                                    };
+                                    text(&first, F_BODY, rect(cl, 92.0 * s, cr, 114.0 * s), center, grey(0.75, a))?;
+                                    text(second, F_LABEL, rect(cl, 114.0 * s, cr, 134.0 * s), center, grey(0.5, a))?;
+                                }
+                            }
+                        }
                         Page::Health => {
                             let hv = &v.health;
                             let h = hv.h;
@@ -2191,7 +2284,9 @@ impl Renderer {
             self.slow_frames = lyrics_run;
             // Icons still on their way to the Notifications page: come back for them.
             let icons_coming = v.page == Page::Notify && !self.icon_loader.pending.is_empty();
-            Ok(morphing.get() || glow_busy || icon_busy || lyric_glide || icons_coming)
+            // The Weather page's icon moves for a moment when the panel or the page opens.
+            let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && v.page_age < icons::DUR;
+            Ok(morphing.get() || glow_busy || icon_busy || wx_busy || lyric_glide || icons_coming)
         }
     }
 }
@@ -2461,7 +2556,7 @@ mod tests {
             size[0] += LYRICS_EXTRA_W;
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
-                leaving: None, todos: &[], notes: &[],
+                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
@@ -2503,7 +2598,7 @@ mod tests {
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10",
                 battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track),
                 live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
-                leaving: None, todos: &[], notes: &[],
+                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
@@ -2526,6 +2621,64 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes target/weather-preview.bmp: the pill (plain and with music) and the Weather page in each sky"]
+    fn weather_preview() {
+        use weather::{Now, Place, Sky, State};
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (530i32, 210i32);
+            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Weather preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
+                can_toggle: true, can_next: true, can_previous: true, can_seek: true, ..Default::default() };
+            let place = Some(Place { name: "Đà Nẵng".into(), lat: 16.0, lon: 108.0 });
+            let state = |sky, day, temp: f32| State { place: place.clone(), now: Some(Now { temp, feels: temp + 3.0, humidity: 82.0, wind: 11.0, sky, day }), ..State::default() };
+            let mut renderer = Renderer::new().unwrap();
+            let mut sheet = Vec::new();
+            // (mode, music?, page, state, typed text)
+            let frames: Vec<(Mode, bool, Page, State, &str)> = vec![
+                (Mode::Collapsed, false, Page::Music, state(Sky::PartlyCloudy, true, 29.0), ""),
+                (Mode::Collapsed, true, Page::Music, state(Sky::Rain, true, 26.0), ""),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Storm, true, 27.0), ""),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Clear, false, 24.0), ""),
+                (Mode::Expanded, false, Page::Weather, State::default(), "Đà Nẵ"),
+                (Mode::Expanded, false, Page::Weather, State { not_found: Some("Xyz".into()), ..State::default() }, ""),
+                // The other skies, for the icons.
+                (Mode::Expanded, false, Page::Weather, state(Sky::PartlyCloudy, true, 30.0), ""),
+                (Mode::Expanded, false, Page::Weather, state(Sky::PartlyCloudy, false, 25.0), ""),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Cloudy, true, 28.0), ""),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Rain, true, 26.0), ""),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Fog, true, 22.0), ""),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Snow, true, 1.0), ""),
+                (Mode::Expanded, false, Page::Weather, state(Sky::Clear, true, 33.0), ""),
+            ];
+            let n = frames.len() as i32;
+            for (mode, music, page, st, typed) in &frames {
+                let view = View { mode: *mode, size: target(*mode, *music), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
+                    banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: *page,
+                    leaving: None, todos: &[], notes: &[], weather: st, page_age: 9.0,
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0 },
+                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                for _ in 0..3 {
+                    renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                }
+                let mut dib = DIBSECTION::default();
+                assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
+                sheet.extend_from_slice(std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize));
+            }
+            let sh = h * n;
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + sheet.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-sh).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/weather-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
     #[ignore = "writes target/banner-preview.bmp: a notification banner, for the README picture"]
     fn banner_preview() {
         unsafe {
@@ -2536,7 +2689,7 @@ mod tests {
             let toast = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: None };
             let view = View { mode: Mode::Alert, size: notch::alert_size(1), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(&toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
-                leaving: None, todos: &[], notes: &[],
+                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
@@ -2571,7 +2724,7 @@ mod tests {
             for (i, t) in [0.0f32, 1.5, 3.0, 4.5].into_iter().enumerate() {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16", date: "T5, 29/10",
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
-                    phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[],
+                    phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 // The first frame waits for the cover and the fade-in.
@@ -2609,7 +2762,7 @@ mod tests {
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: Some(Button::PlayPause), page: Page::Music,
-                leaving: None, todos: &[], notes: &[],
+                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();

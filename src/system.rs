@@ -1,6 +1,7 @@
 //! Small OS bits: clock text, battery, settings file, start-with-Windows.
 
 use std::path::PathBuf;
+use crate::weather::Place;
 use windows::core::{s, w, GUID, PCWSTR};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::Foundation::ERROR_SUCCESS;
@@ -145,8 +146,8 @@ pub fn log(line: &str) {
     }
 }
 
-/// Tray choices kept in settings.txt.
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// Tray choices and the weather's city, kept in settings.txt.
+#[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     pub minimal: bool,
     pub english: bool,
@@ -154,11 +155,13 @@ pub struct Settings {
     pub robot: bool,
     /// Volume keys handled by the app so only the notch shows (Windows' OSD stays away).
     pub volume_keys: bool,
+    /// The weather's city, looked up once (None: weather off).
+    pub place: Option<Place>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, place: None }
     }
 }
 
@@ -170,7 +173,11 @@ fn parse_settings(text: &str) -> Settings {
             "lang=en" => s.english = true,
             "robot=0" => s.robot = false,
             "volkeys=1" => s.volume_keys = true,
-            _ => {}
+            other => {
+                if let Some(place) = other.strip_prefix("city=") {
+                    s.place = crate::weather::parse_place(place);
+                }
+            }
         }
     }
     s
@@ -185,7 +192,8 @@ pub fn save_settings(s: Settings) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\n", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8));
+        let city = s.place.as_ref().map_or(String::new(), |p| format!("city={}\n", crate::weather::place_line(p)));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\n{city}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8));
     }
 }
 
@@ -232,7 +240,9 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true });
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, place: None });
+        let hue = crate::weather::Place { name: "Huế".into(), lat: 16.4619, lon: 107.59546 };
+        assert_eq!(parse_settings("robot=1\ncity=16.46190,107.59546,Huế\n").place, Some(hue));
         assert_eq!(parse_settings("minimal=0\n"), Settings::default(), "old files: Vietnamese, idle robot on, volume keys left to Windows");
         assert!(Settings::default().robot && !Settings::default().volume_keys);
     }

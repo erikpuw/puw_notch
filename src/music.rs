@@ -425,7 +425,7 @@ fn synced(o: &JsonObject) -> Option<Vec<(u64, String)>> {
     (!lines.is_empty()).then_some(lines)
 }
 
-fn http_get(url: &str) -> Option<String> {
+pub fn http_get(url: &str) -> Option<String> {
     let client = HttpClient::new().ok()?;
     let _ = client.DefaultRequestHeaders().ok()?.UserAgent().ok()?.TryParseAdd(&HSTRING::from("PUW-Notch/0.1 (Windows)"));
     let uri = Uri::CreateUri(&HSTRING::from(url)).ok()?;

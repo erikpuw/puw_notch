@@ -48,6 +48,7 @@ features = [
     "Storage_Streams",
     "Web_Http",
     "Web_Http_Headers",
+    "Win32_Networking_WinInet",
     "Data_Json",
     "Win32_Graphics_Imaging",
     "Win32_Graphics_Imaging_D2D",

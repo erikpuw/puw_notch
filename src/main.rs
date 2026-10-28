@@ -18,6 +18,7 @@ mod status;
 mod system;
 mod todo;
 mod usb;
+mod weather;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,6 +45,7 @@ use i18n::tr;
 use audio::WM_VOLUME;
 use status::{WM_LOCKKEY, WM_VOLUMEKEY};
 use notify::Toast;
+use weather::WM_WEATHER;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, NOTE_ROWS, PAGES};
 
 const WM_TRAY: u32 = WM_APP + 1;
@@ -142,6 +144,13 @@ struct App {
     prev_foreground: HWND,
     /// First half of a UTF-16 pair arriving in WM_CHAR (emoji).
     high_surrogate: Option<u16>,
+    weather: weather::Weather,
+    /// The weather as of the last WM_WEATHER (city and current conditions).
+    wx: weather::State,
+    /// Text in the Weather page's city box, apart from the tasks' draft.
+    city_draft: String,
+    /// When the open panel or its page appeared (the Weather page's icon moves from then).
+    page_since: Instant,
 }
 
 /// Animation frame intervals.
@@ -172,6 +181,10 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        // The page's own motion plays from the moment the panel opens.
+        if self.notch.mode != Mode::Expanded {
+            self.page_since = Instant::now();
+        }
         let eyes = self.robot_eyes();
         let (x, y, w, h) = self.win;
         let now = system::now_stamp();
@@ -195,7 +208,7 @@ impl App {
                 counts: self.todo.counts(self.today),
                 remind_before: self.todo.remind_before,
                 now,
-                draft: &self.draft,
+                draft: if self.page == Page::Weather { &self.city_draft } else { &self.draft },
                 editing: self.editing,
                 edit_item: self.edit_item,
                 caret: self.caret,
@@ -204,6 +217,8 @@ impl App {
             todos: &self.todo.items,
             notes: &self.notes,
             health: HealthView { h: &self.health, now: todo::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
+            weather: &self.wx,
+            page_age: self.page_since.elapsed().as_secs_f32(),
         };
         // An icon that just changed keeps frames coming until its morph has played.
         self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
@@ -244,7 +259,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys() }
+        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), place: self.wx.place.clone() }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -576,6 +591,7 @@ impl App {
                 let next = PAGES[(i + dir).rem_euclid(PAGES.len() as i32) as usize];
                 self.page_anim = Some((self.page, Instant::now(), dir));
                 self.page = next;
+                self.page_since = Instant::now();
                 self.settings_open = None;
                 if next == Page::Notify {
                     self.refresh_notes();
@@ -621,8 +637,21 @@ impl App {
         }
     }
 
-    /// Enter in the box: save the edited task, or add a new one. The box stays for the next task.
+    /// The text of the box on the page now: the city on the Weather page, else the task.
+    fn draft_mut(&mut self) -> &mut String {
+        if self.page == Page::Weather { &mut self.city_draft } else { &mut self.draft }
+    }
+
+    /// Enter in the box: on the Weather page look the city up (the keyboard goes back at once);
+    /// elsewhere save the edited task, or add a new one, and stay in the box for the next task.
     fn submit(&mut self) {
+        if self.page == Page::Weather {
+            let city = std::mem::take(&mut self.city_draft);
+            self.weather.find(&city);
+            self.wx = self.weather.snapshot();
+            self.end_edit();
+            return;
+        }
         let now = system::now_stamp();
         let saved = match self.edit_item {
             Some(i) => self.todo.update(i, &self.draft, now),
@@ -688,12 +717,12 @@ impl App {
             // Enter: save and stay in the box for the next task.
             0x0D => self.submit(),
             0x1B => {
-                self.draft.clear();
+                self.draft_mut().clear();
                 self.edit_item = None;
                 self.end_edit();
             }
             0x08 => {
-                self.draft.pop();
+                self.draft_mut().pop();
             }
             0xD800..=0xDBFF => self.high_surrogate = Some(unit),
             0xDC00..=0xDFFF => {
@@ -715,8 +744,9 @@ impl App {
     }
 
     fn push_char(&mut self, c: char) {
-        if self.draft.chars().count() < todo::MAX_LEN {
-            self.draft.push(c);
+        let draft = self.draft_mut();
+        if draft.chars().count() < todo::MAX_LEN {
+            draft.push(c);
         }
     }
 
@@ -945,10 +975,25 @@ impl App {
                 }
             }
             WM_CONN => {
+                // The network may just have come back: the weather catches up (a recent one is kept).
+                self.weather.refresh();
                 for e in connectivity::take_events() {
                     self.show_banner(connection_toast(e), ALERT_MS);
                 }
             }
+            // From the weather thread: a city was found (or not) or new conditions came.
+            WM_WEATHER => {
+                let before = self.wx.place.clone();
+                self.wx = self.weather.snapshot();
+                if self.wx.place != before {
+                    system::save_settings(self.settings());
+                }
+                if !self.animating {
+                    self.redraw();
+                }
+            }
+            // The PC woke up: the old conditions may be hours stale.
+            WM_POWERBROADCAST if wp.0 as u32 == PBT_APMRESUMEAUTOMATIC => self.weather.refresh(),
             WM_DEVICECHANGE => {
                 if let Some((change, path)) = usb::parse_message(wp, lp) {
                     self.usb_changed(change, &path);
@@ -1216,6 +1261,10 @@ fn run() -> windows::core::Result<()> {
             icons_morphing: false,
             prev_foreground: HWND::default(),
             high_surrogate: None,
+            weather: weather::Weather::start(hwnd, settings.place.clone()),
+            wx: weather::State { place: settings.place.clone(), ..weather::State::default() },
+            city_draft: String::new(),
+            page_since: Instant::now(),
         };
         app.refresh_audio();
         app.refresh_notes();

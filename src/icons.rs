@@ -54,6 +54,12 @@ pub enum Anim {
     Gamepad,
     UsbIn,
     UsbOut,
+    /// Weather: the cloud sways (and the fog's line under it, the other way).
+    Drift,
+    /// Weather: rain drops or snow fall into place.
+    Fall,
+    /// Weather: the lightning bolt flashes twice.
+    Flash,
 }
 
 pub struct Icon {
@@ -240,6 +246,49 @@ static USB: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::UsbIn, origins: MID, pa
 /// A USB device pulled out: the same symbol shaking and dimming.
 static USB_OUT: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::UsbOut, origins: MID, parts: USB_PARTS };
 
+// Weather (Tabler's sun, moon, cloud, cloud-fog, cloud-rain, cloud-snow, cloud-storm). Tabler has no
+// partly cloudy icon: that one is its rain cloud, lower, with half a sun or a crescent behind.
+const CLOUD: &str = "M6.657 18c-2.572 0 -4.657 -2.007 -4.657 -4.483c0 -2.475 2.085 -4.482 4.657 -4.482c.393 -1.762 1.794 -3.2 3.675 -3.773c1.88 -.572 3.956 -.193 5.444 1c1.488 1.19 2.162 3.007 1.77 4.769h.99c1.913 0 3.464 1.56 3.464 3.486c0 1.927 -1.551 3.487 -3.465 3.487h-11.878";
+const RAIN_CLOUD: &str = "M7 18a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7";
+const LOW_CLOUD: &str = "M6 21a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7z";
+static WX_SUN: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Sun, origins: MID, parts: SUN.parts };
+static WX_MOON: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[moves("M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454l0 .008", 0)],
+};
+static WX_CLOUD: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID, parts: &[moves(CLOUD, 0)] };
+static WX_PARTLY_DAY: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID,
+    parts: &[moves(LOW_CLOUD, 0), p("M13.3 8a3.2 3.2 0 0 1 6.4 0"), p("M16.5 2.5v1m4.5 1l-.7 .7m2.2 2.8h-1m-9 -3.5l.7 .7")],
+};
+static WX_PARTLY_NIGHT: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID,
+    parts: &[moves(LOW_CLOUD, 0), p("M15 3.5a3.5 3.5 0 1 0 5.5 4.5a2.8 2.8 0 0 1 -5.5 -4.5")],
+};
+static WX_FOG: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Drift, origins: MID,
+    parts: &[moves("M7 16a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7h-12", 0), moves("M5 20l14 0", 1)],
+};
+static WX_RAIN: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Fall, origins: MID, parts: &[p(RAIN_CLOUD), moves("M11 13v2m0 3v2m4 -5v2m0 3v2", 1)] };
+static WX_SNOW: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Fall, origins: MID, parts: &[p(RAIN_CLOUD), moves("M11 15v.01m0 3v.01m0 3v.01m4 -4v.01m0 3v.01", 1)] };
+static WX_STORM: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Flash, origins: MID, parts: &[p("M7 18a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7h-1"), moves("M13 14l-2 4l3 0l-2 4", 1)] };
+
+/// The weather icon for `sky`, by day or night.
+pub fn weather(sky: crate::weather::Sky, day: bool) -> &'static Icon {
+    use crate::weather::Sky;
+    match (sky, day) {
+        (Sky::Clear, true) => &WX_SUN,
+        (Sky::Clear, false) => &WX_MOON,
+        (Sky::PartlyCloudy, true) => &WX_PARTLY_DAY,
+        (Sky::PartlyCloudy, false) => &WX_PARTLY_NIGHT,
+        (Sky::Cloudy, _) => &WX_CLOUD,
+        (Sky::Fog, _) => &WX_FOG,
+        (Sky::Rain, _) => &WX_RAIN,
+        (Sky::Snow, _) => &WX_SNOW,
+        (Sky::Storm, _) => &WX_STORM,
+    }
+}
+
 /// The line icon drawn in place of a banner glyph, if it has one.
 pub fn lookup(glyph: &str) -> Option<&'static Icon> {
     Some(match glyph {
@@ -395,6 +444,15 @@ pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
             g[0].dx = 1.4 * shake;
             g[0].alpha = 1.0 - 0.5 * bump(t, 0.2, 0.5);
         }
+        Anim::Drift => {
+            let sway = (tau * t).sin() * (1.0 - t / DUR);
+            (g[0].dx, g[1].dx) = (1.2 * sway, -1.2 * sway);
+        }
+        Anim::Fall => {
+            let k = ease_out(t / 0.6);
+            (g[1].dy, g[1].alpha) = (-3.0 * (1.0 - k), lerp_in(t, 0.0, 0.25));
+        }
+        Anim::Flash => g[1].alpha = 1.0 - 0.9 * (tau * 2.0 * lerp_in(t, 0.15, 0.6)).sin().abs(),
     }
     g
 }
@@ -601,10 +659,25 @@ mod tests {
         assert!(lookup(ICON_DROP).is_none(), "the drop is drawn by the renderer");
     }
 
-    const ALL: [Anim; 24] = [
+    #[test]
+    fn every_weather_icon_parses() {
+        use crate::weather::Sky;
+        for sky in [Sky::Clear, Sky::PartlyCloudy, Sky::Cloudy, Sky::Fog, Sky::Rain, Sky::Snow, Sky::Storm] {
+            for day in [true, false] {
+                for part in weather(sky, day).parts {
+                    let segs = parse(part.d).unwrap_or_else(|| panic!("{sky:?}: {:?} does not parse", part.d));
+                    assert!(matches!(segs.first(), Some(Seg::Move(..))), "{:?}", part.d);
+                    assert!(part.g == NONE || part.g < 4);
+                }
+            }
+        }
+        assert!(!std::ptr::eq(weather(Sky::Clear, true), weather(Sky::Clear, false)), "sun by day, moon by night");
+    }
+
+    const ALL: [Anim; 27] = [
         Anim::Bluetooth, Anim::Sun, Anim::Charging, Anim::Unplug, Anim::Plane, Anim::Volume, Anim::Mute, Anim::Mic, Anim::MicOff, Anim::Keyboard,
         Anim::Wifi, Anim::WifiOff, Anim::Pulse, Anim::Ring, Anim::BatteryLow, Anim::Saver, Anim::Bell, Anim::Walk, Anim::Headphones,
-        Anim::SpeakerCone, Anim::MouseWheel, Anim::Gamepad, Anim::UsbIn, Anim::UsbOut,
+        Anim::SpeakerCone, Anim::MouseWheel, Anim::Gamepad, Anim::UsbIn, Anim::UsbOut, Anim::Drift, Anim::Fall, Anim::Flash,
     ];
 
     #[test]
