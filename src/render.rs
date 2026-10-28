@@ -1306,6 +1306,10 @@ impl Renderer {
                 if box_.right - box_.left > 40.0 * s {
                     let (x, y) = (box_.left.round(), (box_.top + COVER_SHADOW_DROP * s).round());
                     let edge = rect(x, y, x + (box_.right - box_.left), y + (box_.bottom - box_.top));
+                    // Filled as dark as all strokes together are at its edge: dropped lower than the
+                    // cover, the part of it showing below the cover is shadow, not a light gap.
+                    let core = 1.0 - COVER_SHADOW.iter().map(|k| 1.0 - k).product::<f32>();
+                    rt.FillRoundedRectangle(&rounded(edge, radius), &self.brush(color(0.0, 0.0, 0.0, core * a))?);
                     for (k, alpha) in COVER_SHADOW.iter().enumerate().rev() {
                         rt.DrawRoundedRectangle(&rounded(edge, radius), &self.brush(color(0.0, 0.0, 0.0, alpha * a))?, 2.0 * COVER_SHADOW_STEP * (k as f32 + 1.0) * s, None);
                     }
