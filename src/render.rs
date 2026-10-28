@@ -766,6 +766,8 @@ pub struct Renderer {
     cover_shadow: Option<(f32, ID2D1Bitmap)>,
     /// The Music page's glow: (colour, strength 0..1, time of the last frame), see glow_step.
     glow: ((f32, f32, f32), f32, Instant),
+    /// How far the pill's equaliser is "up" (0 flat .. 1 dancing): eases both ways on play / pause.
+    bars: f32,
     /// The last frame showed the lyrics scrolling with the song: frames at a relaxed pace will do.
     pub slow_frames: bool,
     /// Geometry of each line-icon path, by its path data.
@@ -848,7 +850,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -1346,6 +1348,14 @@ impl Renderer {
         let dt = now.duration_since(self.glow.2).as_secs_f32().min(0.1);
         let (tint, level, glow_busy) = glow_step(self.glow.0, self.glow.1, target, dt);
         self.glow = (tint, level, now);
+        // The equaliser rises when playing starts and settles flat when it stops, not in one frame.
+        let bars_to = if v.music.is_some_and(|t| t.playing) { 1.0 } else { 0.0 };
+        self.bars += (bars_to - self.bars) * (1.0 - (-dt * 9.0).exp());
+        let bars_busy = (bars_to - self.bars).abs() > 0.01;
+        if !bars_busy {
+            self.bars = bars_to;
+        }
+        let bars_level = self.bars;
         // The banner's line icon (status / device) with its paths as geometry.
         let banner_line = (|| {
             let icon = if v.mode == Mode::Alert { v.banner?.icon.unwrap_or(ICON_BELL) } else { return None };
@@ -1636,7 +1646,7 @@ impl Renderer {
                         rt.SetTransform(&base);
                     }
                 }
-                if let Some(t) = pill_music {
+                if pill_music.is_some() {
                     // Live pill: cover on the left, equaliser on the right.
                     let c = 20.0 * s;
                     let top = (nh - c) / 2.0;
@@ -1644,7 +1654,7 @@ impl Renderer {
                     let bw = 2.0 * s;
                     for i in 0..4 {
                         let k = i as f32;
-                        let amp = if t.playing { 0.5 + 0.5 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin() } else { 0.0 };
+                        let amp = bars_level * (0.5 + 0.5 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin());
                         let bh = (4.0 + 10.0 * amp) * s;
                         let bx = r - 14.0 * s - (4.0 - k) * (bw + 2.0 * s);
                         let my = nh / 2.0;
@@ -2390,7 +2400,7 @@ impl Renderer {
             let icons_coming = v.page == Page::Notify && !self.icon_loader.pending.is_empty();
             // The Weather page's icon moves for a moment when the panel or the page opens.
             let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && v.page_age < icons::DUR;
-            Ok(morphing.get() || glow_busy || icon_busy || wx_busy || lyric_glide || icons_coming)
+            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_glide || icons_coming)
         }
     }
 }
