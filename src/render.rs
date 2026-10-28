@@ -192,6 +192,8 @@ const BAR_Y: f32 = 108.0;
 /// Page content sits between the side arrows (logical px from the panel edge).
 const SIDE: f32 = 44.0;
 const ARROW: f32 = 24.0;
+/// Pages are clipped this far in from the panel's sides (just inside the arrows).
+const PAGE_CLIP: f32 = 34.0;
 const ARROW_Y: f32 = 80.0;
 const DOTS_Y: f32 = 174.0;
 /// Task list page.
@@ -375,11 +377,12 @@ const BANNER_IMAGE_PX: (f32, f32) = (2.0 * BANNER_IMAGE_W, 2.0 * BANNER_IMAGE_H)
 /// A line of lyrics: wraps onto more lines instead of being cut short.
 const F_LYRIC: usize = 10;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
-/// of the thin divider after the player's controls, its right margin and its width.
+/// of the thin divider after the player's controls, its right margin and its width. The margin
+/// stays wider than the pages' clip (PAGE_CLIP), with room for a last letter's ink past the box.
 const LYRIC_TOP: f32 = 30.0;
 const LYRIC_BOTTOM: f32 = 168.0;
 const LYRIC_GAP: f32 = 14.0;
-const LYRIC_RIGHT: f32 = 30.0;
+const LYRIC_RIGHT: f32 = PAGE_CLIP + 6.0;
 const LYRIC_W: f32 = LYRICS_EXTRA_W + SIDE - 2.0 * LYRIC_GAP - LYRIC_RIGHT;
 
 pub const ICON_VOLUME: &str = "\u{E767}";
@@ -1828,7 +1831,11 @@ impl Renderer {
                                             }
                                             let alpha = a * appear * lyrics::edge_fade(top + h / 2.0, y0, y1, 28.0 * s) * lyrics::line_alpha(j, phase);
                                             if alpha > 0.01 {
-                                                text(line, F_LYRIC, rect(x0, top, x1, top + h), lead, soft_text(tint, level, 1.0, alpha))?;
+                                                // Not clipped to the box: a line wraps to fit by the letters' advance,
+                                                // and its last letter's ink ("y", a tone mark) can stick out past it.
+                                                let units: Vec<u16> = line.encode_utf16().collect();
+                                                fonts[F_LYRIC].SetTextAlignment(lead)?;
+                                                rt.DrawText(&units, &fonts[F_LYRIC], &rect(x0, top, x1, top + h), &self.brush(soft_text(tint, level, 1.0, alpha))?, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
                                             }
                                         }
                                     }
@@ -2078,7 +2085,7 @@ impl Renderer {
                 };
 
                 // Pages slide inside the space between the arrows.
-                rt.PushAxisAlignedClip(&rect(l + 34.0 * s, 30.0 * s, r - 34.0 * s, (DOTS_Y - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
+                rt.PushAxisAlignedClip(&rect(l + PAGE_CLIP * s, 30.0 * s, r - PAGE_CLIP * s, (DOTS_Y - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
                 match v.leaving {
                     Some((from, t, dir)) => {
                         let span = (cr - cl) * 0.55;
@@ -2201,6 +2208,14 @@ mod tests {
             assert!(ratio >= 4.5, "{tint:?}: white on the glow is only {ratio:.2}:1");
             assert!(r.max(g).max(b) > 0.2, "{tint:?}: glow went black");
         }
+    }
+
+    #[test]
+    fn lyrics_fit_inside_the_page_clip() {
+        // Right edge of the lyrics box, from the panel's left: past the controls, the divider gaps
+        // and the column. A last letter's ink may run a few px further and must not be clipped.
+        let right = target(Mode::Expanded, false)[0] - SIDE + 2.0 * LYRIC_GAP + LYRIC_W;
+        assert!(right + 4.0 <= panel_w(true) - PAGE_CLIP, "{right} vs {}", panel_w(true) - PAGE_CLIP);
     }
 
     #[test]

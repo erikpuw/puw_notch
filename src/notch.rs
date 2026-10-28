@@ -50,7 +50,7 @@ pub fn alert_size(lines: u8) -> [f32; 3] {
 
 /// Extra width of the open panel while the lyrics show beside the player. The lyrics take the
 /// player's right margin (its page arrow hides meanwhile), so this is less than their width.
-pub const LYRICS_EXTRA_W: f32 = 274.0;
+pub const LYRICS_EXTRA_W: f32 = 284.0;
 
 /// Window must fit the largest target plus the hover margin.
 /// Includes room for the spring overshoot and the ears.
