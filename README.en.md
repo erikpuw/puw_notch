@@ -28,11 +28,19 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
 
 ![Music with lyrics](assets/screenshots/page-music-lyrics.png)<br>**Music** with lyrics: the panel widens, the line being sung lit in the middle, the aurora line swaying along the bottom
 
+![Weather](assets/screenshots/page-weather.png)<br>**Weather**: large icon, temperature, °C | °F buttons, feels-like, humidity, wind
+
 The collapsed pill:
 
 | Music playing | Normal | Idle robot | Happy robot |
 |---|---|---|---|
 | ![](assets/screenshots/pill-music.png) | ![](assets/screenshots/pill-idle.png) | ![](assets/screenshots/robot.png) | ![](assets/screenshots/robot-happy.png) |
+
+With the weather on:
+
+| Normal | Music playing |
+|---|---|
+| ![](assets/screenshots/weather-pill.png) | ![](assets/screenshots/weather-pill-music.png) |
 
 ## Download and run
 

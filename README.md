@@ -28,11 +28,19 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không We
 
 ![Nhạc với lời](assets/screenshots/page-music-lyrics.png)<br>**Nhạc** với lời bài hát: bảng giãn ngang, dòng đang hát sáng ở giữa, đường aurora lượn dọc đáy bảng
 
+![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, nút °C | °F, cảm nhận, độ ẩm, gió
+
 Viên thuốc thu gọn:
 
 | Đang phát nhạc | Bình thường | Robot khi để yên | Robot vui |
 |---|---|---|---|
 | ![](assets/screenshots/pill-music.png) | ![](assets/screenshots/pill-idle.png) | ![](assets/screenshots/robot.png) | ![](assets/screenshots/robot-happy.png) |
+
+Có thời tiết:
+
+| Bình thường | Đang phát nhạc |
+|---|---|
+| ![](assets/screenshots/weather-pill.png) | ![](assets/screenshots/weather-pill-music.png) |
 
 ## Tải về và chạy
 
