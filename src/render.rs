@@ -374,11 +374,13 @@ const BANNER_IMAGE_GAP: f32 = 10.0;
 const BANNER_IMAGE_PX: (f32, f32) = (2.0 * BANNER_IMAGE_W, 2.0 * BANNER_IMAGE_H);
 /// A line of lyrics: wraps onto more lines instead of being cut short.
 const F_LYRIC: usize = 10;
-/// Lyrics area beside the player, logical px: its top and bottom in the panel, and its width.
+/// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
+/// of the thin divider after the player's controls, its right margin and its width.
 const LYRIC_TOP: f32 = 30.0;
 const LYRIC_BOTTOM: f32 = 168.0;
-const LYRIC_GAP: f32 = 6.0;
-const LYRIC_W: f32 = LYRICS_EXTRA_W - LYRIC_GAP - SIDE;
+const LYRIC_GAP: f32 = 14.0;
+const LYRIC_RIGHT: f32 = 30.0;
+const LYRIC_W: f32 = LYRICS_EXTRA_W + SIDE - 2.0 * LYRIC_GAP - LYRIC_RIGHT;
 
 pub const ICON_VOLUME: &str = "\u{E767}";
 pub const ICON_MUTE: &str = "\u{E74F}";
@@ -494,8 +496,7 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 
 /// The cover's shadow: strokes of growing width centred on its edge (the inner half hides under the
 /// cover), with the darkness of each from the narrowest out, and the step in px.
-const COVER_SHADOW: [f32; 3] = [0.14, 0.09, 0.05];
-const COVER_SHADOW_STEP: f32 = 0.8;
+const COVER_SHADOW: [f32; 3] = [0.14, 0.09, 0.05];const COVER_SHADOW_STEP: f32 = 0.8;
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
@@ -1801,8 +1802,19 @@ impl Renderer {
                             let grow = ((v.size[0] - player_w) / LYRICS_EXTRA_W).clamp(0.0, 1.0);
                             if grow > 0.02 {
                                 let appear = grow * grow * (3.0 - 2.0 * grow);
-                                let (x0, y0, y1) = (l + (player_w + LYRIC_GAP) * s, LYRIC_TOP * s, LYRIC_BOTTOM * s);
+                                // Right after the controls, past a thin divider.
+                                let divider = l + (player_w - SIDE + LYRIC_GAP) * s;
+                                let (x0, y0, y1) = (divider + LYRIC_GAP * s, LYRIC_TOP * s, LYRIC_BOTTOM * s);
                                 let x1 = x0 + LYRIC_W * s;
+                                // Fading out at both ends.
+                                let peak = 0.18 * a * appear;
+                                let stops = rt.CreateGradientStopCollection(&[
+                                    D2D1_GRADIENT_STOP { position: 0.0, color: grey(1.0, 0.0) },
+                                    D2D1_GRADIENT_STOP { position: 0.5, color: grey(1.0, peak) },
+                                    D2D1_GRADIENT_STOP { position: 1.0, color: grey(1.0, 0.0) },
+                                ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                                let down = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: divider, Y: y0 }, endPoint: Vector2 { X: divider, Y: y1 } };
+                                rt.FillRectangle(&rect(divider, y0, divider + 1.0 * s, y1), &rt.CreateLinearGradientBrush(&down, None, &stops)?);
                                 match v.music {
                                     Some(t) if !lyric_heights.is_empty() => {
                                         let tops = lyrics::tops(&lyric_heights, 8.0 * s);
