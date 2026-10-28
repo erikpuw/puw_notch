@@ -82,8 +82,10 @@ pub fn buried(own: HWND) -> bool {
 }
 
 /// Shell windows that are never "an app in the way". `XamlWindow` is the screen-sized host of the
-/// Start menu's power / account flyouts: taken for a fullscreen app it hid the notch.
-const SHELL_CLASSES: [&str; 5] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "XamlWindow"];
+/// Start menu's power / account flyouts: taken for a fullscreen app it hid the notch. The Start and
+/// Search panels are `CoreWindow`s as tall as the screen: their acrylic backdrop read as busy pixels
+/// under the pill and thinned it to a line.
+const SHELL_CLASSES: [&str; 6] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "XamlWindow", "Windows.UI.Core.CoreWindow"];
 
 pub fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 64];
