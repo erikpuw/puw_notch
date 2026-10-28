@@ -498,12 +498,13 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
     0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-/// The cover's shadow: strokes of growing width centred on its edge (the inner half hides under the
-/// cover), with the darkness of each from the narrowest out, the step in px, and how far it drops.
-/// Soft, and short enough to end above the pages' bottom clip (see the test).
-const COVER_SHADOW: [f32; 5] = [0.14, 0.10, 0.07, 0.04, 0.02];
-const COVER_SHADOW_STEP: f32 = 1.2;
+/// The cover's shadow, a blurred dark square (`Renderer::cover_shadow`): how far it reaches past the
+/// cover, how far it drops, how dark it is, and how much smaller it is drawn before being stretched
+/// (the blur). Short enough to end above the pages' bottom clip (see the test).
+const COVER_SHADOW_PAD: f32 = 8.0;
 const COVER_SHADOW_DROP: f32 = 2.0;
+const COVER_SHADOW_ALPHA: f32 = 0.55;
+const COVER_SHADOW_SHRINK: f32 = 4.0;
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
@@ -722,6 +723,8 @@ pub struct Renderer {
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
     /// Decoded cover of the current track (keyed by Track::art_key).
     cover: Option<CoverCache>,
+    /// The cover's blurred shadow, made once per scale: (scale, bitmap).
+    cover_shadow: Option<(f32, ID2D1Bitmap)>,
     /// The Music page's glow: (colour, strength 0..1, time of the last frame), see glow_step.
     glow: ((f32, f32, f32), f32, Instant),
     /// The last frame showed the lyrics scrolling with the song: frames at a relaxed pace will do.
@@ -806,7 +809,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -1262,11 +1265,43 @@ impl Renderer {
         }
     }
 
+    /// The big cover's shadow at `scale`: a dark rounded square COVER_SHADOW_PAD larger all round,
+    /// drawn COVER_SHADOW_SHRINK times smaller and stretched back in two linear steps, which blurs
+    /// it into one smooth falloff. Made once; drawn at twice its size.
+    fn cover_shadow(&mut self, scale: f32) -> Option<ID2D1Bitmap> {
+        if let Some((s, bmp)) = &self.cover_shadow {
+            if *s == scale {
+                return Some(bmp.clone());
+            }
+        }
+        let (k, side, pad) = (COVER_SHADOW_SHRINK, COVER * scale, COVER_SHADOW_PAD * scale);
+        let n = side + 2.0 * pad;
+        let clear = color(0.0, 0.0, 0.0, 0.0);
+        let mode = D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE;
+        let bmp = unsafe {
+            let tiny = self.rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: n / k, height: n / k }), None, None, mode).ok()?;
+            tiny.BeginDraw();
+            tiny.Clear(Some(&clear));
+            let body = rect(pad / k, pad / k, (pad + side) / k, (pad + side) / k);
+            tiny.FillRoundedRectangle(&rounded(body, 14.0 * scale / k), &tiny.CreateSolidColorBrush(&color(0.0, 0.0, 0.0, 1.0), None).ok()?);
+            tiny.EndDraw(None, None).ok()?;
+            let mid = self.rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: n / 2.0, height: n / 2.0 }), None, None, mode).ok()?;
+            mid.BeginDraw();
+            mid.Clear(Some(&clear));
+            mid.DrawBitmap(&tiny.GetBitmap().ok()?, Some(&rect(0.0, 0.0, n / 2.0, n / 2.0)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+            mid.EndDraw(None, None).ok()?;
+            mid.GetBitmap().ok()?
+        };
+        self.cover_shadow = Some((scale, bmp.clone()));
+        Some(bmp)
+    }
+
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
         self.ensure_surface(w, h)?;
         self.take_icons();
         let fonts = self.fonts(scale)?;
         let cover = v.music.and_then(|t| self.cover(t, (COVER * scale).round() as u32, (20.0 * scale).round() as u32));
+        let cover_shadow = cover.as_ref().and_then(|_| self.cover_shadow(scale));
         let target = if v.live && v.page == Page::Music { self.cover.as_ref().and_then(|c| c.glow) } else { None };
         let now = Instant::now();
         let dt = now.duration_since(self.glow.2).as_secs_f32().min(0.1);
@@ -1303,16 +1338,10 @@ impl Renderer {
             // Cover art clipped to a rounded square, or a note glyph when there is none.
             let draw_cover = |box_: D2D_RECT_F, radius: f32, a: f32| -> Result<()> {
                 // The big cover gets a soft shadow all round, a little lower, so it stands off the glow.
-                if box_.right - box_.left > 40.0 * s {
-                    let (x, y) = (box_.left.round(), (box_.top + COVER_SHADOW_DROP * s).round());
-                    let edge = rect(x, y, x + (box_.right - box_.left), y + (box_.bottom - box_.top));
-                    // Filled as dark as all strokes together are at its edge: dropped lower than the
-                    // cover, the part of it showing below the cover is shadow, not a light gap.
-                    let core = 1.0 - COVER_SHADOW.iter().map(|k| 1.0 - k).product::<f32>();
-                    rt.FillRoundedRectangle(&rounded(edge, radius), &self.brush(color(0.0, 0.0, 0.0, core * a))?);
-                    for (k, alpha) in COVER_SHADOW.iter().enumerate().rev() {
-                        rt.DrawRoundedRectangle(&rounded(edge, radius), &self.brush(color(0.0, 0.0, 0.0, alpha * a))?, 2.0 * COVER_SHADOW_STEP * (k as f32 + 1.0) * s, None);
-                    }
+                if let (true, Some(shadow)) = (box_.right - box_.left > 40.0 * s, &cover_shadow) {
+                    let (pad, drop) = (COVER_SHADOW_PAD * s, COVER_SHADOW_DROP * s);
+                    let area = rect(box_.left - pad, box_.top + drop - pad, box_.right + pad, box_.bottom + drop + pad);
+                    rt.DrawBitmap(shadow, Some(&area), COVER_SHADOW_ALPHA * a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                 }
                 match &cover {
                     Some((big, small)) => {
@@ -2220,8 +2249,8 @@ mod tests {
 
     #[test]
     fn cover_shadow_ends_above_the_page_clip() {
-        // The widest stroke reaches STEP * layers past the dropped edge; pages are cut at DOTS_Y - 3.
-        let bottom = COVER_TOP + COVER + COVER_SHADOW_DROP + COVER_SHADOW_STEP * COVER_SHADOW.len() as f32;
+        // The shadow reaches PAD past the dropped cover; pages are cut at DOTS_Y - 3.
+        let bottom = COVER_TOP + COVER + COVER_SHADOW_DROP + COVER_SHADOW_PAD;
         assert!(bottom <= DOTS_Y - 3.0, "shadow ends at {bottom}, clipped at {}", DOTS_Y - 3.0);
     }
 
