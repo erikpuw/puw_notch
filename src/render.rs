@@ -2736,10 +2736,10 @@ mod tests {
             let now = stamp(20261029, 2, 5);
             let item = |text: &str, done: bool, at: Option<u64>| Item { text: text.into(), done: done.then_some(20261029), at, told_soon: false, told_now: false };
             let tasks = vec![
-                item("Mua sữa và trứng", false, None),
-                item("Họp nhóm dự án", false, Some(stamp(20261029, 21, 0))),
-                item("Uống thuốc", false, Some(stamp(20261029, 2, 15))),
                 item("Nộp báo cáo tuần", false, Some(stamp(20261028, 9, 0))),
+                item("Uống thuốc", false, Some(stamp(20261029, 2, 15))),
+                item("Họp nhóm dự án", false, Some(stamp(20261029, 21, 0))),
+                item("Mua sữa và trứng", false, None),
                 item("Khám răng", false, Some(stamp(20261030, 9, 0))),
                 item("Gọi cho khách hàng", true, None),
             ];
