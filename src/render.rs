@@ -2669,6 +2669,53 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes target/todo-preview.bmp: the Tasks page empty, with tasks of every kind, and while typing"]
+    fn todo_preview() {
+        use crate::todo::{stamp, Item};
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (530i32, 210i32);
+            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Todo preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let now = stamp(20261029, 2, 5);
+            let item = |text: &str, done: bool, at: Option<u64>| Item { text: text.into(), done: done.then_some(20261029), at, told_soon: false, told_now: false };
+            let tasks = vec![
+                item("Mua sữa và trứng", false, None),
+                item("Họp nhóm dự án", false, Some(stamp(20261029, 21, 0))),
+                item("Nộp báo cáo tuần", false, Some(stamp(20261028, 9, 0))),
+                item("Khám răng", false, Some(stamp(20261030, 9, 0))),
+                item("Gọi cho khách hàng", true, None),
+            ];
+            // (tasks, counts, typed text)
+            let frames: Vec<(Vec<Item>, (usize, usize), &str)> = vec![(vec![], (0, 0), ""), (tasks.clone(), (3, 1), ""), (tasks, (3, 1), "Họp 20:00 mai")];
+            let mut renderer = Renderer::new().unwrap();
+            let mut sheet = Vec::new();
+            for (items, counts, typed) in &frames {
+                let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
+                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
+                    leaving: None, todos: items, notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
+                    list: ListView { counts: *counts, remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0 },
+                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                for _ in 0..3 {
+                    renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                }
+                let mut dib = DIBSECTION::default();
+                assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
+                sheet.extend_from_slice(std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize));
+            }
+            let sh = h * frames.len() as i32;
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + sheet.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-sh).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/todo-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
     #[ignore = "writes target/weather-preview.bmp: the pill (plain and with music) and the Weather page in each sky"]
     fn weather_preview() {
         use weather::{Now, Place, Sky, State};
