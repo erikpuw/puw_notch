@@ -149,6 +149,9 @@ struct App {
     wx: weather::State,
     /// Text in the Weather page's city box, apart from the tasks' draft.
     city_draft: String,
+    /// A city typed in the box is being looked up: the box keeps its text until the answer says it
+    /// was found (a typo can then be mended instead of retyped).
+    awaiting_city: bool,
     /// When the open panel or its page appeared (the Weather page's icon moves from then).
     page_since: Instant,
     /// °C or °F, and whether it was chosen (else it follows the region setting and is not saved).
@@ -619,6 +622,13 @@ impl App {
                 self.todo.remove(i);
                 self.clamp_scroll();
             }
+            // The x beside the city: no city, no weather (the pill goes back to clock and battery).
+            Button::CityOff => {
+                self.weather.clear();
+                self.wx = self.weather.snapshot();
+                self.awaiting_city = false;
+                system::save_settings(self.settings());
+            }
             Button::Unit(unit) => {
                 (self.unit, self.unit_chosen) = (unit, true);
                 system::save_settings(self.settings());
@@ -651,14 +661,16 @@ impl App {
         if self.page == Page::Weather { &mut self.city_draft } else { &mut self.draft }
     }
 
-    /// Enter in the box: on the Weather page look the city up (the keyboard goes back at once);
-    /// elsewhere save the edited task, or add a new one, and stay in the box for the next task.
+    /// Enter in the box: on the Weather page look the city up, keeping the text and the keyboard
+    /// until it is found (see `awaiting_city`); elsewhere save the edited task, or add a new one,
+    /// and stay in the box for the next task.
     fn submit(&mut self) {
         if self.page == Page::Weather {
-            let city = std::mem::take(&mut self.city_draft);
-            self.weather.find(&city);
-            self.wx = self.weather.snapshot();
-            self.end_edit();
+            if !self.city_draft.trim().is_empty() {
+                self.weather.find(&self.city_draft);
+                self.wx = self.weather.snapshot();
+                self.awaiting_city = true;
+            }
             return;
         }
         let now = system::now_stamp();
@@ -997,6 +1009,14 @@ impl App {
                 if self.wx.place != before {
                     system::save_settings(self.settings());
                 }
+                // The lookup is over: found, the box is done; not found, it keeps the typo to mend.
+                if self.awaiting_city && !self.wx.looking {
+                    self.awaiting_city = false;
+                    if self.wx.not_found.is_none() {
+                        self.city_draft.clear();
+                        self.end_edit();
+                    }
+                }
                 if !self.animating {
                     self.redraw();
                 }
@@ -1273,6 +1293,7 @@ fn run() -> windows::core::Result<()> {
             weather: weather::Weather::start(hwnd, settings.place.clone()),
             wx: weather::State { place: settings.place.clone(), ..weather::State::default() },
             city_draft: String::new(),
+            awaiting_city: false,
             page_since: Instant::now(),
             unit: settings.unit.unwrap_or_else(weather::Unit::automatic),
             unit_chosen: settings.unit.is_some(),

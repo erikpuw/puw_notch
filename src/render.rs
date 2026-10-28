@@ -157,6 +157,8 @@ pub enum Button {
     NoteOpen(usize),
     /// Show the temperature in this unit (Weather page).
     Unit(weather::Unit),
+    /// Switch the weather off (the x beside the city).
+    CityOff,
     Gear(Card),
     Drink,
     /// Water reminder later (10 min).
@@ -214,14 +216,18 @@ const INPUT_Y: f32 = 36.0;
 const INPUT_H: f32 = 26.0;
 const COUNT_Y: f32 = 66.0;
 const ROW_Y: f32 = 84.0;
-const ROW_H: f32 = 22.0;
+/// A task row is also its tick, edit and delete buttons: 26 px high, above macOS' 20 px minimum.
+const ROW_H: f32 = 26.0;
 pub const LIST_ROWS: usize = 3;
 /// Weather page: the two unit chips (°C, °F) after the temperature: left edge from the content's
 /// left, top, width of each and height.
 const UNIT_X: f32 = 134.0;
-const UNIT_Y: f32 = 99.0;
-const UNIT_W: f32 = 30.0;
-const UNIT_H: f32 = 18.0;
+const UNIT_Y: f32 = 97.0;
+const UNIT_W: f32 = 32.0;
+const UNIT_H: f32 = 22.0;
+/// Width of the text at the right of the city line ("Open-Meteo · 14:30"), and so where the
+/// button that switches the weather off sits: just before it.
+const CREDIT_W: f32 = 126.0;
 /// Notifications page: rows of two lines.
 const NOTE_Y: f32 = 36.0;
 const NOTE_H: f32 = 42.0;
@@ -292,21 +298,23 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
             out.push((Button::Gear(Card::Tasks), r(cl + cw - 20.0, COUNT_Y - 2.0, 20.0, 18.0)));
             if settings == Some(Card::Tasks) {
-                out.push((Button::RemindStep(-1), r(cl + cw - 108.0, ROW_Y + 2.0, 18.0, 18.0)));
-                out.push((Button::RemindStep(1), r(cl + cw - 22.0, ROW_Y + 2.0, 18.0, 18.0)));
+                out.push((Button::RemindStep(-1), r(cl + cw - 112.0, ROW_Y, 22.0, 22.0)));
+                out.push((Button::RemindStep(1), r(cl + cw - 24.0, ROW_Y, 22.0, 22.0)));
             } else {
                 for (row, i) in (scroll..rows.min(scroll + LIST_ROWS)).enumerate() {
                     let y = ROW_Y + row as f32 * ROW_H;
-                    out.push((Button::ListToggle(i), r(cl, y, cw - 48.0, ROW_H)));
-                    out.push((Button::ListEdit(i), r(cl + cw - 46.0, y, 22.0, ROW_H)));
-                    out.push((Button::ListDelete(i), r(cl + cw - 22.0, y, 22.0, ROW_H)));
+                    out.push((Button::ListToggle(i), r(cl, y, cw - 56.0, ROW_H)));
+                    out.push((Button::ListEdit(i), r(cl + cw - 54.0, y, 26.0, ROW_H)));
+                    out.push((Button::ListDelete(i), r(cl + cw - 26.0, y, 26.0, ROW_H)));
                 }
             }
         }
         Page::Weather => {
             out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
-            // The °C | °F choice beside the temperature, once there is one (`rows` = 1).
+            // The x that switches the weather off, and the °C | °F choice beside the temperature,
+            // once there is one (`rows` = 1).
             if rows > 0 {
+                out.push((Button::CityOff, r(cl + cw - CREDIT_W - 28.0, 66.0, 24.0, 24.0)));
                 for (k, unit) in [weather::Unit::C, weather::Unit::F].into_iter().enumerate() {
                     out.push((Button::Unit(unit), r(cl + UNIT_X + k as f32 * UNIT_W, UNIT_Y, UNIT_W, UNIT_H)));
                 }
@@ -1348,6 +1356,12 @@ impl Renderer {
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();
+        // A sun for the Weather page while there is no city or conditions yet (muted, like Tasks' ring).
+        let weather_empty = (|| {
+            let ic = icons::weather(weather::Sky::Clear, true);
+            let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
+            Some((ic, geoms))
+        })();
         // Height of each wrapped lyric line, while the panel is wider than the player.
         let lyric_heights: Vec<f32> = match v.music {
             Some(t) if v.page == Page::Music && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
@@ -1810,17 +1824,16 @@ impl Renderer {
                         }
                         Ok(())
                     };
-                    // Edit / delete on a hovered list row (or the row being edited).
-                    let row_tools = |i: usize, show: bool| -> Result<()> {
-                        if !show {
-                            return Ok(());
-                        }
+                    // Edit / delete on every list row, so they are there without a pointer to hover
+                    // with (touch, pen); lit while the row is hovered or being edited.
+                    let row_tools = |i: usize, lit: bool| -> Result<()> {
+                        let rest = if lit { 0.65 } else { 0.4 };
                         let edit_hot = hovered == Some(Button::ListEdit(i)) || (current && lv.edit_item == Some(i));
                         if let Some(eb) = btns.iter().filter(|(b, _)| *b == Button::ListEdit(i)).map(|(_, r)| *r).last() {
-                            text(ICON_EDIT, F_SMALL_ICON, eb, center, if edit_hot { solid(YELLOW, a) } else { grey(0.6, a) })?;
+                            text(ICON_EDIT, F_SMALL_ICON, eb, center, if edit_hot { solid(YELLOW, a) } else { grey(rest, a) })?;
                         }
                         if let Some(db) = rect_of(Button::ListDelete(i)) {
-                            let c = if hovered == Some(Button::ListDelete(i)) { color(1.0, 0.45, 0.4, a) } else { grey(0.6, a) };
+                            let c = if hovered == Some(Button::ListDelete(i)) { color(1.0, 0.45, 0.4, a) } else { grey(rest, a) };
                             text(ICON_CLOSE, F_SMALL_ICON, db, center, c)?;
                         }
                         Ok(())
@@ -1987,7 +2000,7 @@ impl Renderer {
                                 text(&value, F_BODY, rect(cr - 88.0 * s, y, cr - 26.0 * s, y + 22.0 * s), center, grey(1.0, a))?;
                                 for (b, icon) in [(Button::RemindStep(-1), ICON_MINUS), (Button::RemindStep(1), ICON_PLUS)] {
                                     if let Some(sb) = rect_of(b) {
-                                        rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: (sb.left + sb.right) / 2.0, Y: (sb.top + sb.bottom) / 2.0 }, radiusX: 9.0 * s, radiusY: 9.0 * s },
+                                        rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: (sb.left + sb.right) / 2.0, Y: (sb.top + sb.bottom) / 2.0 }, radiusX: 11.0 * s, radiusY: 11.0 * s },
                                             &self.brush(grey(if hovered == Some(b) { 0.3 } else { 0.2 }, a))?);
                                         text(icon, F_TINY_ICON, sb, center, grey(1.0, a))?;
                                     }
@@ -2025,19 +2038,24 @@ impl Renderer {
                                     let mut text_right = br.right;
                                     if let Some(at) = item.at {
                                         let (day, h, m) = ((at / 10_000) as u32, at / 100 % 100, at % 100);
-                                        let (label, lw) = if day == today { (format!("{h:02}:{m:02}"), 40.0) }
-                                            else if day == todo::next_day(today) { (format!("{} {h:02}:{m:02}", tr("Mai", "Tmrw")), 64.0) }
-                                            else { (format!("{:02}/{:02} {h:02}:{m:02}", day % 100, day / 100 % 100), 74.0) };
-                                        text(&label, F_LABEL, rect(br.right - lw * s, br.top, br.right - 2.0 * s, br.bottom), trail, time_color(at, done))?;
-                                        text_right = br.right - (lw + 6.0) * s;
+                                        let when = if day == today { format!("{h:02}:{m:02}") }
+                                            else if day == todo::next_day(today) { format!("{} {h:02}:{m:02}", tr("Mai", "Tmrw")) }
+                                            else { format!("{:02}/{:02} {h:02}:{m:02}", day % 100, day / 100 % 100) };
+                                        // Urgency in words as well as colour: past due, or inside the early reminder.
+                                        let left = minutes(at) - minutes(lv.now);
+                                        let flag = if done { "" } else if left <= 0 { tr("Trễ", "Late") } else if left <= lv.remind_before.max(15) as i64 { tr("Sắp", "Soon") } else { "" };
+                                        let label = if flag.is_empty() { when } else { format!("{flag} {when}") };
+                                        let lw = width(&label, F_LABEL) + 4.0 * s;
+                                        text(&label, F_LABEL, rect(br.right - lw, br.top, br.right - 2.0 * s, br.bottom), trail, time_color(at, done))?;
+                                        text_right = br.right - lw - 6.0 * s;
                                     }
                                     // Text, struck through when done.
                                     let tb = rect(br.left + d + 10.0 * s, br.top, text_right, br.bottom);
-                                    text(&item.text, F_BODY, tb, lead, grey(if done { 0.45 } else { 1.0 }, a))?;
+                                    text(&item.text, F_BODY, tb, lead, grey(if done { 0.5 } else { 1.0 }, a))?;
                                     if done {
                                         let tw = width(&item.text, F_BODY).min(tb.right - tb.left);
                                         let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
-                                        rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &self.brush(grey(0.45, a))?);
+                                        rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &self.brush(grey(0.5, a))?);
                                     }
                                     row_tools(i, hot)?;
                                 }
@@ -2089,11 +2107,25 @@ impl Renderer {
                             let wx = v.weather;
                             match (&wx.place, wx.now, &weather_line) {
                                 (Some(place), Some(n), Some((ic, geoms))) => {
-                                    // City and the data's credit (Open-Meteo asks for it, CC BY 4.0).
-                                    text(&place.name, F_TITLE, rect(cl, 68.0 * s, cr - 96.0 * s, 88.0 * s), lead, grey(1.0, a))?;
-                                    text("Open-Meteo", F_LABEL, rect(cr - 94.0 * s, 68.0 * s, cr, 88.0 * s), trail, grey(0.4, a))?;
+                                    // Conditions older than STALE_MIN are dimmed and say so in words.
+                                    let stale = wx.is_stale(lv.now);
+                                    let fade = if stale { 0.55 } else { 1.0 };
+                                    // City on the left; on the right where the data comes from (Open-Meteo asks
+                                    // for the credit, CC BY 4.0) and when it was fetched, "old" when stale; the
+                                    // x before it switches the weather off.
+                                    text(&place.name, F_TITLE, rect(cl, 68.0 * s, cr - (CREDIT_W + 32.0) * s, 88.0 * s), lead, grey(1.0, a))?;
+                                    let fetched = wx.updated.map_or(String::new(), |u| format!(" · {}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100));
+                                    let credit = if stale { solid(ORANGE, a) } else { grey(0.5, a) };
+                                    text(&format!("Open-Meteo{fetched}"), F_LABEL, rect(cr - CREDIT_W * s, 68.0 * s, cr, 88.0 * s), trail, credit)?;
+                                    if let Some(ob) = rect_of(Button::CityOff) {
+                                        let hot = hovered == Some(Button::CityOff);
+                                        if hot {
+                                            rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: (ob.left + ob.right) / 2.0, Y: (ob.top + ob.bottom) / 2.0 }, radiusX: 11.0 * s, radiusY: 11.0 * s }, &self.brush(grey(0.18, a))?);
+                                        }
+                                        text(ICON_CLOSE, F_SMALL_ICON, ob, center, if hot { color(1.0, 0.45, 0.4, a) } else { grey(0.55, a) })?;
+                                    }
                                     // The icon, then the temperature and the sky in words.
-                                    draw_wx_icon(ic, geoms, cl + 4.0 * s, 92.0 * s, 56.0 * s, Some(weather::tints(n.sky, n.day)), a, if current { v.page_age } else { 9.0 })?;
+                                    draw_wx_icon(ic, geoms, cl + 4.0 * s, 92.0 * s, 56.0 * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
                                     // The big temperature, shrunk to fit before the unit chips when it is long
                                     // ("−128°"), turning about its left end.
                                     let temp = format!("{}°", v.unit.number(n.temp));
@@ -2101,14 +2133,18 @@ impl Renderer {
                                     let k = (UNIT_X - 72.0 - 4.0) * s / width(&temp, F_BIG);
                                     let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                                     rt.SetTransform(&(translate(-tx, -ty) * scaling(k.min(1.0)) * translate(tx, ty) * base));
-                                    text(&temp, F_BIG, rect(tx, 92.0 * s, tx + width(&temp, F_BIG) + 6.0 * s, 124.0 * s), lead, grey(1.0, a))?;
+                                    text(&temp, F_BIG, rect(tx, 92.0 * s, tx + width(&temp, F_BIG) + 6.0 * s, 124.0 * s), lead, grey(1.0, a * fade))?;
                                     rt.SetTransform(&base);
-                                    // The unit to show it in: the chosen one lit, the other lights on hover.
+                                    // The unit to show it in: one capsule holding both, the chosen one lit, the
+                                    // other lighting on hover.
+                                    if let (Some(first), Some(last)) = (rect_of(Button::Unit(weather::Unit::C)), rect_of(Button::Unit(weather::Unit::F))) {
+                                        rt.FillRoundedRectangle(&rounded(rect(first.left, first.top, last.right, last.bottom), UNIT_H / 2.0 * s), &self.brush(grey(0.1, a))?);
+                                    }
                                     for unit in [weather::Unit::C, weather::Unit::F] {
                                         let Some(chip) = rect_of(Button::Unit(unit)) else { continue };
                                         let on = v.unit == unit;
                                         if on || hovered == Some(Button::Unit(unit)) {
-                                            rt.FillRoundedRectangle(&rounded(chip, 9.0 * s), &self.brush(grey(1.0, a * if on { 0.2 } else { 0.08 }))?);
+                                            rt.FillRoundedRectangle(&rounded(chip, UNIT_H / 2.0 * s), &self.brush(grey(1.0, a * if on { 0.2 } else { 0.08 }))?);
                                         }
                                         text(unit.symbol(), F_LABEL, chip, center, grey(if on { 1.0 } else { 0.55 }, a))?;
                                     }
@@ -2135,8 +2171,13 @@ impl Renderer {
                                     } else {
                                         (tr("Nhập tên thành phố rồi nhấn Enter", "Type a city and press Enter").to_string(), tr("Có dấu hay không dấu đều được", "With or without accents"))
                                     };
-                                    text(&first, F_BODY, rect(cl, 92.0 * s, cr, 114.0 * s), center, grey(0.75, a))?;
-                                    text(second, F_LABEL, rect(cl, 114.0 * s, cr, 134.0 * s), center, grey(0.5, a))?;
+                                    // A muted sun above the words, as the Tasks page has its ring.
+                                    if let Some((ic, geoms)) = &weather_empty {
+                                        let mid = (cl + cr) / 2.0;
+                                        draw_wx_icon(ic, geoms, mid - 16.0 * s, 72.0 * s, 32.0 * s, Some(((0.4, 0.4, 0.4), (0.4, 0.4, 0.4))), a, 9.0)?;
+                                    }
+                                    text(&first, F_BODY, rect(cl, 110.0 * s, cr, 130.0 * s), center, grey(0.75, a))?;
+                                    text(second, F_LABEL, rect(cl, 130.0 * s, cr, 150.0 * s), center, grey(0.5, a))?;
                                 }
                             }
                         }
@@ -2682,6 +2723,7 @@ mod tests {
             let tasks = vec![
                 item("Mua sữa và trứng", false, None),
                 item("Họp nhóm dự án", false, Some(stamp(20261029, 21, 0))),
+                item("Uống thuốc", false, Some(stamp(20261029, 2, 15))),
                 item("Nộp báo cáo tuần", false, Some(stamp(20261028, 9, 0))),
                 item("Khám răng", false, Some(stamp(20261030, 9, 0))),
                 item("Gọi cho khách hàng", true, None),
@@ -2727,13 +2769,15 @@ mod tests {
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true, ..Default::default() };
             let place = Some(Place { name: "Đà Nẵng".into(), lat: 16.0, lon: 108.0 });
-            let state = |sky, day, temp: f32| State { place: place.clone(), now: Some(Now { temp, feels: temp + 3.0, humidity: 82.0, wind: 11.0, sky, day }), ..State::default() };
+            let state = |sky, day, temp: f32| State { place: place.clone(), now: Some(Now { temp, feels: temp + 3.0, humidity: 82.0, wind: 11.0, sky, day }), updated: Some(202610290140), ..State::default() };
             let mut renderer = Renderer::new().unwrap();
             let mut sheet = Vec::new();
             // (mode, music?, page, state, typed text)
             let frames: Vec<(Mode, bool, Page, State, &str, weather::Unit)> = vec![
                 (Mode::Collapsed, false, Page::Music, state(Sky::Clear, true, 31.0), "", weather::Unit::F),
                 (Mode::Expanded, false, Page::Weather, state(Sky::Cloudy, true, 28.0), "", weather::Unit::F),
+                // Conditions fetched over 90 minutes ago: dimmed and marked "old".
+                (Mode::Expanded, false, Page::Weather, State { updated: Some(202610290020), ..state(Sky::Rain, true, 26.0) }, "", weather::Unit::C),
                 (Mode::Collapsed, false, Page::Music, state(Sky::PartlyCloudy, true, 29.0), "", weather::Unit::C),
                 (Mode::Collapsed, true, Page::Music, state(Sky::Rain, true, 26.0), "", weather::Unit::C),
                 (Mode::Expanded, false, Page::Weather, state(Sky::Storm, true, 27.0), "", weather::Unit::C),
@@ -2762,7 +2806,7 @@ mod tests {
                 let view = View { mode: *mode, size: target(*mode, *music), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
                     banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: *page,
                     leaving: None, todos: &[], notes: &[], weather: st, page_age: 9.0, unit: *unit,
-                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0 },
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();

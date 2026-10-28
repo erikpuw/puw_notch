@@ -110,14 +110,26 @@ pub struct Now {
     pub day: bool,
 }
 
+/// Conditions older than this (minutes) are shown as old: a failed fetch keeps the last ones.
+pub const STALE_MIN: i64 = 90;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     pub place: Option<Place>,
     pub now: Option<Now>,
+    /// When `now` was fetched, local yyyymmddHHMM.
+    pub updated: Option<u64>,
     /// A lookup is running.
     pub looking: bool,
     /// The last city typed that the geocoder did not know.
     pub not_found: Option<String>,
+}
+
+impl State {
+    /// The conditions are older than STALE_MIN at `now` (local yyyymmddHHMM).
+    pub fn is_stale(&self, now: u64) -> bool {
+        self.updated.is_some_and(|u| crate::todo::minutes(now) - crate::todo::minutes(u) > STALE_MIN)
+    }
 }
 
 enum Job {
@@ -149,7 +161,7 @@ impl Weather {
                         if let Ok(mut s) = shared.lock() {
                             s.looking = false;
                             match found.clone() {
-                                Some(p) => (s.place, s.now, s.not_found) = (Some(p), None, None),
+                                Some(p) => (s.place, s.now, s.updated, s.not_found) = (Some(p), None, None, None),
                                 None => s.not_found = Some(city),
                             }
                         }
@@ -168,7 +180,10 @@ impl Weather {
                                 Some(now) => {
                                     last = Some(Instant::now());
                                     if let Ok(mut s) = shared.lock() {
-                                        s.now = Some(now);
+                                        // The city may have been switched or switched off while this was fetched.
+                                        if s.place.as_ref() == Some(&p) {
+                                            (s.now, s.updated) = (Some(now), Some(crate::system::now_stamp()));
+                                        }
                                     }
                                     notify();
                                 }
@@ -201,6 +216,13 @@ impl Weather {
             (s.looking, s.not_found) = (true, None);
         }
         let _ = self.jobs.send(Job::Find(city.to_string()));
+    }
+
+    /// Switch the weather off: no city, nothing shown.
+    pub fn clear(&self) {
+        if let Ok(mut s) = self.state.lock() {
+            *s = State::default();
+        }
     }
 
     /// Fetch again now (network back, PC awake), unless it was just done.
@@ -479,6 +501,18 @@ mod tests {
             assert_eq!(Unit::from_tag(u.tag()), Some(u));
         }
         assert_eq!(Unit::from_tag("k"), None);
+    }
+
+    #[test]
+    fn old_conditions_are_stale_after_ninety_minutes() {
+        let at = |h: u32, m: u32| crate::todo::stamp(20261029, h, m);
+        let st = |updated| State { updated, ..State::default() };
+        assert!(!st(Some(at(1, 0))).is_stale(at(2, 30)), "exactly 90 minutes is still fresh");
+        assert!(st(Some(at(1, 0))).is_stale(at(2, 31)));
+        assert!(!st(None).is_stale(at(23, 0)), "never fetched: not 'old', just absent");
+        // Across midnight.
+        assert!(st(Some(crate::todo::stamp(20261028, 23, 0))).is_stale(at(1, 0)));
+        assert!(!st(Some(crate::todo::stamp(20261028, 23, 30))).is_stale(at(0, 40)));
     }
 
     #[test]
