@@ -81,7 +81,9 @@ pub fn buried(own: HWND) -> bool {
     }
 }
 
-const SHELL_CLASSES: [&str; 4] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
+/// Shell windows that are never "an app in the way". `XamlWindow` is the screen-sized host of the
+/// Start menu's power / account flyouts: taken for a fullscreen app it hid the notch.
+const SHELL_CLASSES: [&str; 5] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "XamlWindow"];
 
 pub fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 64];
