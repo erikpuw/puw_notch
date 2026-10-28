@@ -6,18 +6,19 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không We
 
 ## Tính năng
 
-- **Notch**: giờ, vòng pin, sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi viên thuốc (ngắn hay dài theo nhạc) đè lên tab hoặc chữ bên dưới, hiện lại khi hết, ẩn khi chơi game / xem phim toàn màn hình.
-- **4 trang** (chuyển bằng ‹ ›):
-  - **Nhạc**: ảnh bìa, lời bài hát (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời bài hát giãn bảng ngang ra để xem lời chạy theo bài (dòng đang hát sáng ở giữa, dòng dài tự xuống dòng), nền trang Nhạc ngả dần sang màu ảnh bìa ở phía dưới, trên đó một đường aurora mảnh phát sáng theo 2 màu nổi nhất của ảnh bìa lượn chậm khi đang phát (lõi sắc nét, quầng vẽ nhỏ rồi phóng to để làm mờ, nhẹ). Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
-  - **Việc**: một danh sách cho cả việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00" (chỉ giờ = hôm nay) hay "Khám răng 28/10 14:30", "Gọi mẹ mai 9h" (có ngày = theo lịch). Tick / sửa / xóa; quá giờ chưa xong thì giữ lại, tô đỏ kèm chữ "Trễ" (sắp tới hạn nhắc thì cam kèm "Sắp"); nút sửa / xóa luôn hiện, sáng lên khi rê chuột. ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
-  - **Thông báo**: đọc lại ~30 thông báo Windows gần nhất (mới nhất trên cùng, lăn chuột để cuộn), kèm icon của từng app. Bấm vào một dòng để mở app đã gửi (hoặc link / ảnh của thông báo), như bấm trong trung tâm thông báo của Windows.
+- **Notch**: giờ, vòng pin, sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi đè lên tab hoặc chữ bên dưới, ẩn khi chơi game / xem phim toàn màn hình.
+- **5 trang** (chuyển bằng ‹ ›):
+  - **Nhạc**: ảnh bìa, lời bài hát đồng bộ (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời giãn bảng ngang để xem lời chạy theo bài; nền và đường aurora theo màu ảnh bìa. Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
+  - **Việc**: một danh sách cho việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Tick / sửa / xóa; quá giờ tô đỏ kèm "Trễ". ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
+  - **Thông báo**: ~30 thông báo Windows gần nhất kèm icon app; bấm một dòng để mở app đã gửi.
   - **Sức khỏe**: nhắc uống nước và đứng dậy, chỉnh được giờ và mức.
-- **Banner**: thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth, mạng, pin, tiết kiệm pin, thiết bị USB cắm và rút (kèm tên thiết bị). Icon dạng nét, mỗi icon chuyển động riêng. Chụp màn hình bằng Snipping Tool (Win+Shift+S) thì banner có ảnh thu nhỏ, bấm vào để mở ảnh vừa chụp. Bấm vào banner thông báo thì mở app đã gửi (hoặc link của thông báo, ví dụ Windows Security); mở app chứ chưa nhảy tới đúng tin nhắn.
-- **Robot khi để yên**: không đụng máy 30 giây thì khuôn mặt LED (mắt + miệng) thay đồng hồ, nhìn quanh phía dưới, chớp mắt và đổi biểu cảm (tò mò, nháy mắt, phấn khích; hay cười khi đang sạc; buồn khi pin yếu); 5 phút thì ngủ, chữ z pixel bay lên; làm việc lại thì cười toe nhìn theo chuột, về giữa rồi trả về đồng hồ và pin. Bật / tắt ở tray.
-- **Ẩn bảng âm lượng của Windows** (tray, mặc định tắt): app tự xử lý phím tăng / giảm / tắt tiếng nên chỉ notch hiện, bảng OSD của Windows không hiện. Phím độ sáng và mic của laptop thường đi qua firmware nên chưa chặn được.
-- **Thời tiết** (trang thứ 5 của bảng, mở từ viên thuốc): gõ tên thành phố một lần, có dấu hay không dấu đều được ("Đà Nẵng", "Da Nang", "TP. HCM", "Sài Gòn"); app bỏ dấu rồi tra tọa độ và nhớ trong `settings.txt`. Viên thuốc hiện icon và nhiệt độ ("☁ 28°") cạnh đồng hồ, cả lúc thường lẫn lúc có nhạc; trang Thời tiết có icon lớn (nắng, trăng, ít mây, nhiều mây, sương mù, mưa, tuyết, giông sấm chớp), tình trạng bằng chữ, nhiệt độ cảm nhận, độ ẩm, gió. Đơn vị nhiệt độ °C hoặc °F: mặc định theo cài đặt vùng của Windows (hệ đo lường Mỹ thì °F), bấm nút °C | °F cạnh nhiệt độ để đổi, app nhớ lựa chọn. Góc phải hiện giờ lấy dữ liệu; quá 90 phút chưa làm mới thì chữ chuyển cam "cũ" và số nhạt đi; nút × tắt thời tiết. Gõ sai tên thành phố thì chữ vẫn còn để sửa. Cập nhật 30 phút một lần ở luồng nền (và ngay khi có mạng lại hoặc máy thức dậy), thử lại sau 1 phút nếu lỗi. Dữ liệu từ [Open-Meteo](https://open-meteo.com) (CC BY 4.0, miễn phí, không cần khóa), icon thời tiết từ [Lucide](https://lucide.dev) (ISC), icon banner từ [Tabler Icons](https://tabler.io/icons) (MIT).
-- **Tray**: Notch tối giản, Robot khi để yên, Ẩn bảng âm lượng của Windows, Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu PUW Notch (phiên bản, mô tả, liên kết GitHub), Thoát.
+  - **Thời tiết**: gõ tên thành phố một lần (có dấu hay không đều được), viên thuốc hiện icon + nhiệt độ; trang có icon lớn, cảm nhận, độ ẩm, gió. °C | °F theo vùng Windows, bấm để đổi. Làm mới 30 phút ở luồng nền, quá 90 phút chuyển "cũ"; nút × tắt thời tiết.
+- **Banner**: thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth, mạng, pin, tiết kiệm pin, USB cắm / rút. Chụp màn hình (Win+Shift+S) thì banner có ảnh thu nhỏ, bấm để mở ảnh.
+- **Robot khi để yên**: 30 giây không đụng máy thì mặt LED thay đồng hồ, đổi biểu cảm; 5 phút thì ngủ; quay lại thì cười chào rồi trả về đồng hồ. Bật / tắt ở tray.
+- **Ẩn bảng âm lượng của Windows** (tray, mặc định tắt): app tự xử lý phím âm lượng nên chỉ notch hiện. Phím độ sáng và mic của laptop thường đi qua firmware nên chưa chặn được.
+- **Tray**: Notch tối giản, Robot, Ẩn bảng âm lượng, Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát.
 
+Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY 4.0), icon thời tiết [Lucide](https://lucide.dev) (ISC), icon banner [Tabler Icons](https://tabler.io/icons) (MIT).
 ## Ảnh chụp
 
 | | |
