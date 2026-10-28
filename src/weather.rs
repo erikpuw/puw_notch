@@ -35,6 +35,54 @@ pub struct Place {
     pub lon: f64,
 }
 
+/// How temperatures are shown. The data is always in °C.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Unit {
+    C,
+    F,
+}
+
+impl Unit {
+    /// What the PC's region setting says: Fahrenheit where Windows counts in US units (the US and
+    /// a few others), Celsius everywhere else.
+    pub fn automatic() -> Unit {
+        if crate::system::us_measurement() { Unit::F } else { Unit::C }
+    }
+
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Unit::C => "°C",
+            Unit::F => "°F",
+        }
+    }
+
+    /// `celsius` as a whole number in this unit ("82"). Rounded before it is written, so -0.4 is
+    /// "0", never "-0".
+    pub fn number(self, celsius: f32) -> String {
+        let v = match self {
+            Unit::C => celsius,
+            Unit::F => celsius * 1.8 + 32.0,
+        };
+        (v.round() as i32).to_string()
+    }
+
+    /// The settings file's word for it.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Unit::C => "c",
+            Unit::F => "f",
+        }
+    }
+
+    pub fn from_tag(tag: &str) -> Option<Unit> {
+        match tag.trim() {
+            "c" => Some(Unit::C),
+            "f" => Some(Unit::F),
+            _ => None,
+        }
+    }
+}
+
 /// What the sky is doing, from the WMO weather code.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Sky {
@@ -405,6 +453,24 @@ mod tests {
         for code in [95, 96, 99] {
             assert_eq!(sky(code), Sky::Storm, "{code}");
         }
+    }
+
+    #[test]
+    fn temperatures_in_both_units() {
+        assert_eq!(Unit::C.number(28.4), "28");
+        assert_eq!(Unit::C.number(28.5), "29");
+        assert_eq!(Unit::F.number(0.0), "32");
+        assert_eq!(Unit::F.number(100.0), "212");
+        assert_eq!(Unit::F.number(28.0), "82");
+        assert_eq!(Unit::F.number(-40.0), "-40", "the two scales meet at -40");
+        assert_eq!(Unit::C.number(-0.4), "0", "not -0");
+        assert_eq!(Unit::F.number(-17.8), "0", "-17.8 C is 0.04 F: not -0 either");
+        assert_eq!(Unit::C.number(-3.2), "-3");
+        assert_eq!((Unit::C.symbol(), Unit::F.symbol()), ("°C", "°F"));
+        for u in [Unit::C, Unit::F] {
+            assert_eq!(Unit::from_tag(u.tag()), Some(u));
+        }
+        assert_eq!(Unit::from_tag("k"), None);
     }
 
     #[test]

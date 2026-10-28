@@ -151,6 +151,9 @@ struct App {
     city_draft: String,
     /// When the open panel or its page appeared (the Weather page's icon moves from then).
     page_since: Instant,
+    /// °C or °F, and whether it was chosen (else it follows the region setting and is not saved).
+    unit: weather::Unit,
+    unit_chosen: bool,
 }
 
 /// Animation frame intervals.
@@ -219,6 +222,7 @@ impl App {
             health: HealthView { h: &self.health, now: todo::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
             weather: &self.wx,
             page_age: self.page_since.elapsed().as_secs_f32(),
+            unit: self.unit,
         };
         // An icon that just changed keeps frames coming until its morph has played.
         self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
@@ -259,7 +263,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), place: self.wx.place.clone() }
+        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit) }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -542,6 +546,7 @@ impl App {
         match self.page {
             Page::Todo => self.todo.items.len(),
             Page::Notify => self.notes.len(),
+            Page::Weather => usize::from(self.wx.now.is_some()),
             _ => 0,
         }
     }
@@ -613,6 +618,10 @@ impl App {
                 self.cancel_task_edit();
                 self.todo.remove(i);
                 self.clamp_scroll();
+            }
+            Button::Unit(unit) => {
+                (self.unit, self.unit_chosen) = (unit, true);
+                system::save_settings(self.settings());
             }
             Button::NoteOpen(i) => {
                 if let Some(target) = self.notes.get(i).and_then(|n| n.open.as_deref()) {
@@ -1265,6 +1274,8 @@ fn run() -> windows::core::Result<()> {
             wx: weather::State { place: settings.place.clone(), ..weather::State::default() },
             city_draft: String::new(),
             page_since: Instant::now(),
+            unit: settings.unit.unwrap_or_else(weather::Unit::automatic),
+            unit_chosen: settings.unit.is_some(),
         };
         app.refresh_audio();
         app.refresh_notes();

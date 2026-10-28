@@ -146,7 +146,18 @@ pub fn log(line: &str) {
     }
 }
 
-/// Tray choices and the weather's city, kept in settings.txt.
+/// The PC's region setting counts in US units (Control Panel > Region > measurement system, the
+/// registry's iMeasure = 1): the US and a few more, and where Fahrenheit is used.
+pub fn us_measurement() -> bool {
+    let mut value = [0u16; 8];
+    let mut bytes = std::mem::size_of_val(&value) as u32;
+    let r = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, w!("Control Panel\\International"), w!("iMeasure"), RRF_RT_REG_SZ, None, Some(value.as_mut_ptr().cast()), Some(&mut bytes))
+    };
+    r == ERROR_SUCCESS && value[0] == u16::from(b'1')
+}
+
+/// Tray choices and the weather's city and unit, kept in settings.txt.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     pub minimal: bool,
@@ -157,11 +168,13 @@ pub struct Settings {
     pub volume_keys: bool,
     /// The weather's city, looked up once (None: weather off).
     pub place: Option<Place>,
+    /// °C or °F, once chosen (None: follow the region setting).
+    pub unit: Option<crate::weather::Unit>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false, place: None }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, place: None, unit: None }
     }
 }
 
@@ -176,6 +189,8 @@ fn parse_settings(text: &str) -> Settings {
             other => {
                 if let Some(place) = other.strip_prefix("city=") {
                     s.place = crate::weather::parse_place(place);
+                } else if let Some(unit) = other.strip_prefix("unit=") {
+                    s.unit = crate::weather::Unit::from_tag(unit);
                 }
             }
         }
@@ -193,7 +208,8 @@ pub fn save_settings(s: Settings) {
             let _ = std::fs::create_dir_all(dir);
         }
         let city = s.place.as_ref().map_or(String::new(), |p| format!("city={}\n", crate::weather::place_line(p)));
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\n{city}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8));
+        let unit = s.unit.map_or(String::new(), |u| format!("unit={}\n", u.tag()));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\n{city}{unit}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8));
     }
 }
 
@@ -240,7 +256,11 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, place: None });
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, place: None, unit: None });
+        assert_eq!(parse_settings("unit=f\n").unit, Some(crate::weather::Unit::F));
+        assert_eq!(parse_settings("unit=c\n").unit, Some(crate::weather::Unit::C));
+        assert_eq!(parse_settings("unit=x\n").unit, None, "unknown: follow the region");
+        assert_eq!(parse_settings("minimal=0\n").unit, None, "old files: follow the region");
         let hue = crate::weather::Place { name: "Huế".into(), lat: 16.4619, lon: 107.59546 };
         assert_eq!(parse_settings("robot=1\ncity=16.46190,107.59546,Huế\n").place, Some(hue));
         assert_eq!(parse_settings("minimal=0\n"), Settings::default(), "old files: Vietnamese, idle robot on, volume keys left to Windows");
