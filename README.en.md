@@ -8,7 +8,7 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
 
 - **Notch**: clock, battery ring, music waves. Hover to open the panel. Shrinks to a line when the pill (short or long, depending on music) would cover tabs or text underneath, and comes back when it is clear, hides during fullscreen games and videos.
 - **4 pages** (switch with ‹ ›):
-  - **Music**: cover art, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, click to seek, a lyrics button widens the panel sideways to show scrolling lyrics (the line being sung lit in the middle, long lines wrap), the Music page fades into the cover's colour towards the bottom while playing. Works with any app using Windows media controls, plus iTunes and foobar2000.
+  - **Music**: cover art, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, click to seek, a lyrics button widens the panel sideways to show scrolling lyrics (the line being sung lit in the middle, long lines wrap), a soft aurora band in the cover's two strongest colours sways slowly along the bottom of the Music page while playing (drawn small and stretched for the blur, so it stays light). Works with any app using Windows media controls, plus iTunes and foobar2000.
   - **Tasks**: one list for tasks and appointments. Type "Buy milk", "Call 20:00" (time only = today) or "Dentist 28/10 14:30", "Call mom tomorrow 9h" (with a date = scheduled). Tick / edit / delete; overdue tasks stay, marked red. ⚙ picks an early reminder of 0–60 min, plus one on time.
   - **Notifications**: read back the ~30 latest Windows notifications (newest first, scroll with the wheel), each with its app's icon. Click a row to open the app that sent it (or the notification's link / picture), as in Windows' notification centre.
   - **Health**: water and stand-up reminders with adjustable times and amounts.
@@ -21,7 +21,7 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
 
 | | |
 |---|---|
-| ![Music](assets/screenshots/page-music.png)<br>**Music**: cover, title, lyrics, background fading into the cover's colour | ![Music, nothing playing](assets/screenshots/page-music-empty.png)<br>**Music** with nothing playing |
+| ![Music](assets/screenshots/page-music.png)<br>**Music**: cover, title, lyrics, aurora in the cover's colours | ![Music, nothing playing](assets/screenshots/page-music-empty.png)<br>**Music** with nothing playing |
 | ![Tasks](assets/screenshots/page-tasks.png)<br>**Tasks**: tasks and appointments in one list | ![Notifications](assets/screenshots/page-notifications.png)<br>**Notifications**: each with its app's icon |
 | ![Health](assets/screenshots/page-health.png)<br>**Health**: water and stand-up reminders | ![Banner](assets/screenshots/banner.png)<br>Notification **banner** |
 

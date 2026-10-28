@@ -234,11 +234,13 @@ impl App {
         self.set_frame_interval(VSYNC);
     }
 
-    /// The equaliser in the resting pill keeps frames coming while music plays; so do the idle
-    /// robot's eyes while they show or fade.
+    /// The equaliser in the resting pill keeps frames coming while music plays, and so does the
+    /// aurora on the open Music page; so do the idle robot's eyes while they show or fade.
     fn bars_active(&self) -> bool {
-        let bars = self.track.as_ref().is_some_and(|t| t.playing) && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek);
-        !self.hidden && (bars || self.robot.visible())
+        let playing = self.track.as_ref().is_some_and(|t| t.playing);
+        let bars = playing && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek);
+        let aurora = playing && self.notch.mode == Mode::Expanded && self.page == Page::Music;
+        !self.hidden && (bars || aurora || self.robot.visible())
     }
 
     fn settings(&self) -> system::Settings {

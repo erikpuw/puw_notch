@@ -8,7 +8,7 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không We
 
 - **Notch**: giờ, vòng pin, sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi viên thuốc (ngắn hay dài theo nhạc) đè lên tab hoặc chữ bên dưới, hiện lại khi hết, ẩn khi chơi game / xem phim toàn màn hình.
 - **4 trang** (chuyển bằng ‹ ›):
-  - **Nhạc**: ảnh bìa, lời bài hát (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời bài hát giãn bảng ngang ra để xem lời chạy theo bài (dòng đang hát sáng ở giữa, dòng dài tự xuống dòng), nền trang Nhạc ngả dần sang màu ảnh bìa ở phía dưới khi đang phát. Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
+  - **Nhạc**: ảnh bìa, lời bài hát (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời bài hát giãn bảng ngang ra để xem lời chạy theo bài (dòng đang hát sáng ở giữa, dòng dài tự xuống dòng), dải aurora mềm theo 2 màu nổi nhất của ảnh bìa lượn chậm ở đáy trang Nhạc khi đang phát (vẽ nhỏ rồi phóng to để làm mờ, nhẹ). Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
   - **Việc**: một danh sách cho cả việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00" (chỉ giờ = hôm nay) hay "Khám răng 28/10 14:30", "Gọi mẹ mai 9h" (có ngày = theo lịch). Tick / sửa / xóa; quá giờ chưa xong thì giữ lại, tô đỏ. ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
   - **Thông báo**: đọc lại ~30 thông báo Windows gần nhất (mới nhất trên cùng, lăn chuột để cuộn), kèm icon của từng app. Bấm vào một dòng để mở app đã gửi (hoặc link / ảnh của thông báo), như bấm trong trung tâm thông báo của Windows.
   - **Sức khỏe**: nhắc uống nước và đứng dậy, chỉnh được giờ và mức.
@@ -21,7 +21,7 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không We
 
 | | |
 |---|---|
-| ![Nhạc](assets/screenshots/page-music.png)<br>**Nhạc**: ảnh bìa, tên bài, lời, nền ngả theo màu ảnh bìa | ![Nhạc khi không phát](assets/screenshots/page-music-empty.png)<br>**Nhạc** khi chưa phát gì |
+| ![Nhạc](assets/screenshots/page-music.png)<br>**Nhạc**: ảnh bìa, tên bài, lời, dải aurora theo màu ảnh bìa | ![Nhạc khi không phát](assets/screenshots/page-music-empty.png)<br>**Nhạc** khi chưa phát gì |
 | ![Việc](assets/screenshots/page-tasks.png)<br>**Việc**: việc và lịch hẹn trong một danh sách | ![Thông báo](assets/screenshots/page-notifications.png)<br>**Thông báo**: kèm icon của từng app |
 | ![Sức khỏe](assets/screenshots/page-health.png)<br>**Sức khỏe**: nhắc uống nước, đứng dậy | ![Banner](assets/screenshots/banner.png)<br>**Banner** thông báo |
 
