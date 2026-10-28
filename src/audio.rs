@@ -7,6 +7,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl};
 use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_MUTE, VK_VOLUME_UP};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 /// Posted on every speaker volume / mute change. WPARAM = percent, LPARAM = 1 when muted.
@@ -69,6 +70,21 @@ impl Audio {
             if ep.RegisterControlChangeNotify(&cb).is_ok() {
                 self.watched = Some((id, ep, cb));
             }
+        }
+    }
+
+    /// Act on a volume key the way Windows does (its step size; up/down also unmute). The
+    /// speaker callback then reports the change, so the notch shows it.
+    pub fn volume_key(&self, vk: u16) {
+        let Some(ep) = self.endpoint(eRender) else { return };
+        unsafe {
+            if vk == VK_VOLUME_MUTE.0 {
+                let muted = ep.GetMute().map_or(false, |m| m.as_bool());
+                let _ = ep.SetMute(!muted, std::ptr::null());
+                return;
+            }
+            let _ = ep.SetMute(false, std::ptr::null());
+            let _ = if vk == VK_VOLUME_UP.0 { ep.VolumeStepUp(std::ptr::null()) } else { ep.VolumeStepDown(std::ptr::null()) };
         }
     }
 

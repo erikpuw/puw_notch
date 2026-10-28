@@ -133,11 +133,13 @@ pub struct Settings {
     pub english: bool,
     /// Idle robot eyes (on unless turned off).
     pub robot: bool,
+    /// Volume keys handled by the app so only the notch shows (Windows' OSD stays away).
+    pub volume_keys: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false }
     }
 }
 
@@ -148,6 +150,7 @@ fn parse_settings(text: &str) -> Settings {
             "minimal=1" => s.minimal = true,
             "lang=en" => s.english = true,
             "robot=0" => s.robot = false,
+            "volkeys=1" => s.volume_keys = true,
             _ => {}
         }
     }
@@ -163,7 +166,7 @@ pub fn save_settings(s: Settings) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\n", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\n", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8));
     }
 }
 
@@ -210,9 +213,9 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\n"), Settings { minimal: true, english: true, robot: false });
-        assert_eq!(parse_settings("minimal=0\n"), Settings::default(), "old files: Vietnamese, idle robot on");
-        assert!(Settings::default().robot);
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true });
+        assert_eq!(parse_settings("minimal=0\n"), Settings::default(), "old files: Vietnamese, idle robot on, volume keys left to Windows");
+        assert!(Settings::default().robot && !Settings::default().volume_keys);
     }
 
     #[test]

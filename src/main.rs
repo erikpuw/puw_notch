@@ -42,7 +42,7 @@ use notch::{Mode, Notch, ALERT_MS, DWELL_MS, MAX_H, MAX_W, STATUS_MS};
 use music::WM_MUSIC;
 use i18n::tr;
 use audio::WM_VOLUME;
-use status::WM_LOCKKEY;
+use status::{WM_LOCKKEY, WM_VOLUMEKEY};
 use notify::Toast;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, NOTE_ROWS, PAGES};
 
@@ -68,6 +68,7 @@ const MENU_LANG_VI: usize = 13;
 const MENU_LANG_EN: usize = 14;
 const MENU_ROBOT: usize = 15;
 const MENU_ABOUT: usize = 16;
+const MENU_VOLUME_KEYS: usize = 17;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
 struct App {
@@ -241,7 +242,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on }
+        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys() }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -739,6 +740,7 @@ impl App {
             let english = i18n::english();
             let _ = AppendMenuW(menu, MF_STRING | check(self.notch.minimal), MENU_MINIMAL, &text(tr("Notch tối giản", "Minimal notch")));
             let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
+            let _ = AppendMenuW(menu, MF_STRING | check(status::taking_volume_keys()), MENU_VOLUME_KEYS, &text(tr("Ẩn bảng âm lượng của Windows", "Hide Windows volume popup")));
             let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, &text(tr("Khởi động cùng Windows", "Start with Windows")));
             if let Ok(langs) = CreatePopupMenu() {
                 let _ = AppendMenuW(langs, MF_STRING | check(!english), MENU_LANG_VI, w!("Tiếng Việt"));
@@ -765,6 +767,10 @@ impl App {
                     self.robot_on = !self.robot_on;
                     system::save_settings(self.settings());
                     self.refresh_robot();
+                }
+                MENU_VOLUME_KEYS => {
+                    status::take_volume_keys(!status::taking_volume_keys());
+                    system::save_settings(self.settings());
                 }
                 MENU_LANG_VI | MENU_LANG_EN => {
                     i18n::set_english(cmd == MENU_LANG_EN);
@@ -890,6 +896,12 @@ impl App {
             WM_LOCKKEY => {
                 let (name, on) = status::lock_state(wp.0);
                 self.show_banner(status_toast(tr("Bàn phím", "Keyboard"), name.to_string(), on_off(on), None, render::ICON_KEYBOARD), STATUS_MS);
+            }
+            // A volume key taken from Windows: apply it here; WM_VOLUME then shows it.
+            WM_VOLUMEKEY => {
+                if let Some(a) = &self.audio {
+                    a.volume_key(wp.0 as u16);
+                }
             }
             // From the speaker callback: any change, keys, taskbar slider or an app.
             WM_VOLUME => {
@@ -1171,6 +1183,7 @@ fn main() -> windows::core::Result<()> {
         app.refresh_audio();
         app.refresh_notes();
         let _ = RegisterPowerSettingNotification(HANDLE(hwnd.0), &status::VIDEO_BRIGHTNESS, DEVICE_NOTIFY_WINDOW_HANDLE);
+        status::take_volume_keys(settings.volume_keys);
         status::watch_lock_keys(hwnd);
         connectivity::watch(hwnd);
         usb::register(hwnd);

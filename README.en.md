@@ -14,7 +14,8 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
   - **Health**: water and stand-up reminders with adjustable times and amounts.
 - **Banners**: Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth, network, battery, battery saver, USB devices plugged in and pulled out (with the device name). Line icons, each moving in its own way. Take a screenshot with Snipping Tool (Win+Shift+S) and the banner shows a thumbnail; click it to open the shot.
 - **Idle robot**: after 30 s without input, an LED face (eyes and mouth) replaces the clock, looks around below, blinks and changes expression (curious, wink, excited; often happy while charging; sad on a low battery); after 5 min it falls asleep with a drifting pixel z; when you are back it grins at the cursor, centres itself, then hands the pill back to clock and battery. Toggle in the tray.
-- **Tray**: Minimal notch, Idle robot, Start with Windows, Language (Tiếng Việt / English), About PUW Notch (version, description, GitHub link), Quit.
+- **Hide Windows volume popup** (tray, off by default): the app handles the volume up / down / mute keys itself, so only the notch shows and Windows' OSD stays away. Laptop brightness and mic keys usually go through firmware and are not blocked.
+- **Tray**: Minimal notch, Idle robot, Hide Windows volume popup, Start with Windows, Language (Tiếng Việt / English), About PUW Notch (version, description, GitHub link), Quit.
 
 ## Screenshots
 
