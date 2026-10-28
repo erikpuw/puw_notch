@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "puw_notch"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "windows",
  "windows-core",
