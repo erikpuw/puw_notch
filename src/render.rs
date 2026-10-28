@@ -96,7 +96,7 @@ impl Page {
             Page::Todo => ("\u{E9D5}", tr("Việc", "Tasks"), GREEN),
             Page::Notify => (ICON_BELL, tr("Thông báo", "Notifications"), BLUE),
             Page::Health => ("\u{E95E}", tr("Sức khỏe", "Health"), (1.0, 0.42, 0.5)),
-            Page::Weather => (ICON_BRIGHTNESS, tr("Thời tiết", "Weather"), (1.0, 0.78, 0.25)),
+            Page::Weather => ("", tr("Thời tiết", "Weather"), (1.0, 0.78, 0.25)),
         }
     }
 }
@@ -159,6 +159,8 @@ pub enum Button {
     Unit(weather::Unit),
     /// Switch the weather off (the x beside the city).
     CityOff,
+    /// The x at the end of the add / city box, wiping what is typed.
+    ListClear,
     Gear(Card),
     Drink,
     /// Water reminder later (10 min).
@@ -296,6 +298,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
         Page::Music => out.extend(buttons(cx, scale, wide)),
         Page::Todo => {
             out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
+            out.push((Button::ListClear, r(cl + cw - 26.0, INPUT_Y, 26.0, INPUT_H)));
             out.push((Button::Gear(Card::Tasks), r(cl + cw - 20.0, COUNT_Y - 2.0, 20.0, 18.0)));
             if settings == Some(Card::Tasks) {
                 out.push((Button::RemindStep(-1), r(cl + cw - 112.0, ROW_Y, 22.0, 22.0)));
@@ -311,6 +314,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
         }
         Page::Weather => {
             out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
+            out.push((Button::ListClear, r(cl + cw - 26.0, INPUT_Y, 26.0, INPUT_H)));
             // The x that switches the weather off, and the °C | °F choice beside the temperature,
             // once there is one (`rows` = 1).
             if rows > 0 {
@@ -1746,7 +1750,11 @@ impl Renderer {
                         return Ok(());
                     }
                     let (icon, name, c) = page.title();
-                    text(icon, F_SMALL_ICON, rect(hl + dx, ht, hl + dx + 18.0 * s, hb), center, color(c.0, c.1, c.2, a * ta))?;
+                    // Weather's icon is the same Lucide line sun as the page's, not a font glyph.
+                    match (&weather_empty, page) {
+                        (Some((ic, geoms)), Page::Weather) => draw_wx_icon(ic, geoms, hl + dx + 1.0 * s, (ht + hb) / 2.0 - 8.0 * s, 16.0 * s, Some((c, c)), a * ta, 9.0)?,
+                        _ => text(icon, F_SMALL_ICON, rect(hl + dx, ht, hl + dx + 18.0 * s, hb), center, color(c.0, c.1, c.2, a * ta))?,
+                    }
                     text(name, F_SMALL, rect(hl + dx + 24.0 * s, ht, hl + dx + 170.0 * s, hb), lead, grey(1.0, a * ta))
                 };
                 match v.leaving {
@@ -1807,8 +1815,15 @@ impl Renderer {
                         }
                         let icon_box = rect(ib.left + 8.0 * s, ib.top, ib.left + 26.0 * s, ib.bottom);
                         text(ICON_ADD, F_SMALL_ICON, icon_box, center, grey(0.6, a))?;
-                        let tb = rect(icon_box.right + 4.0 * s, ib.top, ib.right - 12.0 * s - tag_w, ib.bottom);
                         let draft = if current { lv.draft } else { "" };
+                        // The x that wipes the text, while there is some (the "Editing" tag has the room otherwise).
+                        let clear = !draft.is_empty() && edit_row.is_none();
+                        if clear {
+                            if let Some(cb) = rect_of(Button::ListClear) {
+                                text(ICON_CLOSE, F_SMALL_ICON, cb, center, if hovered == Some(Button::ListClear) { grey(1.0, a) } else { grey(0.55, a) })?;
+                            }
+                        }
+                        let tb = rect(icon_box.right + 4.0 * s, ib.top, ib.right - if clear { 26.0 } else { 12.0 } * s - tag_w, ib.bottom);
                         if draft.is_empty() && !editing {
                             text(placeholder, F_BODY, tb, lead, grey(0.55, a))?;
                         } else {

@@ -607,6 +607,13 @@ impl App {
                 self.kick();
             }
             Button::ListInput => self.begin_edit(),
+            // The x shows only while there is text (and no row being edited); over an empty box it is just the box.
+            Button::ListClear => {
+                if self.page == Page::Weather || self.edit_item.is_none() {
+                    self.draft_mut().clear();
+                }
+                self.begin_edit();
+            }
             Button::ListEdit(i) => {
                 self.draft = self.todo.edit_text(i, self.today);
                 self.edit_item = Some(i);
