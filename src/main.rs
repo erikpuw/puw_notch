@@ -593,6 +593,11 @@ impl App {
                 self.todo.remove(i);
                 self.clamp_scroll();
             }
+            Button::NoteOpen(i) => {
+                if let Some(target) = self.notes.get(i).and_then(|n| n.open.as_deref()) {
+                    open_target(target);
+                }
+            }
             Button::Gear(card) => self.settings_open = if self.settings_open == Some(card) { None } else { Some(card) },
             Button::RemindStep(dir) => self.todo.step_remind(dir),
             Button::Drink => self.health.drink(todo::minutes(system::now_stamp())),
@@ -885,16 +890,8 @@ impl App {
                 let x = (lp.0 & 0xffff) as i16 as f32;
                 let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
                 match self.banner_target() {
-                    // A notification banner: clicking it opens its picture, link or app. The notch
-                    // never takes focus, so hand the click's foreground right on (as Windows does for
-                    // a toast click); otherwise the app opens behind the window in front.
-                    Some(target) => {
-                        let target = windows::core::HSTRING::from(target);
-                        unsafe {
-                            let _ = AllowSetForegroundWindow(ASFW_ANY);
-                            ShellExecuteW(None, w!("open"), &target, None, None, SW_SHOWNORMAL);
-                        }
-                    }
+                    // A notification banner: clicking it opens its picture, link or app.
+                    Some(target) => open_target(target),
                     None => self.click(x, y),
                 }
             }
@@ -1010,6 +1007,17 @@ fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, ico
 
 fn on_off(on: bool) -> &'static str {
     if on { tr("Bật", "On") } else { tr("Tắt", "Off") }
+}
+
+/// Open what a notification points at (picture, link or app) from a click on the notch. The
+/// notch never takes focus, so hand the click's foreground right on (as Windows does for a toast
+/// click); otherwise the app opens behind the window in front.
+fn open_target(target: &str) {
+    let target = windows::core::HSTRING::from(target);
+    unsafe {
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+        ShellExecuteW(None, w!("open"), &target, None, None, SW_SHOWNORMAL);
+    }
 }
 
 /// Banner text for a connectivity change.

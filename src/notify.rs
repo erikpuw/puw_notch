@@ -32,6 +32,8 @@ pub struct Note {
     pub body: String,
     /// Arrival as local yyyymmddHHMM.
     pub at: u64,
+    /// What clicking the row opens: its picture, else its link or app (as for the banner).
+    pub open: Option<String>,
 }
 
 /// Windows FILETIME (100 ns ticks since 1601-01-01 UTC) -> local yyyymmddHHMM, given the local
@@ -158,11 +160,13 @@ impl Reader {
                 return out;
             }
             while (self.sql.step)(stmt) == SQLITE_ROW {
-                let (title, body) = parse_payload(&self.text(stmt, 1));
+                let payload = self.text(stmt, 1);
+                let (title, body) = parse_payload(&payload);
                 if !title.is_empty() {
                     let at = local_stamp((self.sql.col_int)(stmt, 2), utc_offset_min);
                     let id = self.text(stmt, 0);
-                    out.push(Note { app: app_name(&id), id, title, body, at });
+                    let open = parse_image(&payload).or_else(|| parse_open(&id, &payload));
+                    out.push(Note { app: app_name(&id), id, title, body, at, open });
                 }
             }
             (self.sql.finalize)(stmt);
@@ -369,6 +373,7 @@ mod tests {
         let list = r.recent(30, 7 * 60);
         assert_eq!(list.iter().map(|n| (n.title.as_str(), n.at)).collect::<Vec<_>>(), [("Mới", 202610261452), ("Cũ", 202610261451)]);
         assert_eq!(list[0].app, "MSTeams");
+        assert_eq!(list[0].open.as_deref(), Some(r"shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams"), "a row opens its app");
         assert_eq!(r.recent(1, 0).len(), 1);
     }
 

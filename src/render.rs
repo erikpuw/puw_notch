@@ -143,6 +143,8 @@ pub enum Button {
     ListToggle(usize),
     ListEdit(usize),
     ListDelete(usize),
+    /// Open the notification at this index (its app, link or picture).
+    NoteOpen(usize),
     Gear(Card),
     Drink,
     /// Water reminder later (10 min).
@@ -280,8 +282,11 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
                 }
             }
         }
-        // Read only: the arrows and the wheel.
-        Page::Notify => {}
+        Page::Notify => {
+            for (row, i) in (scroll..rows.min(scroll + NOTE_ROWS)).enumerate() {
+                out.push((Button::NoteOpen(i), r(cl, NOTE_Y + row as f32 * NOTE_H, cw, NOTE_H - 4.0)));
+            }
+        }
         Page::Health => {
             for (card, x) in [(Card::Water, cl), (Card::Sit, cl + CARD_W + CARD_GAP)] {
                 out.push((Button::Gear(card), r(x + CARD_W - 28.0, CARD_TOP + 4.0, 22.0, 22.0)));
@@ -1735,6 +1740,11 @@ impl Renderer {
                             let today = (lv.now / 10_000) as u32;
                             for (row, n) in v.notes.iter().skip(scroll).take(NOTE_ROWS).enumerate() {
                                 let y = (NOTE_Y + row as f32 * NOTE_H) * s;
+                                // The row under the mouse lights up: clicking it opens the notification.
+                                if hovered == Some(Button::NoteOpen(scroll + row)) {
+                                    let hb = rect(cl - 6.0 * s, y - 1.0 * s, cr + 2.0 * s, y + (NOTE_H - 3.0) * s);
+                                    rt.FillRoundedRectangle(&rounded(hb, 8.0 * s), &self.brush(grey(0.1, a))?);
+                                }
                                 // Line 1: title, time on the right. Line 2: app · text.
                                 let day = (n.at / 10_000) as u32;
                                 let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
