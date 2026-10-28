@@ -1590,25 +1590,32 @@ impl Renderer {
                 // pill (balancing the battery ring), after the cover on the music pill. Left out
                 // when it would touch the clock.
                 if let (Some((ic, geoms)), Some(n)) = (&weather_line, v.weather.now) {
-                    let (icon, gap) = (14.0 * s, 3.0 * s);
-                    let clock_half = width(v.time, F_SMALL) / 2.0 + 4.0 * s;
-                    // Where the icon and `label` go, and the room left between them and the clock.
-                    let place = |label: &str| {
-                        let total = icon + gap + width(label, F_LABEL);
+                    let (icon, gap) = (14.0 * s, 2.0 * s);
+                    let clock_half = width(v.time, F_SMALL) / 2.0 + 3.0 * s;
+                    // Where the icon and `label` shrunk by `k` go, and the room left between them and the clock.
+                    let place = |label: &str, k: f32| {
+                        let total = icon + gap + width(label, F_LABEL) * k;
                         if pill_music.is_some() {
                             let left = l + 38.0 * s;
                             (left, total, cx - clock_half - (left + total))
                         } else {
-                            let left = r - 13.0 * s - total;
+                            let left = r - 11.0 * s - total;
                             (left, total, left - (cx + clock_half))
                         }
                     };
-                    // "−12°" may not fit where "29°" does: then the degree sign goes, not the weather.
+                    // "−12°" is wider than "29°": it keeps its degree sign by shrinking a little (down
+                    // to 80%); only a number that still does not fit loses the sign, not the weather.
                     let number = v.unit.number(n.temp);
-                    let fitted = [format!("{number}°"), number].into_iter().map(|label| (place(&label), label)).find(|((_, _, room), _)| *room >= 0.0);
-                    if let Some(((left, total, _), label)) = fitted {
+                    let with_sign = format!("{number}°");
+                    let tries = [(&with_sign, 1.0), (&with_sign, 0.9), (&with_sign, 0.8), (&number, 1.0)];
+                    let fitted = tries.into_iter().map(|(label, k)| (place(label, k), label, k)).find(|((_, _, room), _, _)| *room >= 0.0);
+                    if let Some(((left, _, _), label, k)) = fitted {
                         draw_wx_icon(ic, geoms, left, (nh - icon) / 2.0, icon, None, small_a * 0.9, 9.0)?;
-                        text(&label, F_LABEL, rect(left + icon + gap, 0.0, left + total + 4.0 * s, nh), lead, grey(0.9, small_a))?;
+                        let (tx, ty) = (left + icon + gap, nh / 2.0);
+                        let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
+                        rt.SetTransform(&(translate(-tx, -ty) * scaling(k) * translate(tx, ty) * base));
+                        text(label, F_LABEL, rect(tx, 0.0, tx + width(label, F_LABEL) + 6.0 * s, nh), lead, grey(0.9, small_a))?;
+                        rt.SetTransform(&base);
                     }
                 }
                 if let Some(t) = pill_music {
@@ -2697,6 +2704,10 @@ mod tests {
                 (Mode::Expanded, false, Page::Weather, state(Sky::Snow, true, -12.0), "", weather::Unit::C),
                 (Mode::Expanded, false, Page::Weather, state(Sky::Clear, false, -89.0), "", weather::Unit::F),
                 (Mode::Collapsed, false, Page::Music, state(Sky::Snow, true, -12.0), "", weather::Unit::C),
+                (Mode::Collapsed, false, Page::Music, state(Sky::Clear, true, 9.0), "", weather::Unit::C),
+                (Mode::Collapsed, false, Page::Music, state(Sky::Snow, true, -26.0), "", weather::Unit::F),
+                (Mode::Collapsed, false, Page::Music, state(Sky::Snow, true, -89.0), "", weather::Unit::F),
+                (Mode::Collapsed, false, Page::Music, state(Sky::Clear, true, 44.0), "", weather::Unit::F),
                 (Mode::Collapsed, true, Page::Music, state(Sky::Snow, true, -26.0), "", weather::Unit::F),
             ];
             let n = frames.len() as i32;
