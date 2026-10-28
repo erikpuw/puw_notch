@@ -885,10 +885,15 @@ impl App {
                 let x = (lp.0 & 0xffff) as i16 as f32;
                 let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
                 match self.banner_target() {
-                    // A notification banner: clicking it opens its picture, link or app.
+                    // A notification banner: clicking it opens its picture, link or app. The notch
+                    // never takes focus, so hand the click's foreground right on (as Windows does for
+                    // a toast click); otherwise the app opens behind the window in front.
                     Some(target) => {
                         let target = windows::core::HSTRING::from(target);
-                        unsafe { ShellExecuteW(None, w!("open"), &target, None, None, SW_SHOWNORMAL) };
+                        unsafe {
+                            let _ = AllowSetForegroundWindow(ASFW_ANY);
+                            ShellExecuteW(None, w!("open"), &target, None, None, SW_SHOWNORMAL);
+                        }
                     }
                     None => self.click(x, y),
                 }
