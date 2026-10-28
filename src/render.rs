@@ -2375,10 +2375,11 @@ mod tests {
             let (w, h) = (820, 210);
             let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Lyrics preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let lines = [
-                (0, "Đêm nay phố vắng người qua"), (6_000, "Ngọn đèn vàng đổ bóng nghiêng nghiêng trên con đường quen thuộc nơi ta từng đi"),
-                (12_000, "Em đi giữa những con đường quen"), (18_000, "Mà nghe lòng nhẹ như gió thoảng, như một lời hứa chưa kịp nói thành tên"),
-                (24_000, "Có những điều chưa kịp nói ra"), (30_000, "Cứ theo tháng ngày trôi mất"),
-                (36_000, "Nếu mai này ta còn gặp lại"), (42_000, "Xin cho nhau một nụ cười hiền"),
+                // Made-up lines about the feature itself (no song's lyrics in the README pictures).
+                (0, "Lời mẫu cho ảnh xem trước"), (6_000, "Lời lấy từ LRCLIB và chạy theo đúng thời gian của bài đang phát trên máy"),
+                (12_000, "Dòng đang hát sáng lên ở giữa"), (18_000, "Dòng dài tự xuống dòng cho vừa khung lời bên phải, không bị cắt mất chữ"),
+                (24_000, "Bấm nút lời để mở hoặc đóng khung này"), (30_000, "Tua bài thì lời nhảy theo"),
+                (36_000, "Hết lời thì khung tự trống"), (42_000, "Dòng mẫu cuối cùng"),
             ];
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 14_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true,
@@ -2461,7 +2462,7 @@ mod tests {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (530i32, 210i32);
             let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Aurora preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
-            let track = Track { title: "Bản nhạc đang phát".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
+            let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true,
                 art: std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new), art_key: 1, ..Default::default() };
             let mut renderer = Renderer::new().unwrap();
