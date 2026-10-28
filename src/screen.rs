@@ -130,19 +130,25 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         let y = r.top.max(top);
         let h = top + sh - y;
         let under = clip_span(center_x - half, center_x + half, r.left, r.right).filter(|_| h > 3);
-        Check::Busy(is_busy(under.map(|(from, to)| grab_edges(own, from, y, to - from, h))))
+        Check::Busy(is_busy(under.and_then(|(from, to)| grab_edges(own, from, y, to - from, h))))
     }
 }
 
 /// Screen capture of the area under the pill. The notch window is dropped from the capture for the
-/// moment (display affinity), else it would hide exactly what is being looked for.
-unsafe fn grab_edges(own: HWND, x: i32, y: i32, w: i32, h: i32) -> usize {
-    let _ = SetWindowDisplayAffinity(own, WDA_EXCLUDEFROMCAPTURE);
+/// moment (display affinity), else it would hide exactly what is being looked for. None when it
+/// cannot be dropped (Windows 10 before 2004, some remote / driver setups): the capture would hold
+/// the pill's own clock and battery, read as busy, and keep the notch a thin line for good.
+unsafe fn grab_edges(own: HWND, x: i32, y: i32, w: i32, h: i32) -> Option<usize> {
+    if let Err(e) = SetWindowDisplayAffinity(own, WDA_EXCLUDEFROMCAPTURE) {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| crate::system::log(&format!("cannot leave the notch out of screen capture ({e}); not sampling under the pill")));
+        return None;
+    }
     // The compositor drops the window from what it hands to capture on its next frame.
     let _ = windows::Win32::Graphics::Dwm::DwmFlush();
     let edges = grab_edges_raw(x, y, w, h);
     let _ = SetWindowDisplayAffinity(own, WDA_NONE);
-    edges
+    Some(edges)
 }
 
 unsafe fn grab_edges_raw(x: i32, y: i32, w: i32, h: i32) -> usize {

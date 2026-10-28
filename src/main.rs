@@ -427,6 +427,9 @@ impl App {
                     let before = self.notch.mode;
                     self.notch.report_busy(busy);
                     if self.notch.mode != before {
+                        // A notch that "does not show" may be resting as the thin line: say why.
+                        let fg = screen::class_name(unsafe { GetForegroundWindow() });
+                        system::log(&if busy { format!("thin line: content under the pill, foreground {fg}") } else { "back to the pill".to_string() });
                         self.kick();
                     }
                 }
