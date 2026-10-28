@@ -1411,15 +1411,18 @@ impl Renderer {
                     let pulse = 0.45 + 0.55 * (0.5 + 0.5 * (t * 0.4 + i as f32 * 1.7).sin());
                     D2D1_GRADIENT_STOP { position: f, color: color(c.0, c.1, c.2, pulse) }
                 }).collect();
+                let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: l, Y: 0.0 }, endPoint: Vector2 { X: r, Y: 0.0 } };
+                let (yc, amp) = (nh * AURORA_Y, nh * AURORA_AMP);
+                // Everything that can fail is made first: a failure skips the aurora for this
+                // frame instead of leaving the panel's layer pushed and the frame unfinished.
+                let made = (|| -> Result<(ID2D1Bitmap, D2D_SIZE_F, ID2D1LinearGradientBrush, ID2D1PathGeometry)> {
                 // Drawn at 1/AURORA_SHRINK size, then stretched with linear filtering: the stretch
                 // is the blur, for a few small fills instead of a blur effect.
                 let small = rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: (w as f32 / AURORA_SHRINK).ceil(), height: (nh / AURORA_SHRINK).ceil() + 1.0 }), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
                 small.BeginDraw();
                 small.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
                 small.SetTransform(&Matrix3x2 { M11: 1.0 / AURORA_SHRINK, M12: 0.0, M21: 0.0, M22: 1.0 / AURORA_SHRINK, M31: 0.0, M32: 0.0 });
-                let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: l, Y: 0.0 }, endPoint: Vector2 { X: r, Y: 0.0 } };
                 let brush = small.CreateLinearGradientBrush(&line, None, &small.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?)?;
-                let (yc, amp) = (nh * AURORA_Y, nh * AURORA_AMP);
                 for (k, alpha) in AURORA_LAYERS {
                     let band = self.aurora_band(t, l, r, yc, amp, nh * AURORA_HALO, k)?;
                     brush.SetOpacity(alpha);
@@ -1434,25 +1437,26 @@ impl Renderer {
                 mid.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
                 mid.DrawBitmap(&small.GetBitmap()?, Some(&rect(0.0, 0.0, sz.width * half, sz.height * half)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                 mid.EndDraw(None, None)?;
-                let bmp = mid.GetBitmap()?;
-                let size = D2D_SIZE_F { width: sz.width, height: sz.height };
-                // Only inside the panel's outline.
-                let params = D2D1_LAYER_PARAMETERS { contentBounds: rect(l, 0.0, r, nh), geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
-                    maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: 1.0,
-                    opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
-                rt.PushLayer(&params, None);
-                rt.DrawBitmap(&bmp, Some(&rect(0.0, 0.0, size.width * AURORA_SHRINK, size.height * AURORA_SHRINK)), aurora_a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
-                // The thin bright core, sharp and anti-aliased at full size.
+                // The thin bright core, drawn sharp and anti-aliased at full size.
                 let whiten = |c: D2D1_COLOR_F| color(c.r + (1.0 - c.r) * AURORA_CORE_WHITE, c.g + (1.0 - c.g) * AURORA_CORE_WHITE, c.b + (1.0 - c.b) * AURORA_CORE_WHITE, c.a);
                 let core_stops: Vec<D2D1_GRADIENT_STOP> = stops.iter().map(|st| D2D1_GRADIENT_STOP { position: st.position, color: whiten(st.color) }).collect();
                 let core = rt.CreateLinearGradientBrush(&line, None, &rt.CreateGradientStopCollection(&core_stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?)?;
-                let path = self.aurora_line(t, l, r, yc, amp)?;
-                for (width, alpha) in AURORA_CORE {
-                    core.SetOpacity(alpha * aurora_a);
-                    rt.DrawGeometry(&path, &core, width * s, &self.round);
+                Ok((mid.GetBitmap()?, sz, core, self.aurora_line(t, l, r, yc, amp)?))
+                })();
+                if let Ok((halo, sz, core, path)) = made {
+                    // Only inside the panel's outline.
+                    let params = D2D1_LAYER_PARAMETERS { contentBounds: rect(l, 0.0, r, nh), geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
+                        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: 1.0,
+                        opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
+                    rt.PushLayer(&params, None);
+                    rt.DrawBitmap(&halo, Some(&rect(0.0, 0.0, sz.width * AURORA_SHRINK, sz.height * AURORA_SHRINK)), aurora_a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                    for (width, alpha) in AURORA_CORE {
+                        core.SetOpacity(alpha * aurora_a);
+                        rt.DrawGeometry(&path, &core, width * s, &self.round);
+                    }
+                    rt.PopLayer();
+                    drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
                 }
-                rt.PopLayer();
-                drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
             }
 
             // Each layout fades in as the pill reaches its size.
