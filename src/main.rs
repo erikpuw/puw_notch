@@ -451,9 +451,10 @@ impl App {
         }
     }
 
-    /// The picture the banner on show carries, if it shows one right now.
-    fn banner_image(&self) -> Option<&str> {
-        self.banner.as_ref().filter(|_| self.notch.mode == Mode::Alert).and_then(|b| b.image.as_deref())
+    /// What clicking the banner on show opens: its picture (a screenshot), else the app or link of
+    /// the notification. None for status banners.
+    fn banner_target(&self) -> Option<&str> {
+        self.banner.as_ref().filter(|_| self.notch.mode == Mode::Alert).and_then(|b| b.image.as_deref().or(b.open.as_deref()))
     }
 
     /// Short banner on the notch; skipped over a fullscreen game or while the panel is open.
@@ -835,9 +836,9 @@ impl App {
                 // The ears report the mouse too (they are drawn); only the pill body counts.
                 if !self.hover_in && self.cursor_inside() {
                     self.hover_in = true;
-                    // Resting on a banner opens the panel, except one with a picture: that one is
-                    // there to be clicked.
-                    if self.notch.on_enter() && self.banner_image().is_none() {
+                    // Resting on a banner opens the panel, except a notification's: that one is
+                    // there to be clicked (opens its app or picture).
+                    if self.notch.on_enter() && self.banner_target().is_none() {
                         unsafe { SetTimer(Some(self.hwnd), T_DWELL, DWELL_MS, None) };
                     }
                     self.kick();
@@ -849,7 +850,7 @@ impl App {
                 } else { None };
                 if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
             }
-            WM_SETCURSOR if self.banner_image().is_some() => {
+            WM_SETCURSOR if self.banner_target().is_some() => {
                 unsafe { let _ = SetCursor(LoadCursorW(None, IDC_HAND).ok()); }
                 return Some(LRESULT(1));
             }
@@ -883,11 +884,11 @@ impl App {
             WM_LBUTTONUP => {
                 let x = (lp.0 & 0xffff) as i16 as f32;
                 let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
-                match self.banner_image() {
-                    // A banner with a picture (a screenshot): clicking it opens the file.
-                    Some(path) => {
-                        let path = windows::core::HSTRING::from(path);
-                        unsafe { ShellExecuteW(None, w!("open"), &path, None, None, SW_SHOWNORMAL) };
+                match self.banner_target() {
+                    // A notification banner: clicking it opens its picture, link or app.
+                    Some(target) => {
+                        let target = windows::core::HSTRING::from(target);
+                        unsafe { ShellExecuteW(None, w!("open"), &target, None, None, SW_SHOWNORMAL) };
                     }
                     None => self.click(x, y),
                 }
@@ -999,7 +1000,7 @@ fn app_icon(small: bool) -> HICON {
 }
 
 fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
-    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None }
+    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None }
 }
 
 fn on_off(on: bool) -> &'static str {

@@ -18,6 +18,8 @@ pub struct Toast {
     pub icon: Option<&'static str>,
     /// A picture file the notification carries (a screenshot's preview): click the banner to open it.
     pub image: Option<String>,
+    /// What clicking the banner opens (see `parse_open`); None for status banners.
+    pub open: Option<String>,
 }
 
 /// One notification on the panel's Notifications page.
@@ -132,7 +134,8 @@ impl Reader {
                 let payload = self.text(stmt, 2);
                 let (title, body) = parse_payload(&payload);
                 if !title.is_empty() {
-                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload) });
+                    let open = parse_open(&aumid, &payload);
+                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload), open });
                 }
             }
             (self.sql.finalize)(stmt);
@@ -222,6 +225,24 @@ pub fn parse_image(xml: &str) -> Option<String> {
     (drive || path.starts_with("\\\\")).then_some(path)
 }
 
+/// What clicking a notification opens, for ShellExecute: the toast's own link when it is a
+/// protocol toast (`windowsdefender://update`), else the app that sent it, started through
+/// `shell:AppsFolder` by its app id (works for packaged and desktop apps alike).
+/// ponytail: opens the app, not the exact message; that needs the app's COM toast activator.
+pub fn parse_open(aumid: &str, xml: &str) -> Option<String> {
+    let tag = &xml[xml.find("<toast")?..];
+    let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
+    let attr = |name: &str| {
+        let rest = &tag[tag.find(&format!(" {name}=\""))? + name.len() + 3..];
+        Some(unescape(&rest[..rest.find('"')?]))
+    };
+    // A real URI scheme only: no drive paths ("C:\..") and no local files.
+    let uri = attr("launch").filter(|_| attr("activationType").as_deref() == Some("protocol")).filter(|l| {
+        l.split_once(':').is_some_and(|(scheme, _)| scheme.len() > 1 && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) && !scheme.eq_ignore_ascii_case("file"))
+    });
+    uri.or_else(|| (!aumid.is_empty()).then(|| format!("shell:AppsFolder\\{aumid}")))
+}
+
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -280,6 +301,23 @@ mod tests {
         assert_eq!(parse_image(two).as_deref(), Some(r"C:\b.png"));
         assert_eq!(parse_image(r#"<image src="https://example.com/x.png"/>"#), None);
         assert_eq!(parse_image("<toast><text>hi</text></toast>"), None);
+    }
+
+    #[test]
+    fn click_opens_link_or_app() {
+        let defender = r#"<toast launch="windowsdefender://update" activationType="protocol"><visual/></toast>"#;
+        assert_eq!(parse_open("Windows.Defender.SecurityCenter", defender).as_deref(), Some("windowsdefender://update"));
+        // Foreground toasts carry app arguments, not a link: start the app.
+        let teams = r#"<toast launch="{&quot;chat&quot;:1}"><visual/></toast>"#;
+        assert_eq!(parse_open("MSTeams_8wekyb3d8bbwe!MSTeams", teams).as_deref(), Some(r"shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams"));
+        assert_eq!(parse_open("Claude_pzs8sxrjxfjjc!Claude", "<toast><visual/></toast>").as_deref(), Some(r"shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude"));
+        // A protocol "link" that is really a file is not followed.
+        for bad in [r"C:\evil.exe", "file:///C:/evil.exe"] {
+            let xml = format!(r#"<toast launch="{bad}" activationType="protocol"/>"#);
+            assert_eq!(parse_open("App!A", &xml).as_deref(), Some(r"shell:AppsFolder\App!A"));
+        }
+        assert_eq!(parse_open("", "<toast/>"), None);
+        assert_eq!(parse_open("App!A", "<tile/>"), None);
     }
 
     #[test]
