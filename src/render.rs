@@ -3270,4 +3270,125 @@ mod tests {
             DestroyWindow(hwnd).unwrap();
         }
     }
+
+    #[test]
+    #[ignore = "writes target/promo/notch-vi.mov and notch-en.mov through PUW_FFMPEG (the 30 s promo's notch layer); tools/promo.py composes the video"]
+    fn promo_frames() {
+        for english in [false, true] {
+            promo_layer(english);
+        }
+        crate::i18n::set_english(false);
+    }
+
+    /// The promo's notch, 30 s at 30 fps and 2x, driven by the app's own state machine and painter
+    /// in real time (the painter's own motion runs on the clock): the pill grows, music starts, the
+    /// mouse opens the panel and clicks through the five pages, a notification banner drops in, then
+    /// the idle robot. Premultiplied BGRA, 960 x 420, piped into ffmpeg as PNG frames in a .mov.
+    fn promo_layer(english: bool) {
+        use crate::notch::Notch;
+        use crate::robot::{Mood, Robot};
+        use crate::todo::stamp;
+        use std::io::Write;
+        use weather::{Now, Place, Sky, State};
+        crate::i18n::set_english(english);
+        let t = |vi: &str, en: &str| if english { en.to_string() } else { vi.to_string() };
+        let (w, h, scale, fps, frames) = (960, 420, 2.0, 30.0, 900);
+        let out = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/promo");
+        std::fs::create_dir_all(&out).unwrap();
+        let ffmpeg = std::env::var("PUW_FFMPEG").unwrap_or_else(|_| "ffmpeg".into());
+        let mut enc = std::process::Command::new(ffmpeg)
+            .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &format!("{w}x{h}"), "-r", "30", "-i", "-", "-c:v", "png"])
+            .arg(out.join(if english { "notch-en.mov" } else { "notch-vi.mov" }))
+            .stdin(std::process::Stdio::piped()).spawn().expect("ffmpeg (set PUW_FFMPEG)");
+        let pipe = enc.stdin.as_mut().unwrap();
+
+        let art = std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new);
+        let lines: Vec<(u64, String)> = vec![(0, t("Lời chạy theo bài đang phát", "Lyrics follow the song")), (90_000, t("Ngay trên notch của bạn", "Right in your notch"))];
+        let song = |ms| Track { title: t("Bài hát mẫu", "Sample song"), artist: t("Nghệ sĩ mẫu", "Sample artist"), duration_ms: 210_000, position_ms: ms, playing: true,
+            can_toggle: true, can_next: true, can_previous: true, can_seek: true, art: art.clone(), art_key: 1, lyrics: Arc::new(lines.clone()), ..Default::default() };
+        let item = |text: String, at: Option<u64>| Item { text, done: None, at, told_soon: false, told_now: false };
+        let todos = vec![item(t("Gửi báo cáo tuần", "Send the weekly report"), Some(stamp(20261029, 9, 0))), item(t("Uống thuốc", "Take vitamins"), Some(stamp(20261029, 10, 15))),
+            item(t("Họp nhóm dự án", "Project sync"), Some(stamp(20261029, 20, 0))), item(t("Khám răng", "Dentist"), Some(stamp(20261030, 9, 0)))];
+        // Ids Windows has no icon for: each row gets its app's coloured initial, the same on every PC.
+        let note = |app: &str, title: String, body: String, at: u64| Note { id: format!("promo.{app}"), app: app.into(), title, body, at, open: None };
+        let notes = [note("Zalo", t("Anh Minh", "Alex"), t("Tối nay 8h họp nhóm nhé", "Team call at 8 tonight"), 202610290938),
+            note("Outlook", t("Lịch họp tuần", "Weekly planning"), t("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610290910),
+            note("Spotify", t("Danh sách mới cho bạn", "New playlist for you"), t("Nhạc tập trung buổi sáng", "Morning focus"), 202610290805)];
+        let toast = Toast { app: "Zalo".into(), title: t("Anh Minh", "Alex"), body: t("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop."),
+            level: None, icon: None, image: None, open: None };
+        let wx = State { place: Some(Place { name: t("Đà Nẵng", "Da Nang"), lat: 16.0, lon: 108.0 }),
+            now: Some(Now { temp: 29.0, feels: 32.0, humidity: 78.0, wind: 9.0, sky: Sky::PartlyCloudy, day: true }), updated: Some(202610290930), ..State::default() };
+        let health = Health::default();
+        let date = t("T5, 29/10", "Thu, 29/10");
+
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Promo"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            let mut notch = Notch::new(false);
+            let mut robot = Robot::default();
+            let (mut page, mut page_since, mut page_anim) = (Page::Music, 0.0f32, None::<(Page, f32)>);
+            let (mut live, mut charging) = (false, false);
+            let clicks = [10.5, 12.5, 14.5, 16.5];
+            let start = Instant::now();
+            for i in 0..frames {
+                let (now, before) = (i as f32 / fps, (i as f32 - 1.0) / fps);
+                let at = |s: f32| before < s && now >= s;
+                std::thread::sleep((start + std::time::Duration::from_secs_f32(now)).saturating_duration_since(Instant::now()));
+                if at(4.0) {
+                    live = true;
+                    notch.set_live(true);
+                }
+                if at(7.0) {
+                    notch.on_enter();
+                }
+                if at(7.4) {
+                    notch.on_dwell(true);
+                    page_since = now;
+                }
+                if let Some(k) = clicks.iter().position(|&c| at(c)) {
+                    page_anim = Some((page, now));
+                    page = PAGES[k + 1];
+                    page_since = now;
+                }
+                if at(18.6) {
+                    notch.on_leave();
+                }
+                if at(19.6) {
+                    let lines = renderer.banner_lines(&toast.body, scale, false).min(notch::BANNER_MAX_LINES) as u8;
+                    notch.on_alert(lines);
+                }
+                if at(23.2) {
+                    notch.on_alert_end();
+                }
+                if at(23.8) {
+                    (live, charging) = (false, true);
+                    notch.set_live(false);
+                    robot.update(40, true);
+                }
+                notch.step(1.0 / fps);
+                let leaving = page_anim.map(|(from, t0)| (from, ((now - t0) / 0.32).min(1.0), 1));
+                if leaving.is_some_and(|(_, k, _)| k >= 1.0) {
+                    page_anim = None;
+                }
+                let eyes = robot.visible().then(|| robot.step(1.0 / fps, None, Mood::Charging));
+                let track = song(64_000 + ((now - 4.0).max(0.0) * 1000.0) as u64);
+                let mode = notch.mode;
+                let view = View { mode, size: notch.size(), time: "09:41", date: &date, battery: Some(Battery { percent: 82, charging, saver: false }),
+                    banner: (mode == Mode::Alert).then_some(&toast), music: live.then_some(&track), live: notch.live, robot: eyes, phase: now,
+                    banner_age: (now - 19.6).max(0.0), lyrics: false,
+                    hovered: (mode == Mode::Expanded && (10.0..18.2).contains(&now)).then_some(Button::PageNext), page, leaving,
+                    list: ListView { counts: (3, 1), remind_before: 15, now: 202610290941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    todos: &todos, notes: &notes, health: HealthView { h: &health, now: crate::todo::minutes(202610290941), minute_of_day: 9 * 60 + 41, settings: None },
+                    weather: &wx, page_age: if mode == Mode::Expanded { now - page_since } else { 0.0 }, unit: weather::Unit::C };
+                renderer.present(hwnd, 0, 0, w, h, scale, &view).unwrap();
+                pipe.write_all(&renderer.grabbed).unwrap();
+            }
+            DestroyWindow(hwnd).unwrap();
+        }
+        drop(enc.stdin.take());
+        assert!(enc.wait().unwrap().success());
+    }
 }
