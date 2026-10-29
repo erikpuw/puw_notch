@@ -169,7 +169,7 @@ pub enum Button {
     CityOff,
     /// The x at the end of the add / city box, wiping what is typed.
     ListClear,
-    /// "Clear all" at the end of the Notifications page's header: hides what has arrived so far.
+    /// "Clear all" under the Notifications list: hides what has arrived so far.
     NotesClear,
     Gear(Card),
     Drink,
@@ -242,8 +242,13 @@ const UNIT_H: f32 = 22.0;
 const CREDIT_W: f32 = 126.0;
 /// Notifications page: rows of two lines.
 const NOTE_Y: f32 = 36.0;
-const NOTE_H: f32 = 42.0;
+const NOTE_H: f32 = 38.0;
 pub const NOTE_ROWS: usize = 3;
+/// "Clear all" under the rows, right-aligned with their times: a pill button, 14 px clear of the
+/// panel's bottom edge.
+const CLEAR_W: f32 = 64.0;
+const CLEAR_H: f32 = 20.0;
+const CLEAR_Y: f32 = NOTE_Y + NOTE_H * NOTE_ROWS as f32 + 2.0;
 /// Health page cards.
 const CARD_TOP: f32 = 34.0;
 const CARD_BOTTOM: f32 = 158.0;
@@ -338,9 +343,8 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             for (row, i) in (scroll..rows.min(scroll + NOTE_ROWS)).enumerate() {
                 out.push((Button::NoteOpen(i), r(cl, NOTE_Y + row as f32 * NOTE_H, cw, NOTE_H - 4.0)));
             }
-            // At the end of the header (drawn there in place of the battery).
             if rows > 0 {
-                out.push((Button::NotesClear, r(w - PAD - 70.0, 6.0, 70.0, 22.0)));
+                out.push((Button::NotesClear, r(cl + cw - CLEAR_W, CLEAR_Y, CLEAR_W, CLEAR_H)));
             }
         }
         Page::Health => {
@@ -1912,28 +1916,8 @@ impl Renderer {
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
-                // On the Notifications page (with something to clear) "Clear all" takes the battery's
-                // place at the end of the header, where Notification Center keeps its Clear; the
-                // two swap with the page's own fades during a page change.
-                let has_notes = !v.notes.is_empty();
-                let (battery_a, clear_a) = match v.leaving {
-                    Some((from, t, _)) => {
-                        let (out_a, in_a) = page_fades(t);
-                        match (from == Page::Notify && has_notes, v.page == Page::Notify && has_notes) {
-                            (true, false) => (in_a, out_a),
-                            (false, true) => (out_a, in_a),
-                            _ => (1.0, 0.0),
-                        }
-                    }
-                    None if v.page == Page::Notify && has_notes => (0.0, 1.0),
-                    None => (1.0, 0.0),
-                };
-                if let (Some(b), true) = (v.battery, battery_a > 0.0) {
-                    text(&b.label(), F_LABEL, rect(hr - 92.0 * s, ht, hr, hb), trail, grey(0.6, a * battery_a))?;
-                }
-                if clear_a > 0.0 {
-                    let hot = v.hovered == Some(Button::NotesClear);
-                    text(tr("Xóa hết", "Clear all"), F_LABEL, rect(hr - 92.0 * s, ht, hr, hb), trail, grey(if hot { 1.0 } else { 0.6 }, a * clear_a))?;
+                if let Some(b) = v.battery {
+                    text(&b.label(), F_LABEL, rect(hr - 92.0 * s, ht, hr, hb), trail, grey(0.6, a))?;
                 }
                 // Date · time in the middle of the header.
                 text(&format!("{} · {}", v.date, v.time), F_LABEL, rect(cx - 80.0 * s, ht, cx + 80.0 * s, hb), center, grey(0.85, a))?;
@@ -2288,6 +2272,14 @@ impl Renderer {
                             }
                             rt.PopAxisAlignedClip();
                             scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
+                            if let Some(cb) = rect_of(Button::NotesClear) {
+                                let hot = hovered == Some(Button::NotesClear);
+                                let pill = rounded(cb, CLEAR_H / 2.0 * s);
+                                rt.FillRoundedRectangle(&pill, &self.brush(grey(if hot { 0.28 } else { 0.16 }, a))?);
+                                let edge = rounded(rect(cb.left + 0.5, cb.top + 0.5, cb.right - 0.5, cb.bottom - 0.5), CLEAR_H / 2.0 * s);
+                                rt.DrawRoundedRectangle(&edge, &self.brush(grey(1.0, a * if hot { 0.35 } else { 0.22 }))?, 1.0 * s, None);
+                                text(tr("Xóa hết", "Clear all"), F_LABEL, cb, center, grey(if hot { 1.0 } else { 0.85 }, a))?;
+                            }
                         }
                         Page::Weather => {
                             draw_input(tr("Nhập thành phố (vd: Hà Nội, Đà Nẵng)", "Type a city (e.g. Hanoi, Da Nang)"))?;
@@ -2793,14 +2785,15 @@ mod tests {
     }
 
     #[test]
-    fn clear_all_sits_at_the_end_of_the_header_only_with_notifications() {
+    fn clear_all_sits_under_the_rows_clear_of_the_bottom_edge() {
+        let [_, panel_h, _] = target(Mode::Expanded, false);
+        assert!(CLEAR_Y >= NOTE_Y + NOTE_H * NOTE_ROWS as f32, "below the last row");
+        assert!(panel_h - (CLEAR_Y + CLEAR_H) >= 12.0, "well inside the panel's bottom edge");
         for scale in [1.0, 1.5] {
             let cx = 265.0 * scale;
-            let right = cx + (220.0 - PAD - 10.0) * scale;
-            let y = 17.0 * scale;
-            assert_eq!(hit_button(cx, scale, right, y, None, Page::Notify, 2, 0, None, false), Some(Button::NotesClear));
-            assert_eq!(hit_button(cx, scale, right, y, None, Page::Notify, 0, 0, None, false), None, "nothing to clear: no button");
-            assert_eq!(hit_button(cx, scale, right, DOTS_Y * scale, None, Page::Notify, 2, 0, None, false), None, "gone from the dots row");
+            let (x, y) = (cx + (220.0 - SIDE - 10.0) * scale, (CLEAR_Y + CLEAR_H / 2.0) * scale);
+            assert_eq!(hit_button(cx, scale, x, y, None, Page::Notify, 2, 0, None, false), Some(Button::NotesClear));
+            assert_eq!(hit_button(cx, scale, x, y, None, Page::Notify, 0, 0, None, false), None, "nothing to clear: no button");
         }
     }
 
@@ -3099,7 +3092,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "writes target/notify-preview.bmp: the Notifications page with two rows"]
+    #[ignore = "writes target/notify-preview.bmp: the Notifications page with a full list"]
     fn notify_preview() {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -3108,7 +3101,9 @@ mod tests {
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Notify preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let note = |app: &str, title: &str, body: &str, at: u64| Note { id: String::new(), app: app.into(), title: title.into(), body: body.into(), at, open: None };
             let notes = [note("ScreenSketch", "Screenshot copied to clipboard", "Automatically saved to screenshots folder.", 202610291557),
-                note("Zalo", "Anh Minh", "Tối nay 8h họp nhóm nhé", 202610291402)];
+                note("Zalo", "Anh Minh", "Tối nay 8h họp nhóm nhé", 202610291402),
+                note("DolbySettings", "Headphones (UGREEN HiTune Max5c)", "", 202610290207),
+                note("Outlook", "Lịch họp tuần", "Phòng 3, 9:00 thứ Hai", 202610281730)];
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "16:00", date: "T5, 29/10",
                 battery: Some(Battery { percent: 79, charging: true, saver: false }), banner: None, music: None, live: false, robot: None,
                 phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: &notes,
