@@ -1,4 +1,4 @@
-"""Compose the 30 s TikTok promo (1080 x 1920, 30 fps) around the notch layer.
+"""Compose the TikTok promo (1080 x 1920, 30 fps: a 3 s intro, then 30 s of the notch).
 
 The notch layer comes from the app's own painter: `cargo test -- --ignored promo_frames` writes
 target/promo/notch-vi.mov and notch-en.mov (set PUW_FFMPEG and PUW_PREVIEW_COVER). This script puts
@@ -52,6 +52,10 @@ CARD = {
     "vi": ("Chiếc notch sống ngay trên Windows của bạn.", "Miễn phí trên GitHub · erikpuw/puw_notch"),
     "en": ("A notch that lives on your Windows.", "Free on GitHub · erikpuw/puw_notch"),
 }
+INTRO_LINE = {"vi": "Notch kiểu Dynamic Island cho Windows", "en": "A Dynamic Island–style notch for Windows"}
+# Seconds of intro (the icon pops in, the name slides up) before the 30 s of the notch; its last
+# INTRO_FADE seconds cross-fade into the screen. All times below are on the notch's clock.
+INTRO, INTRO_FADE = 3.0, 0.6
 CARD_AT = 27.0
 # Pointer path: (time, x, y) keyframes, eased between; clicks at the page changes.
 POINTER = [(6.3, 760, 980), (7.0, 540, 340), (9.6, 545, 345), (10.2, LAYER_X + 876, LAYER_Y + 184),
@@ -139,6 +143,34 @@ def pointer_img():
     return img.resize((48, 64), Image.LANCZOS)
 
 
+def intro(lang):
+    """The intro's backdrop (dark, a violet glow in the middle) and its name + line, as arrays."""
+    top, bottom = np.array([10, 10, 14]), np.array([22, 16, 32])
+    ramp = np.linspace(0, 1, H)[:, None, None]
+    bg = Image.fromarray((top + (bottom - top) * ramp).repeat(W, axis=1).astype(np.uint8))
+    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).ellipse((W / 2 - 330, 560, W / 2 + 330, 1220), fill=(120, 90, 220, 90))
+    glow = glow.filter(ImageFilter.GaussianBlur(90))
+    bg.paste(glow, (0, 0), glow)
+    words = Image.new("RGBA", (W, 260), (0, 0, 0, 0))
+    d = ImageDraw.Draw(words)
+    d.text((W / 2, 70), "PUW Notch", font=ImageFont.truetype(BOLD, 120), fill=(255, 255, 255, 255), anchor="mm")
+    d.text((W / 2, 180), INTRO_LINE[lang], font=fit(SEMI, 44, INTRO_LINE[lang]), fill=(205, 200, 225, 255), anchor="mm")
+    return np.asarray(bg, dtype=np.float32) / 255.0, rgba(words)
+
+
+def intro_frame(backdrop, icon, words, t):
+    """The intro at `t` seconds: the icon pops in, then the name and the line slide up."""
+    frame = backdrop.copy()
+    s = ease_back((t - 0.15) / 0.6)
+    if s > 0.01:
+        side = max(2, round(260 * s))
+        over(frame, rgba(icon.resize((side, side), Image.LANCZOS)), (W - side) // 2, 700 + (260 - side) // 2, alpha=min(1.0, (t - 0.15) / 0.25))
+    k = ease((t - 0.6) / 0.5)
+    over(frame, words, 0, 1010 + round(40 * (1 - k)), alpha=k)
+    return frame
+
+
 def card(lang):
     slogan, link = CARD[lang]
     icon = Image.open(os.path.join(ROOT, "assets", "puw_1024.png")).convert("RGBA").resize((240, 240), Image.LANCZOS)
@@ -169,14 +201,24 @@ def main():
     m = np.asarray(screen_mask, dtype=np.float32)[:, :, None] / 255.0
     clip[:] = m[:LAYER_H, LAYER_X - SCREEN[0]:LAYER_X - SCREEN[0] + LAYER_W]
     captions = [(a, b, text_block(t, s)) for a, b, t, s in CAPTIONS[lang]]
-    cursor = rgba(pointer_img())
+    pointer = pointer_img()
+    cursor, pressed = rgba(pointer), rgba(pointer.resize((40, 53), Image.LANCZOS))
     icon, words = card(lang)
+    backdrop, intro_words = intro(lang)
+    big_icon = Image.open(os.path.join(ROOT, "assets", "puw_1024.png")).convert("RGBA").resize((260, 260), Image.LANCZOS)
     reader = subprocess.Popen([ffmpeg, "-loglevel", "error", "-i", src, "-f", "rawvideo", "-pix_fmt", "bgra", "-"], stdout=subprocess.PIPE)
     writer = subprocess.Popen([ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
                                "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", dst], stdin=subprocess.PIPE)
     size = LAYER_W * LAYER_H * 4
-    for i in range(FPS * SECONDS):
-        t = i / FPS
+    for i in range(round(FPS * (INTRO + SECONDS))):
+        t = i / FPS - INTRO
+        if t < 0:
+            frame = intro_frame(backdrop, big_icon, intro_words, t + INTRO)
+            k = ease((t + INTRO_FADE) / INTRO_FADE)
+            if k > 0:
+                frame = frame * (1 - k) + base * k
+            writer.stdin.write((np.clip(frame, 0, 1) * 255).astype(np.uint8).tobytes())
+            continue
         raw = reader.stdout.read(size)
         if len(raw) < size:
             break
@@ -197,8 +239,7 @@ def main():
                     r = 12 + 44 * ease(k)
                     ImageDraw.Draw(ring).ellipse((60 - r, 60 - r, 60 + r, 60 + r), outline=(255, 255, 255, round(200 * (1 - k))), width=4)
                     over(frame, rgba(ring), round(x) - 60, round(y) - 60)
-            press = 0.82 if any(0 <= t - c < 0.12 for c in CLICKS) else 1.0
-            cur = cursor if press == 1.0 else rgba(Image.fromarray((np.clip(cursor, 0, 1) * 255).astype(np.uint8)).resize((40, 53), Image.LANCZOS))
+            cur = pressed if any(0 <= t - c < 0.12 for c in CLICKS) else cursor
             over(frame, cur, round(x) - 4, round(y) - 4, alpha=fade)
         if t >= CARD_AT:
             k = (t - CARD_AT) / 0.6
