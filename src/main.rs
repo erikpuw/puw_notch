@@ -1220,6 +1220,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
 /// on screen and leaves nothing in the event log otherwise.
 fn main() -> windows::core::Result<()> {
     let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    system::log_open();
     system::log(&format!("start v{} pid {} cwd {cwd}", env!("CARGO_PKG_VERSION"), std::process::id()));
     std::panic::set_hook(Box::new(|info| system::log(&format!("panic: {info}"))));
     let result = run();

@@ -130,18 +130,39 @@ fn settings_path() -> Option<PathBuf> {
 /// Largest notch.log may grow before it starts over.
 const LOG_MAX: u64 = 64 * 1024;
 
+fn log_path() -> Option<PathBuf> {
+    settings_path().map(|p| p.with_file_name("notch.log"))
+}
+
+/// First line of notch.log: the version that wrote it.
+fn log_header() -> String {
+    format!("PUW Notch v{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// A log written by another version is of no use for this one: start it over.
+pub fn log_open() {
+    let Some(p) = log_path() else { return };
+    let first = std::fs::read_to_string(&p).ok().and_then(|s| s.lines().next().map(str::to_string));
+    if first.as_deref() != Some(&log_header()) {
+        let _ = std::fs::remove_file(&p);
+    }
+}
+
 /// One line in %APPDATA%\PuwNotch\notch.log: starts, exits and failures, so a start that dies
 /// before anything shows (a start with Windows) can be traced. Best effort, never fails.
 pub fn log(line: &str) {
     use std::io::Write;
-    let Some(p) = settings_path().map(|p| p.with_file_name("notch.log")) else { return };
+    let Some(p) = log_path() else { return };
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let fresh = std::fs::metadata(&p).map_or(false, |m| m.len() > LOG_MAX);
+    let fresh = std::fs::metadata(&p).map_or(true, |m| m.len() > LOG_MAX);
     let file = std::fs::OpenOptions::new().create(true).write(true).append(!fresh).truncate(fresh).open(&p);
     let t = unsafe { GetLocalTime() };
     if let Ok(mut f) = file {
+        if fresh {
+            let _ = writeln!(f, "{}", log_header());
+        }
         let _ = writeln!(f, "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {line}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
     }
 }
