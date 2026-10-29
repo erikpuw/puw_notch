@@ -221,9 +221,32 @@ pub fn save_settings(s: Settings) {
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_NAME: PCWSTR = w!("PuwNotch");
 
+/// The Run entry's command for this exe: the path in quotes (spaces in a folder name).
+fn autostart_command(exe: &std::path::Path) -> String {
+    format!("\"{}\"", exe.display())
+}
+
+/// What the Run entry holds now, None when there is none.
+fn autostart_value() -> Option<String> {
+    let mut buf = [0u16; 1024];
+    let mut bytes = (buf.len() * 2) as u32;
+    let r = unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr().cast()), Some(&mut bytes)) };
+    (r == ERROR_SUCCESS).then(|| String::from_utf16_lossy(&buf[..(bytes as usize / 2).saturating_sub(1)]))
+}
+
+/// On only when the entry starts this very exe: one left from another folder (an older version, a
+/// deleted download) is not "on", it starts nothing.
 pub fn autostart_enabled() -> bool {
-    let r = unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, RRF_RT_REG_SZ, None, None, None) };
-    r == ERROR_SUCCESS
+    let Ok(exe) = std::env::current_exe() else { return false };
+    autostart_value().is_some_and(|v| v.eq_ignore_ascii_case(&autostart_command(&exe)))
+}
+
+/// An entry that points somewhere else is pointed at this exe, so a new version unpacked in a new
+/// folder keeps starting with Windows without the switch being turned off and on again.
+pub fn refresh_autostart() {
+    if autostart_value().is_some() && !autostart_enabled() {
+        set_autostart(true);
+    }
 }
 
 pub fn set_autostart(on: bool) {
@@ -233,7 +256,7 @@ pub fn set_autostart(on: bool) {
             return;
         }
         let Ok(exe) = std::env::current_exe() else { return };
-        let value: Vec<u16> = format!("\"{}\"", exe.display()).encode_utf16().chain([0]).collect();
+        let value: Vec<u16> = autostart_command(&exe).encode_utf16().chain([0]).collect();
         let _ = RegSetKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, REG_SZ.0, Some(value.as_ptr().cast()), (value.len() * 2) as u32);
     }
 }
@@ -244,6 +267,11 @@ mod tests {
 
     fn b(percent: u8, charging: bool, saver: bool) -> Battery {
         Battery { percent, charging, saver }
+    }
+
+    #[test]
+    fn autostart_command_quotes_the_path() {
+        assert_eq!(autostart_command(std::path::Path::new(r"C:\Users\A B\Telegram Desktop\puw_notch.exe")), r#""C:\Users\A B\Telegram Desktop\puw_notch.exe""#);
     }
 
     #[test]

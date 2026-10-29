@@ -1237,6 +1237,7 @@ fn run() -> windows::core::Result<()> {
             system::log("already running, leaving");
             return Ok(());
         }
+        system::refresh_autostart();
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
