@@ -244,11 +244,13 @@ const CREDIT_W: f32 = 126.0;
 const NOTE_Y: f32 = 36.0;
 const NOTE_H: f32 = 38.0;
 pub const NOTE_ROWS: usize = 3;
-/// "Clear all" under the rows, right-aligned with their times: a pill button, 14 px clear of the
-/// panel's bottom edge.
+/// "Clear all" under the rows, right-aligned with their times: a pill hugging its label (the click
+/// area is this wide), inside the pages' clip, which ends at DOTS_Y - 3.
 const CLEAR_W: f32 = 64.0;
-const CLEAR_H: f32 = 20.0;
-const CLEAR_Y: f32 = NOTE_Y + NOTE_H * NOTE_ROWS as f32 + 2.0;
+const CLEAR_H: f32 = 18.0;
+const CLEAR_Y: f32 = NOTE_Y + NOTE_H * NOTE_ROWS as f32 + 1.0;
+/// Room between the label and the pill's edge on each side.
+const CLEAR_PAD: f32 = 9.0;
 /// Health page cards.
 const CARD_TOP: f32 = 34.0;
 const CARD_BOTTOM: f32 = 158.0;
@@ -2274,11 +2276,14 @@ impl Renderer {
                             scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
                             if let Some(cb) = rect_of(Button::NotesClear) {
                                 let hot = hovered == Some(Button::NotesClear);
-                                let pill = rounded(cb, CLEAR_H / 2.0 * s);
-                                rt.FillRoundedRectangle(&pill, &self.brush(grey(if hot { 0.28 } else { 0.16 }, a))?);
-                                let edge = rounded(rect(cb.left + 0.5, cb.top + 0.5, cb.right - 0.5, cb.bottom - 0.5), CLEAR_H / 2.0 * s);
-                                rt.DrawRoundedRectangle(&edge, &self.brush(grey(1.0, a * if hot { 0.35 } else { 0.22 }))?, 1.0 * s, None);
-                                text(tr("Xóa hết", "Clear all"), F_LABEL, cb, center, grey(if hot { 1.0 } else { 0.85 }, a))?;
+                                let label = tr("Xóa hết", "Clear all");
+                                let pw = (width(label, F_LABEL) + 2.0 * CLEAR_PAD * s).min(cb.right - cb.left);
+                                let pb = rect((cb.right - pw).round(), cb.top.round(), cb.right.round(), cb.bottom.round());
+                                let radius = (pb.bottom - pb.top) / 2.0;
+                                rt.FillRoundedRectangle(&rounded(pb, radius), &self.brush(grey(if hot { 0.28 } else { 0.16 }, a))?);
+                                let edge = rect(pb.left + 0.5, pb.top + 0.5, pb.right - 0.5, pb.bottom - 0.5);
+                                rt.DrawRoundedRectangle(&rounded(edge, radius - 0.5), &self.brush(grey(1.0, a * if hot { 0.35 } else { 0.22 }))?, 1.0, None);
+                                text(label, F_LABEL, pb, center, grey(if hot { 1.0 } else { 0.85 }, a))?;
                             }
                         }
                         Page::Weather => {
@@ -2789,6 +2794,7 @@ mod tests {
         let [_, panel_h, _] = target(Mode::Expanded, false);
         assert!(CLEAR_Y >= NOTE_Y + NOTE_H * NOTE_ROWS as f32, "below the last row");
         assert!(panel_h - (CLEAR_Y + CLEAR_H) >= 12.0, "well inside the panel's bottom edge");
+        assert!(CLEAR_Y + CLEAR_H + 1.0 <= DOTS_Y - 3.0, "whole, border included, inside the pages' clip");
         for scale in [1.0, 1.5] {
             let cx = 265.0 * scale;
             let (x, y) = (cx + (220.0 - SIDE - 10.0) * scale, (CLEAR_Y + CLEAR_H / 2.0) * scale);
