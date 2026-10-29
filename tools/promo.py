@@ -7,11 +7,12 @@ pointer that opens the panel and clicks through the pages, and the closing card.
 
     python -I tools/promo.py vi|en [ffmpeg] [wallpaper]
 
-Writes target/promo/puw-notch-promo-<lang>.mp4 (H.264, no audio: TikTok adds the music).
+Writes target/promo/puw-notch-promo-<lang>.mp4 (H.264 + AAC: a synthesised lo-fi bed and effects).
 """
 import os
 import subprocess
 import sys
+import wave
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -215,6 +216,121 @@ def card(lang):
     return icon, rgba(words)
 
 
+RATE = 48000
+BPM = 100
+
+
+def soundtrack(path):
+    """The promo's sound, synthesised here (nothing licensed): a quiet lo-fi bed at BPM and an
+    effect on every move of the video, written as 16-bit stereo WAV. Times are on the video's clock."""
+    total = INTRO + SECONDS
+    n = int(total * RATE)
+    mix = np.zeros((n, 2), np.float32)
+    rng = np.random.default_rng(7)
+
+    def env(m, attack, release):
+        x = np.arange(m) / RATE
+        return np.minimum(1.0, x / max(attack, 1e-4)) * np.exp(-x / max(release, 1e-4))
+
+    def put(sig, at, gain=1.0, pan=0.0):
+        i = int(at * RATE)
+        if i >= n:
+            return
+        sig = sig[: n - i] * gain
+        mix[i:i + len(sig), 0] += sig * (1 - max(pan, 0))
+        mix[i:i + len(sig), 1] += sig * (1 + min(pan, 0))
+
+    def lowpass(x, cut):
+        a = np.exp(-2 * np.pi * cut / RATE)
+        y = np.empty_like(x)
+        acc = 0.0
+        for i, v in enumerate(x):  # ponytail: per-sample loop, fine for a few seconds of effects
+            acc = (1 - a) * v + a * acc
+            y[i] = acc
+        return y
+
+    def sweep(f0, f1, dur, attack=0.004, release=0.08):
+        m = int(dur * RATE)
+        f = np.geomspace(f0, f1, m)
+        return np.sin(2 * np.pi * np.cumsum(f) / RATE) * env(m, attack, release)
+
+    def bell(freq, dur=1.2, release=0.35):
+        m = int(dur * RATE)
+        x = np.arange(m) / RATE
+        tone = np.sin(2 * np.pi * freq * x) + 0.35 * np.sin(2 * np.pi * freq * 2.76 * x) * np.exp(-x / 0.12)
+        return tone * env(m, 0.002, release)
+
+    def noise(dur, cut, attack, release):
+        m = int(dur * RATE)
+        return lowpass(rng.standard_normal(m).astype(np.float32), cut) * env(m, attack, release)
+
+    def whoosh(dur, up=True):
+        m = int(dur * RATE)
+        x = np.linspace(0, 1, m)
+        shape = np.sin(np.pi * (x if up else 1 - x) ** 0.7) ** 2
+        return lowpass(rng.standard_normal(m).astype(np.float32), 2500) * shape
+
+    def click():
+        return noise(0.03, 6000, 0.0005, 0.006) * 0.8 + sweep(3200, 2400, 0.03, 0.0005, 0.008) * 0.3
+
+    # The bed: Cmaj7 - Am7 - Fmaj7 - G6, a chord a bar, soft pad + kick + hats.
+    beat = 60 / BPM
+    chords = [[48, 55, 59, 64], [45, 52, 55, 60], [41, 48, 52, 57], [43, 50, 52, 59]]
+    hz = lambda note: 440 * 2 ** ((note - 69) / 12)
+    bar = 4 * beat
+    m = int(bar * RATE)
+    x = np.arange(m) / RATE
+    pad_env = np.minimum(1, x / 0.35) * np.minimum(1, (bar - x) / 0.25)
+    t0 = INTRO - 0.4  # the beat comes in as the notch appears
+    k = 0
+    while t0 + k * bar < total:
+        notes = chords[k % 4]
+        pad = sum(np.sin(2 * np.pi * hz(nn + 12) * x * d) for nn in notes for d in (0.997, 1.003))
+        put(pad * pad_env / 8, t0 + k * bar, 0.10)
+        put(np.sin(2 * np.pi * hz(notes[0] - 12) * x) * pad_env, t0 + k * bar, 0.10)
+        for b in range(4):
+            at = t0 + k * bar + b * beat
+            if b % 2 == 0:
+                put(sweep(120, 45, 0.35, 0.002, 0.12), at, 0.30)
+            put(noise(0.05, 9000, 0.001, 0.012), at + beat / 2, 0.05, pan=0.3)
+        k += 1
+    # The intro's soft drone under the icon, before the beat.
+    put(sum(np.sin(2 * np.pi * hz(nn + 12) * np.arange(int(INTRO * RATE)) / RATE) for nn in (48, 55, 64))
+        * np.minimum(1, np.arange(int(INTRO * RATE)) / RATE / 0.6) / 3, 0, 0.05)
+
+    v = lambda t: INTRO + t  # notch clock -> video clock
+    put(sweep(320, 980, 0.18), 0.10, 0.45)                       # icon pops in
+    put(click(), 0.85, 0.5)                                      # blink: eyes shut
+    put(click(), 1.0, 0.35)                                      # and open
+    put(whoosh(0.9), 1.45, 0.35, pan=-0.2)                       # flies up into the notch
+    put(sweep(180, 420, 0.25, 0.01, 0.12), v(0.0), 0.35)         # the notch grows
+    for f, d in ((784, 0), (1175, 0.09)):                        # music starts
+        put(bell(f, 0.9, 0.3), v(4.0) + d, 0.18)
+    put(whoosh(0.45), v(7.3), 0.3)                               # panel opens
+    for c in CLICKS:
+        put(click(), v(c), 0.6, pan=0.25)                         # pointer clicks
+        put(whoosh(0.3), v(c) + 0.02, 0.15, pan=-0.25)            # page slides
+    put(whoosh(0.4, up=False), v(18.6), 0.25)                    # panel closes
+    for f, d in ((988, 0), (1319, 0.12)):                        # notification banner
+        put(bell(f, 1.2, 0.4), v(19.6) + d, 0.28)
+    for i, note in enumerate((84, 88, 91, 96)):                  # the robot shows up
+        put(sweep(hz(note), hz(note) * 1.02, 0.09, 0.003, 0.05), v(23.8) + i * 0.07, 0.22)
+    put(whoosh(0.8), v(CARD_AT) - 0.5, 0.25)                     # closing card
+    for i, note in enumerate((72, 76, 79, 84, 88)):
+        put(bell(hz(note), 2.2, 0.8), v(CARD_AT) + 0.05 + i * 0.06, 0.12, pan=(i - 2) * 0.15)
+
+    fade = np.ones(n, np.float32)
+    tail = int(1.2 * RATE)
+    fade[-tail:] = np.linspace(1, 0, tail)
+    mix *= fade[:, None]
+    mix /= max(1.0, np.abs(mix).max() / 0.89)
+    with wave.open(path, "wb") as f:
+        f.setnchannels(2)
+        f.setsampwidth(2)
+        f.setframerate(RATE)
+        f.writeframes((mix * 32767).astype(np.int16).tobytes())
+
+
 def pointer_at(t):
     for (t0, x0, y0), (t1, x1, y1) in zip(POINTER, POINTER[1:]):
         if t <= t1:
@@ -239,8 +355,11 @@ def main():
     icon, words = card(lang)
     back = backdrop()
     reader = subprocess.Popen([ffmpeg, "-loglevel", "error", "-i", src, "-f", "rawvideo", "-pix_fmt", "bgra", "-"], stdout=subprocess.PIPE)
-    writer = subprocess.Popen([ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-                               "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", dst], stdin=subprocess.PIPE)
+    audio = os.path.join(ROOT, "target", "promo", "soundtrack.wav")
+    soundtrack(audio)
+    writer = subprocess.Popen([ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", audio,
+                               "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", str(RATE), "-c:a", "aac", "-b:a", "192k", "-shortest",
+                               "-movflags", "+faststart", dst], stdin=subprocess.PIPE)
     size = LAYER_W * LAYER_H * 4
     for i in range(round(FPS * (INTRO + SECONDS))):
         t = i / FPS - INTRO
