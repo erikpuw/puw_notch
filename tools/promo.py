@@ -1,4 +1,4 @@
-"""Compose the TikTok promo (1080 x 1920, 30 fps: a 3 s intro, then 30 s of the notch).
+"""Compose the TikTok promo (1080 x 1920, 30 fps: a 2.6 s intro, then 30 s of the notch).
 
 The notch layer comes from the app's own painter: `cargo test -- --ignored promo_frames` writes
 target/promo/notch-vi.mov and notch-en.mov (set PUW_FFMPEG and PUW_PREVIEW_COVER). This script puts
@@ -52,10 +52,11 @@ CARD = {
     "vi": ("Chiếc notch sống ngay trên Windows của bạn.", "Miễn phí trên GitHub · erikpuw/puw_notch"),
     "en": ("A notch that lives on your Windows.", "Free on GitHub · erikpuw/puw_notch"),
 }
-INTRO_LINE = {"vi": "Notch kiểu Dynamic Island cho Windows", "en": "A Dynamic Island–style notch for Windows"}
-# Seconds of intro (the icon pops in, the name slides up) before the 30 s of the notch; its last
-# INTRO_FADE seconds cross-fade into the screen. All times below are on the notch's clock.
-INTRO, INTRO_FADE = 3.0, 0.6
+# Seconds of intro before the 30 s of the notch: the icon pops in, blinks, then shrinks into the
+# thin line at the top of the screen that the notch grows from. All times below are on the notch's clock.
+INTRO = 2.6
+ICON_SIDE, ICON_Y = 260, 700
+MINI_W, MINI_H = 88, 8  # the notch's first frame: the mini line (44 x 4) at 2x
 CARD_AT = 27.0
 # Pointer path: (time, x, y) keyframes, eased between; clicks at the page changes.
 POINTER = [(6.3, 760, 980), (7.0, 540, 340), (9.6, 545, 345), (10.2, LAYER_X + 876, LAYER_Y + 184),
@@ -143,31 +144,63 @@ def pointer_img():
     return img.resize((48, 64), Image.LANCZOS)
 
 
-def intro(lang):
-    """The intro's backdrop (dark, a violet glow in the middle) and its name + line, as arrays."""
+def backdrop():
+    """The intro's backdrop: dark, with a violet glow behind the icon."""
     top, bottom = np.array([10, 10, 14]), np.array([22, 16, 32])
     ramp = np.linspace(0, 1, H)[:, None, None]
     bg = Image.fromarray((top + (bottom - top) * ramp).repeat(W, axis=1).astype(np.uint8))
     glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ImageDraw.Draw(glow).ellipse((W / 2 - 330, 560, W / 2 + 330, 1220), fill=(120, 90, 220, 90))
+    cy = ICON_Y + ICON_SIDE / 2
+    ImageDraw.Draw(glow).ellipse((W / 2 - 330, cy - 330, W / 2 + 330, cy + 330), fill=(120, 90, 220, 90))
     glow = glow.filter(ImageFilter.GaussianBlur(90))
     bg.paste(glow, (0, 0), glow)
-    words = Image.new("RGBA", (W, 260), (0, 0, 0, 0))
-    d = ImageDraw.Draw(words)
-    d.text((W / 2, 70), "PUW Notch", font=ImageFont.truetype(BOLD, 120), fill=(255, 255, 255, 255), anchor="mm")
-    d.text((W / 2, 180), INTRO_LINE[lang], font=fit(SEMI, 44, INTRO_LINE[lang]), fill=(205, 200, 225, 255), anchor="mm")
-    return np.asarray(bg, dtype=np.float32) / 255.0, rgba(words)
+    return np.asarray(bg, dtype=np.float32) / 255.0
 
 
-def intro_frame(backdrop, icon, words, t):
-    """The intro at `t` seconds: the icon pops in, then the name and the line slide up."""
-    frame = backdrop.copy()
-    s = ease_back((t - 0.15) / 0.6)
-    if s > 0.01:
-        side = max(2, round(260 * s))
-        over(frame, rgba(icon.resize((side, side), Image.LANCZOS)), (W - side) // 2, 700 + (260 - side) // 2, alpha=min(1.0, (t - 0.15) / 0.25))
-    k = ease((t - 0.6) / 0.5)
-    over(frame, words, 0, 1010 + round(40 * (1 - k)), alpha=k)
+def icon_img(w, h, eyes):
+    """The app icon (assets/puw_1024.png's shapes, on its 1024 grid) at w x h, eyes open 0..1."""
+    s = 3
+    kx, ky = w * s / 1024, h * s / 1024
+    img = Image.new("RGBA", (max(1, round(w * s)), max(1, round(h * s))), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    k = min(kx, ky)
+    d.rounded_rectangle((0, 0, 1023 * kx, 1023 * ky), 220 * k, fill=(28, 28, 34, 255))
+    d.rounded_rectangle((67 * kx, 67 * ky, 957 * kx, 957 * ky), 155 * k, fill=(250, 250, 252, 255))
+    half = max(10.0, 138.5 * eyes)
+    for x0 in (261, 589):
+        d.rounded_rectangle((x0 * kx, (512.5 - half) * ky, (x0 + 175) * kx, (512.5 + half) * ky), min(40, half) * k, fill=(20, 20, 24, 255))
+    return img.resize((max(1, round(w)), max(1, round(h))), Image.LANCZOS)
+
+
+def blink(t):
+    """How open the eyes are at `t`: one blink at 0.85 s."""
+    u = (t - 0.85) / 0.3
+    return 1.0 if not 0 <= u <= 1 else abs(1 - 2 * u) ** 0.8
+
+
+def intro_frame(back, base, t):
+    """The intro at `t` seconds: the icon pops in on the dark backdrop and blinks; from MORPH it
+    shrinks, turns black and flies up into the mini line at the top of the screen, which fades in."""
+    morph0, morph1 = 1.45, 2.45
+    m = ease((t - morph0) / (morph1 - morph0))
+    k_bg = ease((t - morph0) / 0.8)
+    frame = back * (1 - k_bg) + base * k_bg
+    pop = ease_back((t - 0.1) / 0.55)
+    if pop <= 0.01:
+        return frame
+    w = (ICON_SIDE + (MINI_W - ICON_SIDE) * m) * (pop if m == 0 else 1)
+    h = (ICON_SIDE + (MINI_H - ICON_SIDE) * m) * (pop if m == 0 else 1)
+    cy = ICON_Y + ICON_SIDE / 2 + (SCREEN[1] + MINI_H / 2 - ICON_Y - ICON_SIDE / 2) * m
+    x, y = round(W / 2 - w / 2), round(cy - h / 2)
+    alpha = min(1.0, (t - 0.1) / 0.2)
+    # The black shape it becomes, under the icon that fades out in the first part of the morph.
+    if m > 0:
+        shape = Image.new("RGBA", (max(1, round(w)), max(1, round(h))), (0, 0, 0, 0))
+        ImageDraw.Draw(shape).rounded_rectangle((0, 0, shape.width - 1, shape.height - 1), min(w, h) * (0.22 + 0.28 * m), fill=(0, 0, 0, 255))
+        over(frame, rgba(shape), x, y)
+    fade = 1 - ease(m / 0.45)
+    if fade > 0.01:
+        over(frame, rgba(icon_img(w, h, blink(t))), x, y, alpha=alpha * fade)
     return frame
 
 
@@ -204,8 +237,7 @@ def main():
     pointer = pointer_img()
     cursor, pressed = rgba(pointer), rgba(pointer.resize((40, 53), Image.LANCZOS))
     icon, words = card(lang)
-    backdrop, intro_words = intro(lang)
-    big_icon = Image.open(os.path.join(ROOT, "assets", "puw_1024.png")).convert("RGBA").resize((260, 260), Image.LANCZOS)
+    back = backdrop()
     reader = subprocess.Popen([ffmpeg, "-loglevel", "error", "-i", src, "-f", "rawvideo", "-pix_fmt", "bgra", "-"], stdout=subprocess.PIPE)
     writer = subprocess.Popen([ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
                                "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", dst], stdin=subprocess.PIPE)
@@ -213,10 +245,7 @@ def main():
     for i in range(round(FPS * (INTRO + SECONDS))):
         t = i / FPS - INTRO
         if t < 0:
-            frame = intro_frame(backdrop, big_icon, intro_words, t + INTRO)
-            k = ease((t + INTRO_FADE) / INTRO_FADE)
-            if k > 0:
-                frame = frame * (1 - k) + base * k
+            frame = intro_frame(back, base, t + INTRO)
             writer.stdin.write((np.clip(frame, 0, 1) * 255).astype(np.uint8).tobytes())
             continue
         raw = reader.stdout.read(size)
