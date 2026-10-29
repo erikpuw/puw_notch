@@ -863,8 +863,12 @@ struct Surface {
 
 const PIXELS: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED };
 
-/// A D3D11 device on the GPU (WARP, the CPU rasteriser, when the driver gives none) and a Direct2D
-/// context drawing with it.
+/// A D3D11 device on Windows' default GPU (WARP, the CPU rasteriser, when the driver gives none) and
+/// a Direct2D context drawing with it. The default is the GPU showing the primary monitor, where the
+/// notch sits: on a laptop with integrated + discrete GPUs that is the integrated one, so nothing is
+/// copied across GPUs and the discrete one stays asleep. Only a "High performance" choice for the app
+/// (Windows graphics settings, NVIDIA/AMD panel) moves it to the discrete GPU, and Windows then
+/// reports the monitor there too, so no app can pick otherwise (checked 2026-10-29, UHD + RTX 4060).
 fn gpu_device(factory: &ID2D1Factory) -> Result<(ID3D11Device, ID2D1DeviceContext, ID2D1RenderTarget)> {
     unsafe {
         let make = |driver: D3D_DRIVER_TYPE| -> Result<ID3D11Device> {
@@ -874,6 +878,10 @@ fn gpu_device(factory: &ID2D1Factory) -> Result<(ID3D11Device, ID2D1DeviceContex
         };
         let d3d = make(D3D_DRIVER_TYPE_HARDWARE).or_else(|_| make(D3D_DRIVER_TYPE_WARP))?;
         let dxgi: IDXGIDevice1 = d3d.cast()?;
+        if let Ok(desc) = dxgi.GetAdapter().and_then(|a| a.GetDesc()) {
+            let name = String::from_utf16_lossy(&desc.Description);
+            crate::system::log(&format!("GPU: {}", name.trim_end_matches('\0')));
+        }
         // One frame in flight: a frame shows on the next refresh instead of queueing behind others.
         dxgi.SetMaximumFrameLatency(1)?;
         let ctx = factory.cast::<ID2D1Factory1>()?.CreateDevice(&dxgi)?.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
