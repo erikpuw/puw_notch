@@ -1255,7 +1255,7 @@ fn run() -> windows::core::Result<()> {
         };
         RegisterClassExW(&wc);
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class,
             w!("PUW Notch"),
             WS_POPUP,

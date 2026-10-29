@@ -1,13 +1,19 @@
-//! Direct2D drawing into a 32-bit DIB, shown with UpdateLayeredWindow (per-pixel alpha).
-//! Pixels with alpha 0 let the mouse through, so the drawn shape is the hit area.
+//! Direct2D drawing on the GPU into a DXGI swap chain shown through DirectComposition: frames never
+//! come back to the CPU (UpdateLayeredWindow needed a GPU-to-CPU read-back per frame, which stalled
+//! the UI thread while the GPU was busy, e.g. decoding a video). The window region is the drawn
+//! shape's bounds, so the mouse goes through everywhere else.
 
-use windows::core::{w, Result, HSTRING, PCWSTR};
+use windows::core::{w, Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY};
-use windows::Win32::Foundation::{COLORREF, GENERIC_READ, HWND, POINT, RECT, SIZE};
+use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, GENERIC_READ, HMODULE, HWND, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::DirectWrite::*;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
@@ -758,14 +764,26 @@ unsafe fn bgra_pixels(wic: &IWICImagingFactory, src: &IWICBitmapSource) -> Optio
 
 pub struct Renderer {
     factory: ID2D1Factory,
-    rt: ID2D1DCRenderTarget,
+    d3d: ID3D11Device,
+    /// The Direct2D context on `d3d`: binds the swap chain's buffer as the target.
+    ctx: ID2D1DeviceContext,
+    /// The same context seen as a plain render target, which all the drawing uses.
+    rt: ID2D1RenderTarget,
     dw: IDWriteFactory,
     wic: Option<IWICImagingFactory>,
-    mem: HDC,
-    bmp: HBITMAP,
-    old: HGDIOBJ,
+    /// The window's swap chain and its composition tree (None until the first frame, and after the
+    /// GPU was lost).
+    surface: Option<Surface>,
     w: i32,
     h: i32,
+    /// Where the window was last put and its region, to touch them only when they change.
+    placed: (i32, i32, i32, i32),
+    region: (i32, i32, i32, i32),
+    /// Copy each frame back to `grabbed` (preview tests only).
+    #[cfg(test)]
+    grab: bool,
+    #[cfg(test)]
+    grabbed: Vec<u8>,
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
     /// Decoded cover of the current track (keyed by Track::art_key).
     cover: Option<CoverCache>,
@@ -834,54 +852,157 @@ fn rounded(r: D2D_RECT_F, radius: f32) -> D2D1_ROUNDED_RECT {
     D2D1_ROUNDED_RECT { rect: r, radiusX: radius, radiusY: radius }
 }
 
+/// A window's swap chain, shown by a DirectComposition visual.
+struct Surface {
+    hwnd: HWND,
+    swap: IDXGISwapChain1,
+    _dcomp: IDCompositionDevice,
+    _target: IDCompositionTarget,
+    _visual: IDCompositionVisual,
+}
+
+const PIXELS: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED };
+
+/// A D3D11 device on the GPU (WARP, the CPU rasteriser, when the driver gives none) and a Direct2D
+/// context drawing with it.
+fn gpu_device(factory: &ID2D1Factory) -> Result<(ID3D11Device, ID2D1DeviceContext, ID2D1RenderTarget)> {
+    unsafe {
+        let make = |driver: D3D_DRIVER_TYPE| -> Result<ID3D11Device> {
+            let mut dev = None;
+            D3D11CreateDevice(None, driver, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None, D3D11_SDK_VERSION, Some(&mut dev), None, None)?;
+            dev.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))
+        };
+        let d3d = make(D3D_DRIVER_TYPE_HARDWARE).or_else(|_| make(D3D_DRIVER_TYPE_WARP))?;
+        let dxgi: IDXGIDevice1 = d3d.cast()?;
+        // One frame in flight: a frame shows on the next refresh instead of queueing behind others.
+        dxgi.SetMaximumFrameLatency(1)?;
+        let ctx = factory.cast::<ID2D1Factory1>()?.CreateDevice(&dxgi)?.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+        ctx.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        let rt = ctx.cast()?;
+        Ok((d3d, ctx, rt))
+    }
+}
+
 impl Renderer {
     pub fn new() -> Result<Self> {
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let props = |r#type| D2D1_RENDER_TARGET_PROPERTIES {
-                r#type,
-                pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
-                dpiX: 96.0,
-                dpiY: 96.0,
-                usage: D2D1_RENDER_TARGET_USAGE_NONE,
-                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-            };
-            // On the GPU: a frame costs the CPU about half of what the software target did (0.9 vs 1.7 ms\r\n            // measured 2026-10-29), for ~25 MB more private RAM. The software target stays as the fallback\r\n            // for machines whose driver cannot give a DC target.
-            let rt = factory.CreateDCRenderTarget(&props(D2D1_RENDER_TARGET_TYPE_HARDWARE)).or_else(|_| factory.CreateDCRenderTarget(&props(D2D1_RENDER_TARGET_TYPE_SOFTWARE)))?;
-            rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            let (d3d, ctx, rt) = gpu_device(&factory)?;
             let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let wic = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
-            let mem = CreateCompatibleDC(None);
             let round = factory.CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, rt, dw, wic, mem, bmp: HBITMAP::default(), old: HGDIOBJ::default(), w: 0, h: 0, fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0),
+                #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
+                fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
-    fn ensure_surface(&mut self, w: i32, h: i32) -> Result<()> {
-        if (w, h) == (self.w, self.h) {
+    /// The GPU was reset or removed (driver update, sleep): start over on a new device. Every bitmap
+    /// belonged to the old one, so they are made again as they are needed.
+    fn lose_device(&mut self) -> Result<()> {
+        (self.d3d, self.ctx, self.rt) = gpu_device(&self.factory)?;
+        self.surface = None;
+        self.cover = None;
+        self.cover_shadow = None;
+        self.app_icons.clear();
+        Ok(())
+    }
+
+    /// A `w` x `h` swap chain composed onto `hwnd`, bound as the drawing target.
+    fn ensure_surface(&mut self, hwnd: HWND, w: i32, h: i32) -> Result<()> {
+        let same_window = self.surface.as_ref().is_some_and(|s| s.hwnd == hwnd);
+        if same_window && (w, h) == (self.w, self.h) {
             return Ok(());
         }
         unsafe {
-            if !self.bmp.is_invalid() {
-                SelectObject(self.mem, self.old);
-                let _ = DeleteObject(self.bmp.into());
+            self.ctx.SetTarget(None);
+            if same_window {
+                self.surface.as_ref().unwrap().swap.ResizeBuffers(0, w as u32, h as u32, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))?;
+            } else {
+                self.surface = None;
+                let dxgi: IDXGIDevice = self.d3d.cast()?;
+                let factory: IDXGIFactory2 = dxgi.GetAdapter()?.GetParent()?;
+                let desc = DXGI_SWAP_CHAIN_DESC1 {
+                    Width: w as u32,
+                    Height: h as u32,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                    BufferCount: 2,
+                    Scaling: DXGI_SCALING_STRETCH,
+                    SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                    AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+                    Flags: 0,
+                    ..Default::default()
+                };
+                let swap = factory.CreateSwapChainForComposition(&self.d3d, &desc, None)?;
+                let dcomp: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
+                let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
+                let visual = dcomp.CreateVisual()?;
+                visual.SetContent(&swap)?;
+                target.SetRoot(&visual)?;
+                dcomp.Commit()?;
+                self.surface = Some(Surface { hwnd, swap, _dcomp: dcomp, _target: target, _visual: visual });
             }
-            let mut bmi = BITMAPINFO::default();
-            bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = w;
-            bmi.bmiHeader.biHeight = -h;
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            let mut bits = std::ptr::null_mut();
-            self.bmp = CreateDIBSection(Some(self.mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)?;
-            self.old = SelectObject(self.mem, self.bmp.into());
-            self.rt.BindDC(self.mem, &RECT { left: 0, top: 0, right: w, bottom: h })?;
+            let buffer: IDXGISurface = self.surface.as_ref().unwrap().swap.GetBuffer(0)?;
+            let props = D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: PIXELS,
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                ..Default::default()
+            };
+            let bitmap = self.ctx.CreateBitmapFromDxgiSurface(&buffer, Some(&props))?;
+            self.ctx.SetTarget(&bitmap);
         }
         self.w = w;
         self.h = h;
+        Ok(())
+    }
+
+    /// Put the window at (x, y, w, h) and limit it to `region` (window px), each only on a change.
+    fn place(&mut self, hwnd: HWND, at: (i32, i32, i32, i32), region: (i32, i32, i32, i32)) {
+        unsafe {
+            if at != self.placed {
+                self.placed = at;
+                let _ = SetWindowPos(hwnd, None, at.0, at.1, at.2, at.3, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            if region != self.region {
+                self.region = region;
+                // The window owns the region from here on.
+                SetWindowRgn(hwnd, Some(CreateRectRgn(region.0, region.1, region.2, region.3)), false);
+            }
+        }
+    }
+
+    /// The frame just drawn, as top-down BGRA rows (preview tests).
+    #[cfg(test)]
+    fn grab_frame(&mut self) -> Result<()> {
+        unsafe {
+            let back: ID3D11Texture2D = self.surface.as_ref().unwrap().swap.GetBuffer(0)?;
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            back.GetDesc(&mut desc);
+            desc.Usage = D3D11_USAGE_STAGING;
+            desc.BindFlags = 0;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+            desc.MiscFlags = 0;
+            let mut staging = None;
+            self.d3d.CreateTexture2D(&desc, None, Some(&mut staging))?;
+            let staging = staging.unwrap();
+            let ctx = self.d3d.GetImmediateContext()?;
+            ctx.CopyResource(&staging, &back);
+            let mut map = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut map))?;
+            let row = desc.Width as usize * 4;
+            self.grabbed.clear();
+            for y in 0..desc.Height as usize {
+                self.grabbed.extend_from_slice(std::slice::from_raw_parts((map.pData as *const u8).add(y * map.RowPitch as usize), row));
+            }
+            ctx.Unmap(&staging, 0);
+        }
         Ok(())
     }
 
@@ -1344,7 +1465,7 @@ impl Renderer {
     }
 
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
-        self.ensure_surface(w, h)?;
+        self.ensure_surface(hwnd, w, h)?;
         self.take_icons();
         let fonts = self.fonts(scale)?;
         let cover = v.music.and_then(|t| self.cover(t, (COVER * scale).round() as u32, (20.0 * scale).round() as u32));
@@ -2397,20 +2518,28 @@ impl Renderer {
                     dx += dw + gap;
                 }
             }
-            rt.EndDraw(None, None)?;
-
-            let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
-            UpdateLayeredWindow(
-                hwnd,
-                None,
-                Some(&POINT { x, y }),
-                Some(&SIZE { cx: w, cy: h }),
-                Some(self.mem),
-                Some(&POINT { x: 0, y: 0 }),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            )?;
+            if let Err(e) = rt.EndDraw(None, None) {
+                if e.code() != D2DERR_RECREATE_TARGET {
+                    return Err(e);
+                }
+                self.lose_device()?;
+                return Ok(true);
+            }
+            #[cfg(test)]
+            if self.grab {
+                self.grab_frame()?;
+            }
+            // No wait for the refresh: the frame pacing (vsync thread) already asks once per refresh.
+            let shown = self.surface.as_ref().unwrap().swap.Present(0, DXGI_PRESENT(0));
+            if shown == DXGI_ERROR_DEVICE_REMOVED || shown == DXGI_ERROR_DEVICE_RESET {
+                self.lose_device()?;
+                return Ok(true);
+            }
+            shown.ok()?;
+            // The mouse belongs to the drawn shape: the pill or panel, its ears, and the shadow under it.
+            let reach = if open > 0.0 { (SHADOW_STEPS as f32 * SHADOW_STEP + SHADOW_DY) * s } else { 0.0 };
+            let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((nh + reach).ceil() as i32).min(h));
+            self.place(hwnd, (x, y, w, h), region);
             // The lyrics need frames while they show and the song plays, but a slow trickle is enough
             // between lines; only a lyric gliding to the next line asks for full-speed frames.
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
@@ -2594,7 +2723,6 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let mut renderer = Renderer::new().unwrap();
-            renderer.ensure_surface(2, 2).unwrap();
             let mut track = Track { art_key: 1, ..Default::default() };
             assert!(renderer.cover(&track, 120, 20).is_none());
             let mut bmp = Vec::from(&b"BM"[..]);
@@ -2673,7 +2801,7 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (820, 210);
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Lyrics preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Lyrics preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let lines = [
                 // Made-up lines about the feature itself (no song's lyrics in the README pictures).
                 (0, "Lời mẫu cho ảnh xem trước"), (6_000, "Lời lấy từ LRCLIB và chạy theo đúng thời gian của bài đang phát trên máy"),
@@ -2694,15 +2822,14 @@ mod tests {
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
             // The cover loads and the glow fades in over a second or two.
             let frames = std::env::var("PUW_PREVIEW_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(120);
             for _ in 0..(if track.art.is_some() { frames } else { 1 }) {
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
-            let mut dib = DIBSECTION::default();
-            assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
-            let pixels = std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize);
+            let pixels = &renderer.grabbed[..];
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
             bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
             bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
@@ -2721,7 +2848,7 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (820, 210);
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("perf"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("perf"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let track = Track { title: "Bản nhạc đang phát".into(), artist: "YouTube / foobar2000".into(),
                 duration_ms: 210_000, position_ms: 14_000, playing: true, can_toggle: true, can_next: true,
                 can_previous: true, can_seek: true,
@@ -2762,7 +2889,7 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (530i32, 210i32);
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Todo preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Todo preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let now = stamp(20261029, 2, 5);
             let item = |text: &str, done: bool, at: Option<u64>| Item { text: text.into(), done: done.then_some(20261029), at, told_soon: false, told_now: false };
             let tasks = vec![
@@ -2776,6 +2903,7 @@ mod tests {
             // (tasks, counts, typed text)
             let frames: Vec<(Vec<Item>, (usize, usize), &str)> = vec![(vec![], (0, 0), ""), (tasks.clone(), (3, 1), ""), (tasks, (3, 1), "Họp 20:00 mai")];
             let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
             let mut sheet = Vec::new();
             for (items, counts, typed) in &frames {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
@@ -2786,9 +2914,7 @@ mod tests {
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 }
-                let mut dib = DIBSECTION::default();
-                assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
-                sheet.extend_from_slice(std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize));
+                sheet.extend_from_slice(&renderer.grabbed[..]);
             }
             let sh = h * frames.len() as i32;
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
@@ -2810,12 +2936,13 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (530i32, 210i32);
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Weather preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Weather preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true, ..Default::default() };
             let place = Some(Place { name: "Đà Nẵng".into(), lat: 16.0, lon: 108.0 });
             let state = |sky, day, temp: f32| State { place: place.clone(), now: Some(Now { temp, feels: temp + 3.0, humidity: 82.0, wind: 11.0, sky, day }), updated: Some(202610290140), ..State::default() };
             let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
             let mut sheet = Vec::new();
             // (mode, music?, page, state, typed text)
             let frames: Vec<(Mode, bool, Page, State, &str, weather::Unit)> = vec![
@@ -2856,9 +2983,7 @@ mod tests {
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 }
-                let mut dib = DIBSECTION::default();
-                assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
-                sheet.extend_from_slice(std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize));
+                sheet.extend_from_slice(&renderer.grabbed[..]);
             }
             let sh = h * n;
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
@@ -2879,7 +3004,7 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (500i32, 110i32);
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Banner preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Banner preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let toast = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: None };
             let view = View { mode: Mode::Alert, size: notch::alert_size(1), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(&toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
@@ -2887,10 +3012,9 @@ mod tests {
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
-            let mut dib = DIBSECTION::default();
-            assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
-            let pixels = std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize);
+            let pixels = &renderer.grabbed[..];
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
             bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
             bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
@@ -2909,11 +3033,12 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (530i32, 210i32);
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Aurora preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Aurora preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true,
                 art: std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new), art_key: 1, ..Default::default() };
             let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
             let mut sheet = Vec::new();
             for (i, t) in [0.0f32, 1.5, 3.0, 4.5].into_iter().enumerate() {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16", date: "T5, 29/10",
@@ -2926,9 +3051,7 @@ mod tests {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-                let mut dib = DIBSECTION::default();
-                assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
-                sheet.extend_from_slice(std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, (w * h * 4) as usize));
+                sheet.extend_from_slice(&renderer.grabbed[..]);
             }
             let sh = h * 4;
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
@@ -2948,7 +3071,7 @@ mod tests {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, w!("STATIC"), w!("Media preview"), WS_POPUP,
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Media preview"), WS_POPUP,
                 0, 0, 530, 210, None, None, None, None).unwrap();
             let track = Track { title: "Bản nhạc đang phát".into(), artist: "YouTube / foobar2000".into(),
                 duration_ms: 210_000, playing: true, can_toggle: true, can_next: true,
@@ -2960,10 +3083,9 @@ mod tests {
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
             renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
-            let mut dib = DIBSECTION::default();
-            assert_ne!(GetObjectW(renderer.bmp.into(), size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as _)), 0);
-            let pixels = std::slice::from_raw_parts(dib.dsBm.bmBits as *const u8, 530 * 210 * 4);
+            let pixels = &renderer.grabbed[..];
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
             bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
             bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());

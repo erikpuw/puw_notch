@@ -2,7 +2,7 @@
 
 [Tiếng Việt](README.md) · **English**
 
-A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no WebView.
+A Dynamic Island–style notch for Windows. Rust + Direct2D drawn on the GPU through DirectComposition, ~664 KB exe, no WebView.
 
 ## Features
 
