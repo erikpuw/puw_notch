@@ -6,7 +6,7 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D drawn on the GPU thr
 
 ## Features
 
-- **Notch**: clock, battery ring, music waves. Hover to open the panel. Shrinks when it would cover tabs or text underneath, hides during fullscreen games and videos.
+- **Notch**: clock, battery icon (three steps, a green bolt while charging, yellow in battery saver), music waves. Hover to open the panel. Shrinks when it would cover tabs or text underneath, hides during fullscreen games and videos.
 - **5 pages** (switch with ‹ ›):
   - **Music**: cover art, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, click to seek, a lyrics button widens the panel to show scrolling lyrics; background and aurora line follow the cover's colours. Works with any app using Windows media controls, plus iTunes and foobar2000.
   - **Tasks**: one list for tasks and appointments. Type "Buy milk", "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Tick / edit / delete; overdue shows red with "Late". ⚙ picks an early reminder of 0–60 min, plus one on time.
@@ -18,7 +18,7 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D drawn on the GPU thr
 - **Hide Windows volume popup** (tray, off by default): the app handles the volume keys itself, so only the notch shows. Laptop brightness and mic keys usually go through firmware and are not blocked.
 - **Tray**: Minimal notch, Idle robot, Hide volume popup, Start with Windows, Language (Tiếng Việt / English), About, Quit.
 
-Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather icons [Lucide](https://lucide.dev) (ISC), banner icons [Tabler Icons](https://tabler.io/icons) (MIT).
+Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather and battery icons [Lucide](https://lucide.dev) (ISC), banner icons [Tabler Icons](https://tabler.io/icons) (MIT).
 ## Screenshots
 
 | | |

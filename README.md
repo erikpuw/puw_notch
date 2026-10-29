@@ -6,7 +6,7 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D vẽ trên GPU qua Dire
 
 ## Tính năng
 
-- **Notch**: giờ, vòng pin, sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi đè lên tab hoặc chữ bên dưới, ẩn khi chơi game / xem phim toàn màn hình.
+- **Notch**: giờ, icon pin (3 nấc, sét xanh khi sạc, vàng khi tiết kiệm pin), sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi đè lên tab hoặc chữ bên dưới, ẩn khi chơi game / xem phim toàn màn hình.
 - **5 trang** (chuyển bằng ‹ ›):
   - **Nhạc**: ảnh bìa, lời bài hát đồng bộ (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời giãn bảng ngang để xem lời chạy theo bài; nền và đường aurora theo màu ảnh bìa. Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
   - **Việc**: một danh sách cho việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Tick / sửa / xóa; quá giờ tô đỏ kèm "Trễ". ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
@@ -18,7 +18,7 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D vẽ trên GPU qua Dire
 - **Ẩn bảng âm lượng của Windows** (tray, mặc định tắt): app tự xử lý phím âm lượng nên chỉ notch hiện. Phím độ sáng và mic của laptop thường đi qua firmware nên chưa chặn được.
 - **Tray**: Notch tối giản, Robot, Ẩn bảng âm lượng, Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát.
 
-Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY 4.0), icon thời tiết [Lucide](https://lucide.dev) (ISC), icon banner [Tabler Icons](https://tabler.io/icons) (MIT).
+Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY 4.0), icon thời tiết và pin [Lucide](https://lucide.dev) (ISC), icon banner [Tabler Icons](https://tabler.io/icons) (MIT).
 ## Ảnh chụp
 
 | | |

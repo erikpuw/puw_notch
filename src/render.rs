@@ -45,7 +45,7 @@ pub struct View<'a> {
     pub time: &'a str,
     /// Short date for the panel header ("CN, 25/10").
     pub date: &'a str,
-    /// None on a desktop PC: no ring, no label.
+    /// None on a desktop PC: no battery icon, no label.
     pub battery: Option<Battery>,
     /// Banner content while in Alert (a notification or a status change).
     pub banner: Option<&'a Toast>,
@@ -485,7 +485,6 @@ const ICON_PAUSE: &str = "\u{E769}";
 const ICON_NEXT: &str = "\u{E893}";
 const ICON_NOTE: &str = "\u{E8D6}";
 pub const ICON_BELL: &str = "\u{EA8F}";
-const ICON_BOLT: &str = "\u{E945}";
 const ICON_LEFT: &str = "\u{E76B}";
 const ICON_RIGHT: &str = "\u{E76C}";
 const ICON_ADD: &str = "\u{E710}";
@@ -1411,27 +1410,6 @@ impl Renderer {
         }
     }
 
-    /// Open arc from 12 o'clock clockwise covering `frac` of the circle (battery ring).
-    fn ring(&self, cx: f32, cy: f32, r: f32, frac: f32) -> Result<ID2D1PathGeometry> {
-        let frac = frac.clamp(0.0, 0.9999);
-        let angle = frac * std::f32::consts::TAU;
-        unsafe {
-            let geo = self.factory.CreatePathGeometry()?;
-            let sink = geo.Open()?;
-            sink.BeginFigure(Vector2 { X: cx, Y: cy - r }, D2D1_FIGURE_BEGIN_HOLLOW);
-            sink.AddArc(&D2D1_ARC_SEGMENT {
-                point: Vector2 { X: cx + r * angle.sin(), Y: cy - r * angle.cos() },
-                size: D2D_SIZE_F { width: r, height: r },
-                rotationAngle: 0.0,
-                sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
-                arcSize: if frac > 0.5 { D2D1_ARC_SIZE_LARGE } else { D2D1_ARC_SIZE_SMALL },
-            });
-            sink.EndFigure(D2D1_FIGURE_END_OPEN);
-            sink.Close()?;
-            Ok(geo)
-        }
-    }
-
     /// Draw one frame and push it to `hwnd` placed at screen (x, y), window size (w, h) device px.
     /// Returns true while an icon morph is still playing (the caller keeps frames coming).
     /// Lines `text` wraps to in a notification banner (its body font and width, at `scale`).
@@ -1511,6 +1489,13 @@ impl Renderer {
             let ic = icons::weather(n.sky, n.day);
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
+        })();
+        // The pill's battery icon (Lucide) with its paths as geometry.
+        let battery_line = (|| {
+            let b = v.battery?;
+            let ic = icons::battery(b.percent, b.charging);
+            let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
+            Some((b, ic, geoms))
         })();
         // A sun for the Weather page while there is no city or conditions yet (muted, like Tasks' ring).
         let weather_empty = (|| {
@@ -1732,32 +1717,28 @@ impl Renderer {
                 let pill_a = small_a;
                 let small_a = small_a * (1.0 - robot_a);
                 text(v.time, F_SMALL, rect(l, 0.0, r, nh), center, grey(1.0, small_a))?;
-                if let Some(b) = v.battery {
-                    let d = 18.0 * s;
-                    // Left of the time; with music the cover takes that spot, so sit before the bars.
-                    let bx = if pill_music.is_some() { r - 60.0 * s } else { l + 14.0 * s };
+                if let Some((b, ic, geoms)) = &battery_line {
+                    // A battery icon on the 24 px grid, 20 px square: left of the time; with music the
+                    // cover takes that spot, so it sits before the bars.
+                    let d = 20.0 * s;
+                    let bx = if pill_music.is_some() { r - 61.0 * s } else { l + 13.0 * s };
                     let by = (nh - d) / 2.0;
-                    let ring_c = if b.charging {
-                        color(0.2, 0.84, 0.29, small_a)
+                    let white = (1.0, 1.0, 1.0);
+                    // (bolt or first path, the rest): green bolt while charging, the whole battery
+                    // yellow in battery saver (like iPhone's low power mode), red at 20 % or less.
+                    let tint = if b.charging {
+                        ((0.2, 0.84, 0.29), white)
                     } else if b.saver {
-                        // battery saver: yellow, like iPhone low power mode
-                        color(1.0, 0.8, 0.0, small_a)
+                        ((1.0, 0.8, 0.0), (1.0, 0.8, 0.0))
                     } else if b.percent <= 20 {
-                        color(1.0, 0.27, 0.23, small_a)
+                        ((1.0, 0.27, 0.23), (1.0, 0.27, 0.23))
                     } else {
-                        grey(1.0, small_a)
+                        (white, white)
                     };
-                    let stroke = 2.2 * s;
-                    let (rcx, rcy, rr) = (bx + d / 2.0, by + d / 2.0, d / 2.0 - stroke / 2.0);
-                    let track = D2D1_ELLIPSE { point: Vector2 { X: rcx, Y: rcy }, radiusX: rr, radiusY: rr };
-                    rt.DrawEllipse(&track, &self.brush(grey(0.3, small_a))?, stroke, None);
-                    rt.DrawGeometry(&self.ring(rcx, rcy, rr, b.percent as f32 / 100.0)?, &self.brush(ring_c)?, stroke, None);
-                    if b.charging {
-                        text(ICON_BOLT, F_TINY_ICON, rect(bx, by, bx + d, by + d), center, ring_c)?;
-                    }
+                    draw_wx_icon(ic, geoms, bx, by, d, Some(tint), small_a, 9.0)?;
                 }
                 // Weather: icon and temperature in the room the clock leaves, to its right on the plain
-                // pill (balancing the battery ring), after the cover on the music pill. Left out
+                // pill (balancing the battery), after the cover on the music pill. Left out
                 // when it would touch the clock.
                 if let (Some((ic, geoms)), Some(n)) = (&weather_line, v.weather.now) {
                     let (icon, gap) = (14.0 * s, 2.0 * s);
@@ -3093,6 +3074,39 @@ mod tests {
             bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
             bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
             std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/aurora-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "writes target/battery-preview.bmp: the resting pill at each battery state, stacked"]
+    fn battery_preview() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (240, 40);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Battery preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let states = [(79, true, false), (90, false, false), (50, false, false), (25, false, false), (15, false, false), (8, false, false), (40, false, true)];
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            let mut sheet = Vec::new();
+            for (percent, charging, saver) in states {
+                let view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "16:00", date: "", battery: Some(Battery { percent, charging, saver }),
+                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music,
+                    leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                sheet.extend_from_slice(&renderer.grabbed);
+            }
+            let sh = h * states.len() as i32;
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + sheet.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-sh).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/battery-preview.bmp"), bytes).unwrap();
             DestroyWindow(hwnd).unwrap();
         }
     }

@@ -299,6 +299,42 @@ static WX_STORM: Icon = Icon {
     parts: &[p("M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973"), moves("m13 12-3 5h4l-3 5", 1)],
 };
 /// The weather icon for `sky`, by day or night.
+// The pill's battery, Lucide (ISC): the case with its tip, and the bars left (three steps).
+const BATT_CASE: &str = "M4 6h12a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2z";
+const BATT_TIP: &str = "M22 14v-4";
+static BATT_FULL: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p(BATT_CASE), p(BATT_TIP), p("M6 10v4"), p("M10 10v4"), p("M14 10v4")] };
+static BATT_MEDIUM: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p(BATT_CASE), p(BATT_TIP), p("M6 10v4"), p("M10 10v4")] };
+static BATT_LOW: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p(BATT_CASE), p(BATT_TIP), p("M6 10v4")] };
+/// The bolt comes first: it is drawn in the charging colour, the case in white.
+static BATT_CHARGING: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[
+        p("M11 7l-3 5h4l-3 5"),
+        p("M14.856 6h1.144a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-2.935"), p(BATT_TIP),
+        p("M5.14 18h-1.14a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2h2.936"),
+    ],
+};
+static BATT_WARNING: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[
+        p("M10 17h.01"), p("M10 7v6"),
+        p("M14 6h2a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-2"), p(BATT_TIP),
+        p("M6 18h-2a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2h2"),
+    ],
+};
+
+/// The pill's battery: a bolt while charging, else three bars above 66 %, two above 33 %, one
+/// above 10 % and a "!" at 10 % or less.
+pub fn battery(percent: u8, charging: bool) -> &'static Icon {
+    match percent {
+        _ if charging => &BATT_CHARGING,
+        67.. => &BATT_FULL,
+        34.. => &BATT_MEDIUM,
+        11.. => &BATT_LOW,
+        _ => &BATT_WARNING,
+    }
+}
+
 pub fn weather(sky: crate::weather::Sky, day: bool) -> &'static Icon {
     use crate::weather::Sky;
     match (sky, day) {
@@ -637,6 +673,19 @@ pub fn parse(d: &str) -> Option<Vec<Seg>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn battery_steps_down_in_three_bars_then_warns() {
+        let bars = |pct, charging| battery(pct, charging).parts.len();
+        assert!(std::ptr::eq(battery(5, true), &BATT_CHARGING), "charging wins at any level");
+        assert_eq!((bars(100, false), bars(67, false)), (5, 5), "three bars");
+        assert_eq!((bars(66, false), bars(34, false)), (4, 4), "two bars");
+        assert_eq!((bars(33, false), bars(11, false)), (3, 3), "one bar");
+        assert!(std::ptr::eq(battery(10, false), &BATT_WARNING));
+        for ic in [&BATT_FULL, &BATT_MEDIUM, &BATT_LOW, &BATT_CHARGING, &BATT_WARNING] {
+            assert!(ic.parts.iter().all(|part| parse(part.d).is_some()), "every path parses");
+        }
+    }
 
     #[test]
     fn parses_lines_relative_and_absolute() {
