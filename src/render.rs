@@ -1936,6 +1936,15 @@ impl Renderer {
                     let hovered = if current { v.hovered } else { None };
                     let btns = page_buttons(cx, s, page, rows_of(page), scroll, settings, v.lyrics);
                     let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
+                    // A soft disc behind an icon-only button under the mouse: the colour change alone
+                    // does not say "this can be clicked".
+                    let hover_disc = |b: Button| -> Result<()> {
+                        if let (true, Some(r)) = (hovered == Some(b), rect_of(b)) {
+                            let point = Vector2 { X: (r.left + r.right) / 2.0, Y: (r.top + r.bottom) / 2.0 };
+                            rt.FillEllipse(&D2D1_ELLIPSE { point, radiusX: 11.0 * s, radiusY: 11.0 * s }, &self.brush(grey(0.18, a))?);
+                        }
+                        Ok(())
+                    };
                     rt.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: dx, M32: 0.0 });
 
                     // Add / edit box shared by the list pages.
@@ -1961,6 +1970,7 @@ impl Renderer {
                         let clear = !draft.is_empty() && edit_row.is_none();
                         if clear {
                             if let Some(cb) = rect_of(Button::ListClear) {
+                                hover_disc(Button::ListClear)?;
                                 text(ICON_CLOSE, F_SMALL_ICON, cb, center, if hovered == Some(Button::ListClear) { grey(1.0, a) } else { grey(0.55, a) })?;
                             }
                         }
@@ -1986,10 +1996,12 @@ impl Renderer {
                         let rest = if lit { 0.65 } else { 0.4 };
                         let edit_hot = hovered == Some(Button::ListEdit(i)) || (current && lv.edit_item == Some(i));
                         if let Some(eb) = btns.iter().filter(|(b, _)| *b == Button::ListEdit(i)).map(|(_, r)| *r).last() {
+                            hover_disc(Button::ListEdit(i))?;
                             text(ICON_EDIT, F_SMALL_ICON, eb, center, if edit_hot { solid(YELLOW, a) } else { grey(rest, a) })?;
                         }
                         if let Some(db) = rect_of(Button::ListDelete(i)) {
                             let c = if hovered == Some(Button::ListDelete(i)) { color(1.0, 0.45, 0.4, a) } else { grey(rest, a) };
+                            hover_disc(Button::ListDelete(i))?;
                             text(ICON_CLOSE, F_SMALL_ICON, db, center, c)?;
                         }
                         Ok(())
@@ -2146,6 +2158,7 @@ impl Renderer {
                             if let Some(gb) = rect_of(Button::Gear(Card::Tasks)) {
                                 let hot = hovered == Some(Button::Gear(Card::Tasks));
                                 let (icon, c) = if open_set { (ICON_CHECK, solid(GREEN, a)) } else { (ICON_GEAR, grey(if hot { 1.0 } else { 0.6 }, a)) };
+                                hover_disc(Button::Gear(Card::Tasks))?;
                                 micon("tasks-gear", icon, F_SMALL_ICON, gb, c)?;
                             }
                             if open_set {
@@ -2292,9 +2305,7 @@ impl Renderer {
                                     text(&format!("Open-Meteo{fetched}"), F_LABEL, rect(cr - CREDIT_W * s, 68.0 * s, cr, 88.0 * s), trail, credit)?;
                                     if let Some(ob) = rect_of(Button::CityOff) {
                                         let hot = hovered == Some(Button::CityOff);
-                                        if hot {
-                                            rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: (ob.left + ob.right) / 2.0, Y: (ob.top + ob.bottom) / 2.0 }, radiusX: 11.0 * s, radiusY: 11.0 * s }, &self.brush(grey(0.18, a))?);
-                                        }
+                                        hover_disc(Button::CityOff)?;
                                         text(ICON_CLOSE, F_SMALL_ICON, ob, center, if hot { color(1.0, 0.45, 0.4, a) } else { grey(0.55, a) })?;
                                     }
                                     // The icon, then the temperature and the sky in words.
@@ -2377,6 +2388,7 @@ impl Renderer {
                                 if let Some(gb) = rect_of(Button::Gear(card)) {
                                     let hot = hovered == Some(Button::Gear(card));
                                     let (icon, c) = if open { (ICON_CHECK, solid(GREEN, a)) } else { (ICON_GEAR, grey(if hot { 1.0 } else { 0.6 }, a)) };
+                                    hover_disc(Button::Gear(card))?;
                                     micon(if card == Card::Water { "gear_water" } else { "gear_sit" }, icon, F_SMALL_ICON, gb, c)?;
                                 }
                                 if open {
