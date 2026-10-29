@@ -1,8 +1,17 @@
-# PUW Notch
+<p align="center">
+  <img src="assets/puw_1024.png" width="112" alt="Biểu tượng PUW Notch">
+</p>
 
-**Tiếng Việt** · [English](README.en.md)
+<h1 align="center">PUW Notch</h1>
 
-Notch kiểu Dynamic Island cho Windows. Rust + Direct2D vẽ trên GPU qua DirectComposition, exe ~664 KB, không WebView.
+<p align="center"><b>Chiếc notch sống ngay trên Windows của bạn.</b></p>
+
+<p align="center">
+  Nhạc, việc, thông báo, thời tiết và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
+  Rust + Direct2D vẽ trên GPU qua DirectComposition, exe ~664 KB, không WebView.
+</p>
+
+<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a></p>
 
 ## Tính năng
 
