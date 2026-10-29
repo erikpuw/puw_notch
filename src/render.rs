@@ -169,7 +169,7 @@ pub enum Button {
     CityOff,
     /// The x at the end of the add / city box, wiping what is typed.
     ListClear,
-    /// "Clear" under the Notifications list: hides what has arrived so far.
+    /// "Clear all" at the end of the Notifications page's header: hides what has arrived so far.
     NotesClear,
     Gear(Card),
     Drink,
@@ -338,8 +338,9 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             for (row, i) in (scroll..rows.min(scroll + NOTE_ROWS)).enumerate() {
                 out.push((Button::NoteOpen(i), r(cl, NOTE_Y + row as f32 * NOTE_H, cw, NOTE_H - 4.0)));
             }
+            // At the end of the header (drawn there in place of the battery).
             if rows > 0 {
-                out.push((Button::NotesClear, r(cl + cw - 70.0, DOTS_Y - 6.0, 70.0, 20.0)));
+                out.push((Button::NotesClear, r(w - PAD - 70.0, 6.0, 70.0, 22.0)));
             }
         }
         Page::Health => {
@@ -1911,8 +1912,28 @@ impl Renderer {
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
-                if let Some(b) = v.battery {
-                    text(&b.label(), F_LABEL, rect(hr - 92.0 * s, ht, hr, hb), trail, grey(0.6, a))?;
+                // On the Notifications page (with something to clear) "Clear all" takes the battery's
+                // place at the end of the header, where Notification Center keeps its Clear; the
+                // two swap with the page's own fades during a page change.
+                let has_notes = !v.notes.is_empty();
+                let (battery_a, clear_a) = match v.leaving {
+                    Some((from, t, _)) => {
+                        let (out_a, in_a) = page_fades(t);
+                        match (from == Page::Notify && has_notes, v.page == Page::Notify && has_notes) {
+                            (true, false) => (in_a, out_a),
+                            (false, true) => (out_a, in_a),
+                            _ => (1.0, 0.0),
+                        }
+                    }
+                    None if v.page == Page::Notify && has_notes => (0.0, 1.0),
+                    None => (1.0, 0.0),
+                };
+                if let (Some(b), true) = (v.battery, battery_a > 0.0) {
+                    text(&b.label(), F_LABEL, rect(hr - 92.0 * s, ht, hr, hb), trail, grey(0.6, a * battery_a))?;
+                }
+                if clear_a > 0.0 {
+                    let hot = v.hovered == Some(Button::NotesClear);
+                    text(tr("Xóa hết", "Clear all"), F_LABEL, rect(hr - 92.0 * s, ht, hr, hb), trail, grey(if hot { 1.0 } else { 0.6 }, a * clear_a))?;
                 }
                 // Date · time in the middle of the header.
                 text(&format!("{} · {}", v.date, v.time), F_LABEL, rect(cx - 80.0 * s, ht, cx + 80.0 * s, hb), center, grey(0.85, a))?;
@@ -2508,14 +2529,6 @@ impl Renderer {
                         text(icon, F_SMALL_ICON, *br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
                     }
                 }
-                // "Clear" at the right of the dots row on the Notifications page: wipes the list.
-                if v.page == Page::Notify && v.leaving.is_none() && !v.notes.is_empty() {
-                    let btns_now = page_buttons(cx, s, Page::Notify, v.notes.len(), lv.scroll, None, false);
-                    if let Some((_, cb)) = btns_now.iter().find(|(b, _)| *b == Button::NotesClear) {
-                        let hot = v.hovered == Some(Button::NotesClear);
-                        text(tr("Xóa hết", "Clear all"), F_LABEL, *cb, trail, if hot { grey(1.0, a) } else { grey(0.5, a) })?;
-                    }
-                }
                 let (dot, wide, gap) = (5.0 * s, 14.0 * s, 5.0 * s);
                 let total = wide + (PAGES.len() as f32 - 1.0) * (dot + gap);
                 let mut dx = cx - total / 2.0;
@@ -2776,6 +2789,18 @@ mod tests {
             // The lyrics button works only when the song has lyrics.
             let bare = Track { lyrics: Arc::new(Vec::new()), ..track.clone() };
             assert_eq!(hit_button(cx, scale, mid(lyr).0, mid(lyr).1, Some(&bare), Page::Music, 0, 0, None, false), None);
+        }
+    }
+
+    #[test]
+    fn clear_all_sits_at_the_end_of_the_header_only_with_notifications() {
+        for scale in [1.0, 1.5] {
+            let cx = 265.0 * scale;
+            let right = cx + (220.0 - PAD - 10.0) * scale;
+            let y = 17.0 * scale;
+            assert_eq!(hit_button(cx, scale, right, y, None, Page::Notify, 2, 0, None, false), Some(Button::NotesClear));
+            assert_eq!(hit_button(cx, scale, right, y, None, Page::Notify, 0, 0, None, false), None, "nothing to clear: no button");
+            assert_eq!(hit_button(cx, scale, right, DOTS_Y * scale, None, Page::Notify, 2, 0, None, false), None, "gone from the dots row");
         }
     }
 
@@ -3069,6 +3094,38 @@ mod tests {
             bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
             bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
             std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/aurora-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "writes target/notify-preview.bmp: the Notifications page with two rows"]
+    fn notify_preview() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (530, 210);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Notify preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let note = |app: &str, title: &str, body: &str, at: u64| Note { id: String::new(), app: app.into(), title: title.into(), body: body.into(), at, open: None };
+            let notes = [note("ScreenSketch", "Screenshot copied to clipboard", "Automatically saved to screenshots folder.", 202610291557),
+                note("Zalo", "Anh Minh", "Tối nay 8h họp nhóm nhé", 202610291402)];
+            let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "16:00", date: "T5, 29/10",
+                battery: Some(Battery { percent: 79, charging: true, saver: false }), banner: None, music: None, live: false, robot: None,
+                phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: &notes,
+                weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
+                list: ListView { counts: (0, 0), remind_before: 15, now: 202610291600, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+            let pixels = &renderer.grabbed[..];
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-h).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(pixels);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/notify-preview.bmp"), bytes).unwrap();
             DestroyWindow(hwnd).unwrap();
         }
     }
