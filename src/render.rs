@@ -118,6 +118,8 @@ pub struct ListView<'a> {
     pub caret: bool,
     /// First visible row.
     pub scroll: usize,
+    /// Notifications list position in rows while it glides to `scroll` (a wheel step eases).
+    pub note_pos: f32,
 }
 
 pub struct HealthView<'a> {
@@ -161,6 +163,8 @@ pub enum Button {
     CityOff,
     /// The x at the end of the add / city box, wiping what is typed.
     ListClear,
+    /// "Clear" under the Notifications list: hides what has arrived so far.
+    NotesClear,
     Gear(Card),
     Drink,
     /// Water reminder later (10 min).
@@ -327,6 +331,9 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
         Page::Notify => {
             for (row, i) in (scroll..rows.min(scroll + NOTE_ROWS)).enumerate() {
                 out.push((Button::NoteOpen(i), r(cl, NOTE_Y + row as f32 * NOTE_H, cw, NOTE_H - 4.0)));
+            }
+            if rows > 0 {
+                out.push((Button::NotesClear, r(cl + cw - 70.0, DOTS_Y - 6.0, 70.0, 20.0)));
             }
         }
         Page::Health => {
@@ -831,17 +838,16 @@ impl Renderer {
     pub fn new() -> Result<Self> {
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let props = D2D1_RENDER_TARGET_PROPERTIES {
-                // Software: a 530x210 DC target draws faster on the CPU (1.0 vs 2.0 ms a frame) and skips
-                // loading the GPU driver (private RAM 9.4 vs 27.9 MB), measured 2026-10-25.
-                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            let props = |r#type| D2D1_RENDER_TARGET_PROPERTIES {
+                r#type,
                 pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
                 dpiX: 96.0,
                 dpiY: 96.0,
                 usage: D2D1_RENDER_TARGET_USAGE_NONE,
                 minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
             };
-            let rt = factory.CreateDCRenderTarget(&props)?;
+            // On the GPU: a frame costs the CPU about half of what the software target did (0.9 vs 1.7 ms\r\n            // measured 2026-10-29), for ~25 MB more private RAM. The software target stays as the fallback\r\n            // for machines whose driver cannot give a DC target.
+            let rt = factory.CreateDCRenderTarget(&props(D2D1_RENDER_TARGET_TYPE_HARDWARE)).or_else(|_| factory.CreateDCRenderTarget(&props(D2D1_RENDER_TARGET_TYPE_SOFTWARE)))?;
             rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let wic = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
@@ -2093,10 +2099,15 @@ impl Renderer {
                                 text(tr("Chưa có thông báo", "No notifications"), F_BODY, area, center, grey(0.55, a))?;
                             }
                             let today = (lv.now / 10_000) as u32;
-                            for (row, n) in v.notes.iter().skip(scroll).take(NOTE_ROWS).enumerate() {
-                                let y = (NOTE_Y + row as f32 * NOTE_H) * s;
+                            // Rows glide to their place after a wheel step: drawn from the fractional
+                            // position, inside the list's own clip.
+                            let pos = if current { lv.note_pos } else { 0.0 };
+                            let first = pos.floor().max(0.0) as usize;
+                            rt.PushAxisAlignedClip(&rect(cl - 8.0 * s, NOTE_Y * s, cr + 10.0 * s, (NOTE_Y + NOTE_H * NOTE_ROWS as f32 - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
+                            for (row, n) in v.notes.iter().enumerate().skip(first).take(NOTE_ROWS + 1) {
+                                let y = (NOTE_Y + (row as f32 - pos) * NOTE_H) * s;
                                 // The row under the mouse lights up: clicking it opens the notification.
-                                if hovered == Some(Button::NoteOpen(scroll + row)) {
+                                if hovered == Some(Button::NoteOpen(row)) {
                                     let hb = rect(cl - 6.0 * s, y - 1.0 * s, cr + 2.0 * s, y + (NOTE_H - 3.0) * s);
                                     rt.FillRoundedRectangle(&rounded(hb, 8.0 * s), &self.brush(grey(0.1, a))?);
                                 }
@@ -2107,7 +2118,7 @@ impl Renderer {
                                     else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
                                 // App tile: its initial on a colour taken from its name.
                                 let tile = rect(cl, y + 3.0 * s, cl + 30.0 * s, y + 33.0 * s);
-                                match note_icons.get(scroll + row).and_then(|i| i.as_ref()) {
+                                match note_icons.get(row).and_then(|i| i.as_ref()) {
                                     // The app's own icon on a light-grey tile, so dark logos show on black.
                                     Some(icon) => {
                                         rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &self.brush(grey(0.16, a))?);
@@ -2125,6 +2136,7 @@ impl Renderer {
                                 let line2 = if n.body.is_empty() { n.app.clone() } else { format!("{} · {}", n.app, n.body) };
                                 text(&line2, F_BODY, rect(tx, y + 19.0 * s, cr, y + 37.0 * s), lead, grey(0.65, a))?;
                             }
+                            rt.PopAxisAlignedClip();
                             scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
                         }
                         Page::Weather => {
@@ -2365,6 +2377,14 @@ impl Renderer {
                         };
                         rt.FillEllipse(&circle, &self.brush(grey(if hot { 0.26 } else { 0.15 }, a))?);
                         text(icon, F_SMALL_ICON, *br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
+                    }
+                }
+                // "Clear" at the right of the dots row on the Notifications page: wipes the list.
+                if v.page == Page::Notify && v.leaving.is_none() && !v.notes.is_empty() {
+                    let btns_now = page_buttons(cx, s, Page::Notify, v.notes.len(), lv.scroll, None, false);
+                    if let Some((_, cb)) = btns_now.iter().find(|(b, _)| *b == Button::NotesClear) {
+                        let hot = v.hovered == Some(Button::NotesClear);
+                        text(tr("Xóa hết", "Clear all"), F_LABEL, *cb, trail, if hot { grey(1.0, a) } else { grey(0.5, a) })?;
                     }
                 }
                 let (dot, wide, gap) = (5.0 * s, 14.0 * s, 5.0 * s);
@@ -2671,7 +2691,7 @@ mod tests {
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             // The cover loads and the glow fades in over a second or two.
@@ -2713,7 +2733,7 @@ mod tests {
                 battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track),
                 live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             // Let the cover decode and the glow reach its steady strength.
@@ -2761,7 +2781,7 @@ mod tests {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
                     banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
                     leaving: None, todos: items, notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
-                    list: ListView { counts: *counts, remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0 },
+                    list: ListView { counts: *counts, remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -2831,7 +2851,7 @@ mod tests {
                 let view = View { mode: *mode, size: target(*mode, *music), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
                     banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: *page,
                     leaving: None, todos: &[], notes: &[], weather: st, page_age: 9.0, unit: *unit,
-                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0 },
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -2864,7 +2884,7 @@ mod tests {
             let view = View { mode: Mode::Alert, size: notch::alert_size(1), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(&toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -2899,7 +2919,7 @@ mod tests {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16", date: "T5, 29/10",
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
                     phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 // The first frame waits for the cover and the fade-in.
                 for _ in 0..(if i == 0 { 80 } else { 1 }) {
@@ -2937,7 +2957,7 @@ mod tests {
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();

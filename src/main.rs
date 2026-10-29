@@ -134,6 +134,8 @@ struct App {
     /// Notifications page: what Windows still keeps, newest first, and its first visible row.
     notes: Vec<notify::Note>,
     note_scroll: usize,
+    /// Where the Notifications list is drawn, in rows: eases toward `note_scroll`.
+    note_pos: f32,
     health: health::Health,
     /// Health card showing its settings.
     settings_open: Option<Card>,
@@ -219,6 +221,7 @@ impl App {
                 edit_item: self.edit_item,
                 caret: self.caret,
                 scroll: self.scroll(),
+                note_pos: self.note_pos,
             },
             todos: &self.todo.items,
             notes: &self.notes,
@@ -266,7 +269,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit) }
+        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -310,7 +313,16 @@ impl App {
             self.lyrics_open = false;
         }
         self.notch.set_wide(self.lyrics_wide());
-        let moving = self.notch.step(dt);
+        let mut moving = self.notch.step(dt);
+        // The Notifications list glides to the row the wheel asked for.
+        let goal = self.note_scroll as f32;
+        if self.note_pos != goal {
+            self.note_pos += (goal - self.note_pos) * (1.0 - (-dt * 14.0).exp());
+            if (goal - self.note_pos).abs() < 0.01 {
+                self.note_pos = goal;
+            }
+            moving = true;
+        }
         // The page morph runs on the same frames; drop it once it has played out.
         let morphing = match self.page_anim {
             Some((_, t0, _)) if t0.elapsed().as_secs_f32() < PAGE_MORPH_S => true,
@@ -412,6 +424,12 @@ impl App {
     }
 
     fn tick(&mut self) {
+        // Typing needs the keyboard: when the notch is not the foreground window (Windows refused
+        // the focus, or took it back without a WM_ACTIVATE) it cannot be typing, and `editing`
+        // would keep the open panel from ever closing.
+        if self.editing && unsafe { GetForegroundWindow() } != self.hwnd {
+            self.end_edit();
+        }
         self.keep_on_top();
         self.release_stale_hover();
         let (time, date) = system::clock();
@@ -468,9 +486,8 @@ impl App {
             changed |= showing_notes;
         }
         if let Some(t) = new.into_iter().last() {
-            // A banner with a picture (a screenshot) stays longer: it can be clicked to open it.
-            let ms = if t.image.is_some() { ALERT_MS * 2 } else { ALERT_MS };
-            self.show_banner(t, ms);
+            // A newer one restarts the 5 s from the start (show_banner re-arms the timer).
+            self.show_banner(t, ALERT_MS);
         }
 
         if changed && !self.animating {
@@ -517,7 +534,7 @@ impl App {
                 todo::Ring::Now => format!("{} · {}", tr("Đến giờ", "It's time"), hhmm(at)),
             };
             let toast = status_toast(tr("Nhắc việc", "Reminder"), item.text.clone(), &when, None, render::ICON_REMINDER);
-            if !self.show_banner(toast, ALERT_MS * 2) {
+            if !self.show_banner(toast, ALERT_MS) {
                 return;
             }
             self.todo.mark(i, ring);
@@ -534,7 +551,7 @@ impl App {
                 health::Ring::GoalReached => status_toast(tr("Uống nước", "Water"), if i18n::english() { format!("Goal of {:.1} L reached today", goal as f32 / 1000.0) } else { format!("Đạt mục tiêu {:.1} L hôm nay", goal as f32 / 1000.0) }, "", Some(1.0), render::ICON_DROP),
                 health::Ring::StandUp => status_toast(tr("Đứng dậy đi lại", "Stand up and move"), if i18n::english() { format!("You have been sitting for {every} min") } else { format!("Bạn đã ngồi {every} phút liền") }, tr("Vận động vài phút nhé", "Walk around for a few minutes"), None, render::ICON_WALK),
             };
-            if self.show_banner(toast, ALERT_MS * 2) {
+            if self.show_banner(toast, ALERT_MS) {
                 self.page = Page::Health;
             }
         }
@@ -644,6 +661,13 @@ impl App {
                 if let Some(target) = self.notes.get(i).and_then(|n| n.open.as_deref()) {
                     open_target(target);
                 }
+            }
+            Button::NotesClear => {
+                if let Some(r) = self.notifications.as_mut() {
+                    r.clear();
+                }
+                system::save_settings(self.settings());
+                self.refresh_notes();
             }
             Button::Gear(card) => self.settings_open = if self.settings_open == Some(card) { None } else { Some(card) },
             Button::RemindStep(dir) => self.todo.step_remind(dir),
@@ -950,7 +974,8 @@ impl App {
                 let max = self.rows().saturating_sub(if self.page == Page::Notify { NOTE_ROWS } else { LIST_ROWS });
                 let scroll = if self.page == Page::Notify { &mut self.note_scroll } else { &mut self.todo_scroll };
                 *scroll = if delta > 0 { scroll.saturating_sub(1) } else { (*scroll + 1).min(max) };
-                self.redraw();
+                // The Notifications list eases there frame by frame (see `frame`).
+                if self.page == Page::Notify { self.kick(); } else { self.redraw(); }
             }
             WM_LBUTTONUP => {
                 let x = (lp.0 & 0xffff) as i16 as f32;
@@ -1291,6 +1316,7 @@ fn run() -> windows::core::Result<()> {
             todo_scroll: 0,
             notes: Vec::new(),
             note_scroll: 0,
+            note_pos: 0.0,
             health: health::Health::load(system::today()),
             settings_open: None,
             page_anim: None,
@@ -1306,6 +1332,9 @@ fn run() -> windows::core::Result<()> {
             unit_chosen: settings.unit.is_some(),
         };
         app.refresh_audio();
+        if let Some(r) = app.notifications.as_mut() {
+            r.cleared = settings.notes_cleared;
+        }
         app.refresh_notes();
         let _ = RegisterPowerSettingNotification(HANDLE(hwnd.0), &status::VIDEO_BRIGHTNESS, DEVICE_NOTIFY_WINDOW_HANDLE);
         status::take_volume_keys(settings.volume_keys);

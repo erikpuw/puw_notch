@@ -170,11 +170,13 @@ pub struct Settings {
     pub place: Option<Place>,
     /// °C or °F, once chosen (None: follow the region setting).
     pub unit: Option<crate::weather::Unit>,
+    /// Notifications up to this id were cleared on the Notifications page (hidden there; Windows keeps them).
+    pub notes_cleared: i64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false, place: None, unit: None }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, place: None, unit: None, notes_cleared: 0 }
     }
 }
 
@@ -191,6 +193,8 @@ fn parse_settings(text: &str) -> Settings {
                     s.place = crate::weather::parse_place(place);
                 } else if let Some(unit) = other.strip_prefix("unit=") {
                     s.unit = crate::weather::Unit::from_tag(unit);
+                } else if let Some(id) = other.strip_prefix("notes_cleared=") {
+                    s.notes_cleared = id.parse().unwrap_or(0);
                 }
             }
         }
@@ -209,7 +213,8 @@ pub fn save_settings(s: Settings) {
         }
         let city = s.place.as_ref().map_or(String::new(), |p| format!("city={}\n", crate::weather::place_line(p)));
         let unit = s.unit.map_or(String::new(), |u| format!("unit={}\n", u.tag()));
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\n{city}{unit}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8));
+        let cleared = if s.notes_cleared > 0 { format!("notes_cleared={}\n", s.notes_cleared) } else { String::new() };
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\n{city}{unit}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8));
     }
 }
 
@@ -256,7 +261,9 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, place: None, unit: None });
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, place: None, unit: None, notes_cleared: 0 });
+        assert_eq!(parse_settings("notes_cleared=42\n").notes_cleared, 42);
+        assert_eq!(parse_settings("notes_cleared=x\n").notes_cleared, 0);
         assert_eq!(parse_settings("unit=f\n").unit, Some(crate::weather::Unit::F));
         assert_eq!(parse_settings("unit=c\n").unit, Some(crate::weather::Unit::C));
         assert_eq!(parse_settings("unit=x\n").unit, None, "unknown: follow the region");

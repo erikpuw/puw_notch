@@ -78,6 +78,8 @@ pub struct Reader {
     sql: Sqlite,
     db: *mut c_void,
     last_id: i64,
+    /// Notifications with an id up to this are left out of `recent` (cleared on the page).
+    pub cleared: i64,
 }
 
 macro_rules! proc {
@@ -110,7 +112,7 @@ impl Reader {
             if open(cpath.as_ptr(), &mut db, SQLITE_OPEN_READONLY, std::ptr::null()) != 0 {
                 return None;
             }
-            let mut r = Reader { sql, db, last_id: -1 };
+            let mut r = Reader { sql, db, last_id: -1, cleared: 0 };
             r.poll();
             Some(r)
         }
@@ -145,12 +147,19 @@ impl Reader {
         out
     }
 
+    /// Hide everything that has arrived so far from `recent`; returns the id to keep (settings.txt).
+    pub fn clear(&mut self) -> i64 {
+        self.cleared = self.last_id.max(self.cleared);
+        self.cleared
+    }
+
     /// The newest `limit` notifications still in the notification centre, newest first (what the
     /// user cleared there is gone here too). `utc_offset_min` turns arrival times into local time.
     pub fn recent(&self, limit: usize, utc_offset_min: i64) -> Vec<Note> {
         let q = format!(
             "SELECT h.PrimaryId, n.Payload, n.ArrivalTime FROM Notification n JOIN NotificationHandler h ON h.RecordId = n.HandlerId \
-             WHERE n.Type = 'toast' ORDER BY n.ArrivalTime DESC, n.Id DESC LIMIT {limit}"
+             WHERE n.Type = 'toast' AND n.Id > {} ORDER BY n.ArrivalTime DESC, n.Id DESC LIMIT {limit}",
+            self.cleared
         );
         let mut out = Vec::new();
         unsafe {
@@ -212,7 +221,7 @@ pub fn parse_payload(xml: &str) -> (String, String) {
     (title, it.collect::<Vec<_>>().join(" "))
 }
 
-/// The picture file a toast carries: its hero image if it has one, else the first image, when that
+/// The picture file a toast carries: its hero image if it has one, else the first image that is not an app logo, when that
 /// is a file on disk (`file:///C%3A%5C...` or a plain path). Snipping Tool's "Screenshot copied"
 /// toast carries the saved screenshot this way.
 pub fn parse_image(xml: &str) -> Option<String> {
@@ -222,7 +231,10 @@ pub fn parse_image(xml: &str) -> Option<String> {
         Some(unescape(&rest[..rest.find('"')?]))
     };
     let hero = tags.iter().find(|t| t.contains("placement=\"hero\""));
-    let src = hero.or(tags.first()).and_then(|t| src_of(t))?;
+    // An app's own logo / the sender's avatar (Discord) is not what the toast is about: clicking
+    // it must open the app, so it is never taken as the picture.
+    let plain = tags.iter().find(|t| !t.contains("placement=\"appLogoOverride\""));
+    let src = hero.or(plain).and_then(|t| src_of(t))?;
     let path = percent_decode(src.strip_prefix("file:///").unwrap_or(&src)).replace('/', "\\");
     // A drive path (C:\...) or a share (\\server\...), nothing from the web.
     let drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes()[0].is_ascii_alphabetic();

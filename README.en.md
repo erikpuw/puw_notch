@@ -10,7 +10,7 @@ A Dynamic Island–style notch for Windows. Rust + Direct2D, ~523 KB exe, no Web
 - **5 pages** (switch with ‹ ›):
   - **Music**: cover art, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, click to seek, a lyrics button widens the panel to show scrolling lyrics; background and aurora line follow the cover's colours. Works with any app using Windows media controls, plus iTunes and foobar2000.
   - **Tasks**: one list for tasks and appointments. Type "Buy milk", "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Tick / edit / delete; overdue shows red with "Late". ⚙ picks an early reminder of 0–60 min, plus one on time.
-  - **Notifications**: the ~30 latest Windows notifications with app icons; click a row to open the app that sent it.
+  - **Notifications**: the ~30 latest Windows notifications with app icons; click a row to open the app that sent it; smooth scrolling, and "Clear all" hides what is there (Windows keeps it).
   - **Health**: water and stand-up reminders with adjustable times and amounts.
   - **Weather**: type a city once (accents optional), the pill shows an icon and temperature; the page has a large icon, feels-like, humidity, wind. °C | °F follows Windows' region, click to switch. Refreshed every 30 minutes on a worker thread, "old" after 90 minutes; the × switches it off.
 - **Banners**: Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth, network, battery, battery saver, USB plugged in / pulled out. Take a screenshot (Win+Shift+S) and the banner shows a thumbnail; click it to open the shot.

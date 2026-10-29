@@ -10,7 +10,7 @@ Notch kiểu Dynamic Island cho Windows. Rust + Direct2D, exe ~523 KB, không We
 - **5 trang** (chuyển bằng ‹ ›):
   - **Nhạc**: ảnh bìa, lời bài hát đồng bộ (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời giãn bảng ngang để xem lời chạy theo bài; nền và đường aurora theo màu ảnh bìa. Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
   - **Việc**: một danh sách cho việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Tick / sửa / xóa; quá giờ tô đỏ kèm "Trễ". ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
-  - **Thông báo**: ~30 thông báo Windows gần nhất kèm icon app; bấm một dòng để mở app đã gửi.
+  - **Thông báo**: ~30 thông báo Windows gần nhất kèm icon app; bấm một dòng để mở app đã gửi; cuộn mượt, nút "Xóa hết" ẩn các thông báo đã có (Windows vẫn giữ).
   - **Sức khỏe**: nhắc uống nước và đứng dậy, chỉnh được giờ và mức.
   - **Thời tiết**: gõ tên thành phố một lần (có dấu hay không đều được), viên thuốc hiện icon + nhiệt độ; trang có icon lớn, cảm nhận, độ ẩm, gió. °C | °F theo vùng Windows, bấm để đổi. Làm mới 30 phút ở luồng nền, quá 90 phút chuyển "cũ"; nút × tắt thời tiết.
 - **Banner**: thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth, mạng, pin, tiết kiệm pin, USB cắm / rút. Chụp màn hình (Win+Shift+S) thì banner có ảnh thu nhỏ, bấm để mở ảnh.

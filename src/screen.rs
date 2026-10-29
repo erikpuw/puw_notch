@@ -85,7 +85,9 @@ pub fn buried(own: HWND) -> bool {
 /// Start menu's power / account flyouts: taken for a fullscreen app it hid the notch. The Start and
 /// Search panels are `CoreWindow`s as tall as the screen: their acrylic backdrop read as busy pixels
 /// under the pill and thinned it to a line.
-const SHELL_CLASSES: [&str; 6] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "XamlWindow", "Windows.UI.Core.CoreWindow"];
+/// `XamlExplorerHostIslandWindow` is the same kind of host on newer Windows 11 builds (the log from
+/// another PC showed it hiding the notch).
+const SHELL_CLASSES: [&str; 7] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "XamlWindow", "XamlExplorerHostIslandWindow", "Windows.UI.Core.CoreWindow"];
 
 pub fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 64];
