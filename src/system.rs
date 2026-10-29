@@ -84,14 +84,6 @@ pub fn power_events(old: Battery, new: Battery) -> Vec<PowerEvent> {
     out
 }
 
-impl Battery {
-    /// "Pin 80%" / "Đang sạc 80%" (English: "Battery 80%" / "Charging 80%")
-    pub fn label(&self) -> String {
-        let label = if self.charging { crate::i18n::tr("Đang sạc", "Charging") } else { crate::i18n::tr("Pin", "Battery") };
-        format!("{label} {}%", self.percent)
-    }
-}
-
 /// `PowerGetEffectiveOverlayScheme` (the power mode now in effect; 0 = success). It is in neither
 /// the `windows` crate nor every SDK's import library, so it is looked up in powrprof.dll once.
 fn effective_overlay() -> Option<GUID> {

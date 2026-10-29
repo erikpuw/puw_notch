@@ -815,6 +815,21 @@ pub struct Renderer {
     round: ID2D1StrokeStyle,
 }
 
+/// Colours of the battery icon, (bolt or first path, the rest): a green bolt on a white case while
+/// charging, all yellow in battery saver (like iPhone's low power mode), all red at 20 % or less.
+fn battery_tint(b: &Battery) -> ((f32, f32, f32), (f32, f32, f32)) {
+    let white = (1.0, 1.0, 1.0);
+    if b.charging {
+        ((0.2, 0.84, 0.29), white)
+    } else if b.saver {
+        ((1.0, 0.8, 0.0), (1.0, 0.8, 0.0))
+    } else if b.percent <= 20 {
+        ((1.0, 0.27, 0.23), (1.0, 0.27, 0.23))
+    } else {
+        (white, white)
+    }
+}
+
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
 }
@@ -1723,19 +1738,7 @@ impl Renderer {
                     let d = 20.0 * s;
                     let bx = if pill_music.is_some() { r - 61.0 * s } else { l + 13.0 * s };
                     let by = (nh - d) / 2.0;
-                    let white = (1.0, 1.0, 1.0);
-                    // (bolt or first path, the rest): green bolt while charging, the whole battery
-                    // yellow in battery saver (like iPhone's low power mode), red at 20 % or less.
-                    let tint = if b.charging {
-                        ((0.2, 0.84, 0.29), white)
-                    } else if b.saver {
-                        ((1.0, 0.8, 0.0), (1.0, 0.8, 0.0))
-                    } else if b.percent <= 20 {
-                        ((1.0, 0.27, 0.23), (1.0, 0.27, 0.23))
-                    } else {
-                        (white, white)
-                    };
-                    draw_wx_icon(ic, geoms, bx, by, d, Some(tint), small_a, 9.0)?;
+                    draw_wx_icon(ic, geoms, bx, by, d, Some(battery_tint(b)), small_a, 9.0)?;
                 }
                 // Weather: icon and temperature in the room the clock leaves, to its right on the plain
                 // pill (balancing the battery), after the cover on the music pill. Left out
@@ -1899,8 +1902,13 @@ impl Renderer {
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
-                if let Some(b) = v.battery {
-                    text(&b.label(), F_LABEL, rect(hr - 92.0 * s, ht, hr, hb), trail, grey(0.6, a))?;
+                // The same battery icon as the pill's, then its percentage.
+                if let Some((b, ic, geoms)) = &battery_line {
+                    let pct = format!("{}%", b.percent);
+                    let tx = hr - width(&pct, F_LABEL);
+                    text(&pct, F_LABEL, rect(tx, ht, hr, hb), trail, grey(0.85, a))?;
+                    let d = 18.0 * s;
+                    draw_wx_icon(ic, geoms, tx - 3.0 * s - d, (ht + hb - d) / 2.0, d, Some(battery_tint(b)), a, 9.0)?;
                 }
                 // Date · time in the middle of the header.
                 text(&format!("{} · {}", v.date, v.time), F_LABEL, rect(cx - 80.0 * s, ht, cx + 80.0 * s, hb), center, grey(0.85, a))?;
