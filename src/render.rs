@@ -3099,6 +3099,80 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes target/readme/<name>.bmp (900 x 230, the notch centred at the top): the README pictures of the pill and the pages"]
+    fn readme_shots() {
+        use weather::{Now, Place, Sky, State};
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900, 230);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("README shots"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let lines = [
+                // Made-up lines about the feature itself (no song's lyrics in the README pictures).
+                (0, "Lời mẫu cho ảnh xem trước"), (6_000, "Lời lấy từ LRCLIB và chạy theo đúng thời gian của bài đang phát trên máy"),
+                (12_000, "Dòng đang hát sáng lên ở giữa"), (18_000, "Dòng dài tự xuống dòng cho vừa khung lời bên phải, không bị cắt mất chữ"),
+                (24_000, "Bấm nút lời để mở hoặc đóng khung này"), (30_000, "Tua bài thì lời nhảy theo"),
+            ];
+            // A cover image for the glow and the cover slot: PUW_PREVIEW_COVER=path.
+            let art = std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new);
+            let song = |position_ms| Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms, playing: true,
+                can_toggle: true, can_next: true, can_previous: true, can_seek: true, art: art.clone(), art_key: 1,
+                lyrics: Arc::new(lines.iter().map(|(t, s)| (*t as u64, s.to_string())).collect()), ..Default::default() };
+            let (playing, singing) = (song(64_000), song(14_000));
+            let place = Some(Place { name: "Đà Nẵng".into(), lat: 16.0, lon: 108.0 });
+            let sky = |sky, temp: f32| State { place: place.clone(), now: Some(Now { temp, feels: temp + 3.0, humidity: 82.0, wind: 11.0, sky, day: true }), updated: Some(202610290140), ..State::default() };
+            let (none, partly, rain) = (State::default(), sky(Sky::PartlyCloudy, 29.0), sky(Sky::Rain, 26.0));
+            let partly_30 = sky(Sky::PartlyCloudy, 30.0);
+            let mut health = Health::default();
+            (health.water_on, health.sit_on) = (false, false);
+            let charging = |percent| Some(Battery { percent, charging: true, saver: false });
+            let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
+            // (file, mode, music, page, lyrics open, weather, battery, time, date)
+            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 9] = [
+                ("pill-idle", Mode::Collapsed, None, Page::Music, false, &none, charging(76), "20:50", ""),
+                ("pill-music", Mode::Collapsed, Some(&playing), Page::Music, false, &none, charging(76), "20:49", ""),
+                ("weather-pill", Mode::Collapsed, None, Page::Music, false, &partly, on_battery, "02:05", ""),
+                ("weather-pill-music", Mode::Collapsed, Some(&playing), Page::Music, false, &rain, on_battery, "02:05", ""),
+                ("page-music", Mode::Expanded, Some(&playing), Page::Music, false, &none, charging(70), "23:16", "T7, 24/10"),
+                ("page-music-lyrics", Mode::Expanded, Some(&singing), Page::Music, true, &none, charging(70), "23:16", "T7, 24/10"),
+                ("page-music-empty", Mode::Expanded, None, Page::Music, false, &none, charging(76), "20:55", "T2, 26/10"),
+                ("page-health", Mode::Expanded, None, Page::Health, false, &none, charging(76), "20:49", "T2, 26/10"),
+                ("page-weather", Mode::Expanded, None, Page::Weather, false, &partly_30, on_battery, "02:05", "T5, 29/10"),
+            ];
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/readme");
+            std::fs::create_dir_all(&dir).unwrap();
+            for (name, mode, music, page, lyrics, wx, battery, time, date) in shots {
+                let live = music.is_some();
+                let mut size = target(mode, live);
+                if lyrics {
+                    size[0] += LYRICS_EXTRA_W;
+                }
+                let view = View { mode, size, time, date, battery, banner: None, music, live, robot: None, phase: 1.3, banner_age: 0.0, lyrics, hovered: None, page,
+                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C,
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
+                // A fresh renderer per picture, run for a second and a half: the cover decodes, the
+                // glow and the equaliser reach their resting strength.
+                let mut renderer = Renderer::new().unwrap();
+                renderer.grab = true;
+                for _ in 0..90 {
+                    renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                }
+                let pixels = &renderer.grabbed[..];
+                let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+                bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+                bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+                bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-h).to_le_bytes());
+                bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+                bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(pixels);
+                std::fs::write(dir.join(format!("{name}.bmp")), bytes).unwrap();
+            }
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
     #[ignore = "writes target/battery-preview.bmp: the resting pill at each battery state, stacked"]
     fn battery_preview() {
         unsafe {
