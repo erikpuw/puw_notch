@@ -53,6 +53,7 @@ pub struct Track {
     pub art_key: u64,
     /// Synced lyric lines (ms, text), sorted. Empty = none found (yet).
     pub lyrics: Arc<Vec<(u64, String)>>,
+    pub(crate) art_ready: bool,
     pub(crate) assets_ready: bool,
 }
 
@@ -79,6 +80,7 @@ impl Track {
             self.position_ms = previous.position_ms();
         }
         self.art = previous.art.clone();
+        self.art_ready = previous.art_ready;
         self.lyrics = previous.lyrics.clone();
         self.assets_ready = previous.assets_ready;
         self.command_error = previous.command_error;
@@ -98,9 +100,10 @@ pub enum Cmd {
 
 pub struct Music {
     pub now: Arc<Mutex<Option<Track>>>,
-    // None wakes the worker when the Music page opens or closes.
+    // None wakes the worker when the Music page or pill visibility changes.
     cmds: Sender<Option<(Cmd, Track)>>,
     page_open: Arc<AtomicBool>,
+    pill_visible: Arc<AtomicBool>,
 }
 
 impl Music {
@@ -110,9 +113,11 @@ impl Music {
         let shared = now.clone();
         let page_open = Arc::new(AtomicBool::new(false));
         let demand = page_open.clone();
+        let pill_visible = Arc::new(AtomicBool::new(false));
+        let pill_demand = pill_visible.clone();
         let target = hwnd.0 as isize;
-        std::thread::spawn(move || worker(shared, rx, target, demand));
-        Music { now, cmds, page_open }
+        std::thread::spawn(move || worker(shared, rx, target, demand, pill_demand));
+        Music { now, cmds, page_open, pill_visible }
     }
 
     pub fn send(&self, c: Cmd) {
@@ -121,6 +126,12 @@ impl Music {
 
     pub fn set_page_open(&self, open: bool) {
         if self.page_open.swap(open, Ordering::Relaxed) != open {
+            let _ = self.cmds.send(None);
+        }
+    }
+
+    pub fn set_pill_visible(&self, visible: bool) {
+        if self.pill_visible.swap(visible, Ordering::Relaxed) != visible {
             let _ = self.cmds.send(None);
         }
     }
@@ -139,7 +150,7 @@ fn playback_snapshot(source_id: String, playing: bool, previous: Option<&Track>)
     t
 }
 
-fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>, target: isize, page_open: Arc<AtomicBool>) {
+fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>, target: isize, page_open: Arc<AtomicBool>, pill_visible: Arc<AtomicBool>) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); };
     let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().and_then(|op| op.get()).ok();
@@ -148,7 +159,8 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
     let (assets, jobs) = channel();
     let asset_shared = shared.clone();
     let asset_demand = page_open.clone();
-    std::thread::spawn(move || asset_worker(asset_shared, jobs, target, asset_demand));
+    let asset_pill = pill_visible.clone();
+    std::thread::spawn(move || asset_worker(asset_shared, jobs, target, asset_demand, asset_pill));
     let mut requested = None;
     loop {
         let mut resync = false;
@@ -164,7 +176,7 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
             Err(RecvTimeoutError::Timeout) => None,
         };
         let detailed = page_open.load(Ordering::Relaxed);
-        if !detailed { requested = None; }
+        let pill = pill_visible.load(Ordering::Relaxed);
         let native_target = cmd.as_ref().is_some_and(|(_, t)| t.source_id == crate::itunes::SOURCE_ID);
         let mut session = match &cmd {
             Some(_) if native_target => None,
@@ -198,13 +210,13 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
         }
         let cached = shared.lock().ok().and_then(|g| g.clone());
         let standard = session.as_ref().and_then(|s| {
-            if detailed || had_command { return read(s); }
+            if detailed || pill || had_command { return read(s); }
             let source = s.SourceAppUserModelId().ok()?.to_string();
             let playing = s.GetPlaybackInfo().ok()?.PlaybackStatus().ok()? == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
             Some(playback_snapshot(source, playing, cached.as_ref()))
         });
         let native = if cmd.is_none() || native_target {
-            if detailed || had_command { crate::itunes::read() }
+            if detailed || pill || had_command { crate::itunes::read() }
             else { crate::itunes::playing().map(|playing| playback_snapshot(crate::itunes::SOURCE_ID.to_owned(), playing, cached.as_ref())) }
         } else { None };
         let native_foreground = unsafe { FindWindowW(None, w!("iTunes")).is_ok_and(|h| h == GetForegroundWindow()) };
@@ -241,35 +253,43 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
         if visible_change {
             notify();
         }
-        if detailed && !t.assets_ready && requested != Some(art_key) {
-            if assets.send((t, session)).is_ok() { requested = Some(art_key); }
+        if needs_assets(&t, detailed, pill) && requested != Some((art_key, detailed)) {
+            if assets.send((t, session)).is_ok() { requested = Some((art_key, detailed)); }
         }
     }
 }
 
-fn asset_job_current(shared: &Mutex<Option<Track>>, page_open: &AtomicBool, key: u64) -> bool {
-    page_open.load(Ordering::Relaxed) && shared.lock().is_ok_and(|g| g.as_ref().is_some_and(|c| c.art_key == key && !c.assets_ready))
+fn needs_assets(track: &Track, page_open: bool, pill_visible: bool) -> bool {
+    (page_open && !track.assets_ready) || (pill_visible && !track.art_ready)
 }
 
-fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<GlobalSystemMediaTransportControlsSession>)>, target: isize, page_open: Arc<AtomicBool>) {
+fn asset_job_current(shared: &Mutex<Option<Track>>, page_open: &AtomicBool, pill_visible: &AtomicBool, key: u64) -> bool {
+    shared.lock().is_ok_and(|g| g.as_ref().is_some_and(|c| c.art_key == key
+        && needs_assets(c, page_open.load(Ordering::Relaxed), pill_visible.load(Ordering::Relaxed))))
+}
+
+fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<GlobalSystemMediaTransportControlsSession>)>, target: isize, page_open: Arc<AtomicBool>, pill_visible: Arc<AtomicBool>) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     while let Ok(mut job) = rx.recv() {
         for newer in rx.try_iter() { job = newer; }
         let (t, session) = job;
-        if !asset_job_current(&shared, &page_open, t.art_key) { continue; }
-        let art = t.art.clone().or_else(|| match session {
+        if !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
+        let art = t.art.clone().or_else(|| if t.art_ready { None } else { match session {
             Some(s) => s.TryGetMediaPropertiesAsync().and_then(|o| o.get())
                 .and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)),
             None if t.source_id == crate::itunes::SOURCE_ID => crate::itunes::artwork(&t.title, &t.artist),
             None => None,
-        }.map(Arc::new));
+        }.map(Arc::new) });
         if let Ok(mut g) = shared.lock() {
-            if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) { cur.art = art; }
+            if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) {
+                cur.art = art;
+                cur.art_ready = true;
+            }
         }
-        if !asset_job_current(&shared, &page_open, t.art_key) { continue; }
         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
+        if !page_open.load(Ordering::Relaxed) || !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
         let lines = fetch_lyrics(&t.title, &t.artist, t.duration_ms / 1000, &page_open);
-        if !asset_job_current(&shared, &page_open, t.art_key) { continue; }
+        if !page_open.load(Ordering::Relaxed) || !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
         if let Ok(mut g) = shared.lock() {
             if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) {
                 cur.lyrics = Arc::new(lines);
@@ -543,7 +563,7 @@ mod tests {
     #[test]
     fn page_sync_wakes_immediately_and_only_on_visibility_changes() {
         let (cmds, rx) = channel();
-        let music = Music { now: Arc::new(Mutex::new(None)), cmds, page_open: Arc::new(AtomicBool::new(false)) };
+        let music = Music { now: Arc::new(Mutex::new(None)), cmds, page_open: Arc::new(AtomicBool::new(false)), pill_visible: Arc::new(AtomicBool::new(false)) };
         music.set_page_open(false);
         assert!(rx.try_recv().is_err());
         music.set_page_open(true);
@@ -562,7 +582,7 @@ mod tests {
         let (tx, rx) = channel();
         tx.send((track.clone(), None)).unwrap();
         drop(tx);
-        asset_worker(shared.clone(), rx, 0, Arc::new(AtomicBool::new(false)));
+        asset_worker(shared.clone(), rx, 0, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
         let current = shared.lock().unwrap();
         let current = current.as_ref().unwrap();
         assert!(Arc::ptr_eq(current.art.as_ref().unwrap(), track.art.as_ref().unwrap()));
@@ -578,7 +598,7 @@ mod tests {
         let (tx, rx) = channel();
         tx.send((track.clone(), None)).unwrap();
         drop(tx);
-        asset_worker(shared.clone(), rx, 0, Arc::new(AtomicBool::new(true)));
+        asset_worker(shared.clone(), rx, 0, Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(false)));
         let current = shared.lock().unwrap();
         let current = current.as_ref().unwrap();
         assert!(Arc::ptr_eq(current.art.as_ref().unwrap(), track.art.as_ref().unwrap()));
@@ -608,6 +628,36 @@ mod tests {
     }
 
     #[test]
+    fn pill_loads_art_once_and_defers_lyrics_until_the_page_opens() {
+        let track = Track { title: "Must not fetch lyrics".into(), art_key: 8,
+            art: Some(Arc::new(vec![4, 5, 6])), ..Track::default() };
+        assert!(needs_assets(&track, false, true));
+        assert!(!needs_assets(&track, false, false));
+        let shared = Arc::new(Mutex::new(Some(track.clone())));
+        let (tx, rx) = channel();
+        tx.send((track.clone(), None)).unwrap();
+        drop(tx);
+        asset_worker(shared.clone(), rx, 0, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(true)));
+        let current = shared.lock().unwrap();
+        let current = current.as_ref().unwrap();
+        assert!(current.art_ready && !current.assets_ready && current.lyrics.is_empty());
+        assert!(Arc::ptr_eq(current.art.as_ref().unwrap(), track.art.as_ref().unwrap()));
+        assert!(!needs_assets(current, false, true), "the pill must not reload artwork on every poll");
+        assert!(needs_assets(current, true, false), "opening Music still loads lyrics");
+    }
+
+    #[test]
+    fn artwork_jobs_cannot_update_a_different_track() {
+        let shared = Mutex::new(Some(Track { art_key: 9, ..Track::default() }));
+        let page = AtomicBool::new(false);
+        let pill = AtomicBool::new(true);
+        assert!(!asset_job_current(&shared, &page, &pill, 8));
+        assert!(asset_job_current(&shared, &page, &pill, 9));
+        pill.store(false, Ordering::Relaxed);
+        assert!(!asset_job_current(&shared, &page, &pill, 9));
+    }
+
+    #[test]
     fn pill_stays_ten_seconds_after_pausing() {
         assert!(shows_pill(true, None), "playing");
         assert!(shows_pill(false, Some(Duration::from_secs(9))), "just paused: still there to resume");
@@ -634,6 +684,7 @@ mod tests {
     #[ignore = "read-only live test of the complete source-selection worker"]
     fn live_selected_source() {
         let music = Music::start(HWND::default());
+        music.set_pill_visible(true);
         let end = Instant::now() + Duration::from_secs(5);
         let mut result = None;
         while Instant::now() < end {

@@ -1508,7 +1508,7 @@ impl Renderer {
         self.ensure_surface(hwnd, w, h)?;
         self.take_icons();
         let fonts = self.fonts(scale)?;
-        let cover = if page == Some(Page::Music) {
+        let cover = if page == Some(Page::Music) || (v.live && matches!(v.mode, Mode::Collapsed | Mode::Peek)) {
             v.music.and_then(|t| self.cover(t, (COVER * scale).round() as u32, (20.0 * scale).round() as u32))
         } else { v.music.and_then(|t| self.cover.as_ref().filter(|c| c.track_key == t.art_key).and_then(|c| c.bitmaps.clone())) };
         let cover_shadow = cover.as_ref().and_then(|_| self.cover_shadow(scale));
@@ -2679,6 +2679,19 @@ mod tests {
             view.page = Page::Music;
             renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
             assert!(renderer.cover.is_some(), "opening Music prepares its cover cache");
+            let next = Track { art_key: 8, playing: true, ..Track::default() };
+            view.music = Some(&next);
+            view.live = true;
+            view.mode = Mode::Collapsed;
+            view.size = target(Mode::Collapsed, true);
+            renderer.grab = true;
+            renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
+            assert_eq!(renderer.cover.as_ref().unwrap().track_key, 8, "the visible pill must discard the previous track's cover");
+            let first = renderer.grabbed.clone();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            view.phase = 0.4;
+            renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
+            assert_ne!(first, renderer.grabbed, "the playing pill's equaliser must move between frames");
             DestroyWindow(hwnd).unwrap();
         }
     }

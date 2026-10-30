@@ -191,6 +191,7 @@ impl App {
 
     fn sync_page_work(&mut self) {
         let page = render::visible_page(self.notch.mode, self.hidden, self.page);
+        self.music.set_pill_visible(!self.hidden && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek));
         if self.active_page != page {
             self.active_page = page;
             self.music.set_page_open(page == Some(Page::Music));
