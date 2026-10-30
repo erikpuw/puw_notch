@@ -41,6 +41,8 @@ pub struct Track {
     pub(crate) rate: f64,
     pub(crate) reported_position: i64,
     pub(crate) updated_ticks: i64,
+    /// Resolution of a rounded native position; zero for a precise timeline.
+    pub(crate) position_precision_ms: u64,
     pub can_toggle: bool,
     pub can_next: bool,
     pub can_previous: bool,
@@ -78,9 +80,16 @@ impl Track {
         self.start_ticks.saturating_add((position_ms.min(self.duration_ms) as i64).saturating_mul(10_000))
     }
 
-    fn inherit_cached(&mut self, previous: &Track) {
-        if self.updated_ticks <= 0 && previous.updated_ticks <= 0 && self.reported_position == previous.reported_position {
-            self.position_ms = previous.position_ms();
+    fn inherit_cached(&mut self, previous: &Track, reset_position: bool) {
+        if !reset_position && self.updated_ticks <= 0 && previous.updated_ticks <= 0 {
+            let predicted = previous.position_ms();
+            // Whole-second UIA reports must not jump across a shorter lyrics transition.
+            let rounded = self.playing && previous.playing && self.position_precision_ms > 0
+                && self.position_precision_ms == previous.position_precision_ms
+                && self.position_ms.abs_diff(predicted) < self.position_precision_ms;
+            if self.reported_position == previous.reported_position || rounded {
+                self.position_ms = predicted;
+            }
         }
         self.art = previous.art.clone();
         self.art_ready = previous.art_ready;
@@ -270,7 +279,7 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
         let visible_change = (detailed && resync) || had_command || prev.as_ref().is_none_or(|p| changed_track || p.playing != t.playing || p.duration_ms != t.duration_ms);
         if let Ok(mut g) = shared.lock() {
             if let Some(p) = g.as_ref().filter(|p| !changed_track && p.art_key == art_key) {
-                t.inherit_cached(p);
+                t.inherit_cached(p, matches!(cmd, Some((Cmd::Seek(_), _))));
             }
             if had_command { t.command_error = command_error; }
             *g = Some(t.clone());
@@ -375,6 +384,8 @@ fn read(s: &GlobalSystemMediaTransportControlsSession) -> Option<Track> {
                 track.start_ticks = 0;
                 track.reported_position = (timing.position_ms as i64).saturating_mul(10_000);
                 track.updated_ticks = 0;
+                track.position_precision_ms = 1000;
+                track.at = Some(Instant::now());
             }
             track.can_seek |= timing.can_seek && track.duration_ms > 0;
         }
@@ -587,6 +598,35 @@ pub fn current_line(lines: &[(u64, String)], pos_ms: u64) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "read-only live measurement of playback clock corrections over six seconds"]
+    fn live_timeline_cadence() {
+        let music = Music::start(HWND::default());
+        music.set_pill_visible(true);
+        let end = Instant::now() + Duration::from_secs(6);
+        let mut last: Option<(Instant, Track, u64)> = None;
+        let mut corrections = Vec::new();
+        let mut source = String::new();
+        while Instant::now() < end {
+            if let Some(track) = music.snapshot().filter(|t| t.playing && t.duration_ms > 0) {
+                source = track.source_id.clone();
+                let now = Instant::now();
+                let position = track.position_ms();
+                if let Some((at, previous, prev_position)) = &last {
+                    if track.same_media(previous) {
+                        let elapsed = now.duration_since(*at).as_millis() as i64;
+                        let correction = position as i64 - *prev_position as i64 - elapsed;
+                        if correction.abs() > 40 { corrections.push(correction); }
+                    }
+                }
+                last = Some((now, track, position));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        eprintln!("source={source} clock_corrections_ms={corrections:?}");
+        assert!(last.is_some(), "a playing source with a timeline must be available");
+    }
 
     #[test]
     #[ignore = "seeks the selected live player and restores its position through the music worker"]
@@ -814,11 +854,44 @@ mod tests {
             position_ms: 12_000, reported_position: 100_000_000, ..Default::default() };
         let mut next = Track { duration_ms: 60_000, reported_position: 100_000_000,
             position_ms: 10_000, ..Default::default() };
-        next.inherit_cached(&previous);
+        next.inherit_cached(&previous, false);
         assert_eq!(next.position_ms(), 12_000, "pause must freeze the extrapolated position");
         next.playing = true;
         next.rate = 1.0;
         assert_eq!(next.position_after(Duration::from_secs(1)), 13_000);
+    }
+
+    #[test]
+    fn whole_second_reports_do_not_skip_or_reverse_a_lyrics_glide() {
+        let lines = vec![(0, "first".into()), (10_000, "next".into())];
+        for (predicted, reported) in [(9_521, 10_000), (10_060, 10_000)] {
+            let previous = Track { playing: true, rate: 1.0, duration_ms: 60_000,
+                position_ms: predicted, reported_position: 90_000_000,
+                position_precision_ms: 1000, ..Default::default() };
+            let mut next = Track { position_ms: reported, reported_position: (reported as i64) * 10_000,
+                ..previous.clone() };
+            next.inherit_cached(&previous, false);
+            assert_eq!(next.position_ms(), predicted, "a rounded report must not change the continuous playback clock");
+            assert_eq!(crate::lyrics::phase(&lines, next.position_ms()), crate::lyrics::phase(&lines, predicted));
+        }
+    }
+
+    #[test]
+    fn coarse_clock_keeps_real_seeks_and_precise_timestamps() {
+        let previous = Track { playing: true, rate: 1.0, duration_ms: 60_000,
+            position_ms: 10_350, reported_position: 100_000_000,
+            position_precision_ms: 1000, ..Default::default() };
+        for position in [4_000, 20_000] {
+            let mut next = Track { position_ms: position, reported_position: position as i64 * 10_000, ..previous.clone() };
+            next.inherit_cached(&previous, false);
+            assert_eq!(next.position_ms(), position);
+        }
+        let mut seeked = Track { position_ms: 10_000, ..previous.clone() };
+        seeked.inherit_cached(&previous, true);
+        assert_eq!(seeked.position_ms(), 10_000, "even a seek inside the same reported second must apply");
+        let mut precise = Track { position_ms: 10_000, updated_ticks: 1, ..previous.clone() };
+        precise.inherit_cached(&previous, false);
+        assert_eq!(precise.position_ms(), 10_000);
     }
 
     #[test]
