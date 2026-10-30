@@ -1658,7 +1658,6 @@ impl Renderer {
                 let t: Vec<u16> = t.encode_utf16().collect();
                 fonts[f].SetTextAlignment(align)?;
                 rt.DrawText(&t, &fonts[f], &b, &self.brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
-                let _ = rt.Flush(None, None);
                 Ok(())
             };
             // Cover art clipped to a rounded square, or a note glyph when there is none.
@@ -2296,7 +2295,6 @@ impl Renderer {
                                                 let units: Vec<u16> = line.encode_utf16().collect();
                                                 fonts[F_LYRIC].SetTextAlignment(lead)?;
                                                 rt.DrawText(&units, &fonts[F_LYRIC], &rect(x0, top, x1, top + h), &self.brush(soft_text(tint, level, 1.0, alpha))?, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
-                                                let _ = rt.Flush(None, None);
                                             }
                                         }
                                     }
