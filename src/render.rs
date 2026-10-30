@@ -834,6 +834,8 @@ pub struct Renderer {
     cover: Option<CoverCache>,
     /// The cover's blurred shadow, made once per scale: (scale, bitmap).
     cover_shadow: Option<(f32, ID2D1Bitmap)>,
+    /// Reusable offscreen render targets (small, mid) for the Music page's aurora blur.
+    aurora_rts: RefCell<Option<((u32, u32), ID2D1BitmapRenderTarget, ID2D1BitmapRenderTarget)>>,
     /// The Music page's glow: (colour, strength 0..1, time of the last frame), see glow_step.
     glow: ((f32, f32, f32), f32, Instant),
     /// How far the pill's equaliser is "up" (0 flat .. 1 dancing): eases both ways on play / pause.
@@ -949,7 +951,9 @@ fn gpu_device(factory: &ID2D1Factory) -> Result<(ID3D11Device, ID2D1DeviceContex
         }
         // One frame in flight: a frame shows on the next refresh instead of queueing behind others.
         dxgi.SetMaximumFrameLatency(1)?;
-        let ctx = factory.cast::<ID2D1Factory1>()?.CreateDevice(&dxgi)?.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+        let d2d_dev = factory.cast::<ID2D1Factory1>()?.CreateDevice(&dxgi)?;
+        d2d_dev.SetMaximumTextureMemory(4 * 1024 * 1024);
+        let ctx = d2d_dev.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
         ctx.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         let rt = ctx.cast()?;
         Ok((d3d, ctx, rt))
@@ -969,7 +973,7 @@ impl Renderer {
             }, None)?;
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0),
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
-                fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), dot_widths: None, switches: None, round })
+                fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), dot_widths: None, switches: None, round })
         }
     }
 
@@ -980,6 +984,7 @@ impl Renderer {
         self.surface = None;
         self.cover = None;
         self.cover_shadow = None;
+        *self.aurora_rts.borrow_mut() = None;
         self.app_icons.clear();
         Ok(())
     }
@@ -1639,6 +1644,9 @@ impl Renderer {
         };
         let note_icons: Vec<Option<ID2D1Bitmap>> = if page == Some(Page::Notify) { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
+        if v.mode != Mode::Alert {
+            self.app_icons.retain(|k, _| !k.starts_with("img:"));
+        }
         let banner_image: Option<ID2D1Bitmap> = v.banner.filter(|_| v.mode == Mode::Alert).and_then(|b| b.image.as_deref()).and_then(|p| self.app_icon(&format!("img:{p}")));
         let rt = &self.rt;
         let s = scale;
@@ -1650,6 +1658,7 @@ impl Renderer {
                 let t: Vec<u16> = t.encode_utf16().collect();
                 fonts[f].SetTextAlignment(align)?;
                 rt.DrawText(&t, &fonts[f], &b, &self.brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                let _ = rt.Flush(None, None);
                 Ok(())
             };
             // Cover art clipped to a rounded square, or a note glyph when there is none.
@@ -1774,6 +1783,7 @@ impl Renderer {
                 rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
             }
             // Aurora over the glow: a thin glowing line in the cover's two colours, swaying slowly.
+            if open == 0.0 { *self.aurora_rts.borrow_mut() = None; }
             let aurora_a = open * level * gate;
             if aurora_a > 0.01 && v.mode != Mode::Alert {
                 let [c1, c2] = self.cover.as_ref().map_or([GLOW_NEUTRAL; 2], |c| c.aurora);
@@ -1794,7 +1804,17 @@ impl Renderer {
                 let made = (|| -> Result<(ID2D1Bitmap, D2D_SIZE_F, ID2D1LinearGradientBrush, ID2D1PathGeometry)> {
                 // Drawn at 1/AURORA_SHRINK size, then stretched with linear filtering: the stretch
                 // is the blur, for a few small fills instead of a blur effect.
-                let small = rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: (w as f32 / AURORA_SHRINK).ceil(), height: (nh / AURORA_SHRINK).ceil() + 1.0 }), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
+                let (sw, sh) = ((w as f32 / AURORA_SHRINK).ceil(), (nh / AURORA_SHRINK).ceil() + 1.0);
+                let key = (sw as u32, sh as u32);
+                let half = AURORA_SHRINK / 2.0;
+                if self.aurora_rts.borrow().as_ref().is_none_or(|(k, _, _)| *k != key) {
+                    let s_rt = rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: sw, height: sh }), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
+                    let sz0 = s_rt.GetBitmap()?.GetSize();
+                    let m_rt = rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: sz0.width * half, height: sz0.height * half }), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
+                    *self.aurora_rts.borrow_mut() = Some((key, s_rt, m_rt));
+                }
+                let rts = self.aurora_rts.borrow();
+                let (_, small, mid) = rts.as_ref().unwrap();
                 small.BeginDraw();
                 small.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
                 small.SetTransform(&Matrix3x2 { M11: 1.0 / AURORA_SHRINK, M12: 0.0, M21: 0.0, M22: 1.0 / AURORA_SHRINK, M31: 0.0, M32: 0.0 });
@@ -1807,8 +1827,6 @@ impl Renderer {
                 small.EndDraw(None, None)?;
                 // Stretched in two linear steps (8x would show its blocks): to half size, then full.
                 let sz = small.GetBitmap()?.GetSize();
-                let half = AURORA_SHRINK / 2.0;
-                let mid = rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: sz.width * half, height: sz.height * half }), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
                 mid.BeginDraw();
                 mid.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
                 mid.DrawBitmap(&small.GetBitmap()?, Some(&rect(0.0, 0.0, sz.width * half, sz.height * half)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
@@ -1837,7 +1855,7 @@ impl Renderer {
 
             // 1px Liquid Glass inner border along the open panel / banner sides and bottom corners.
             if open > 0.0 {
-                rt.PushAxisAlignedClip(&rect(l - ear, ear, r + ear, nh + 2.0 * s), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                rt.PushAxisAlignedClip(&rect(l - ear, ear.round(), r + ear, nh + 2.0 * s), D2D1_ANTIALIAS_MODE_ALIASED);
                 rt.DrawGeometry(&shape, &self.brush(grey(1.0, 0.08 * open))?, 1.0 * s, &self.round);
                 rt.PopAxisAlignedClip();
             }
@@ -2278,6 +2296,7 @@ impl Renderer {
                                                 let units: Vec<u16> = line.encode_utf16().collect();
                                                 fonts[F_LYRIC].SetTextAlignment(lead)?;
                                                 rt.DrawText(&units, &fonts[F_LYRIC], &rect(x0, top, x1, top + h), &self.brush(soft_text(tint, level, 1.0, alpha))?, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+                                                let _ = rt.Flush(None, None);
                                             }
                                         }
                                     }
