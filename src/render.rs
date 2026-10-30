@@ -829,6 +829,7 @@ pub struct Renderer {
     /// Height of each lyric line wrapped to the lyrics area, for one song (the lyrics' address)
     /// and width: measured once, not every frame.
     lyric_heights: Option<(usize, u32, Vec<f32>)>,
+    lyric_motion: lyrics::Motion,
     /// Start-menu icon per app id (None: Windows has none for it); asked once per app.
     app_icons: HashMap<String, Option<ID2D1Bitmap>>,
     icon_loader: IconLoader,
@@ -948,7 +949,7 @@ impl Renderer {
             }, None)?;
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0),
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
-                fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
+                fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -1215,6 +1216,7 @@ impl Renderer {
                 }
             })
             .collect();
+        self.lyric_motion = lyrics::Motion::default();
         self.lyric_heights = Some((key, w, heights.clone()));
         heights
     }
@@ -1514,7 +1516,8 @@ impl Renderer {
         let cover_shadow = cover.as_ref().and_then(|_| self.cover_shadow(scale));
         let target = if v.live && page == Some(Page::Music) { self.cover.as_ref().and_then(|c| c.glow) } else { None };
         let now = Instant::now();
-        let dt = now.duration_since(self.glow.2).as_secs_f32().min(0.1);
+        let elapsed = now.duration_since(self.glow.2).as_secs_f32();
+        let dt = elapsed.min(0.1);
         let (tint, level, glow_busy) = glow_step(self.glow.0, self.glow.1, target, dt);
         self.glow = (tint, level, now);
         // The equaliser rises when playing starts and settles flat when it stops, not in one frame.
@@ -1557,6 +1560,20 @@ impl Renderer {
             Some(t) if page == Some(Page::Music) && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
                 self.lyric_heights(&t.lyrics, LYRIC_W * scale, 20.0 * scale, &fonts),
             _ => Vec::new(),
+        };
+        let lyric_tops = lyrics::tops(&lyric_heights, 8.0 * scale);
+        let lyric_moving = match v.music {
+            Some(t) if !lyric_heights.is_empty() => {
+                let position = t.position_ms();
+                let phase = lyrics::phase(&t.lyrics, position);
+                let focus = lyrics::focus(&lyric_tops, &lyric_heights, phase);
+                self.lyric_motion.step(focus, phase, position, elapsed, if t.playing { t.rate } else { 0.0 })
+            }
+            _ => {
+                // Keep the measured layout cached, but do no lyric animation behind a closed page.
+                self.lyric_motion = lyrics::Motion::default();
+                false
+            }
         };
         let note_icons: Vec<Option<ID2D1Bitmap>> = if page == Some(Page::Notify) { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
@@ -2161,12 +2178,11 @@ impl Renderer {
                                 rt.FillRectangle(&rect(divider, y0, divider + 1.0 * s, y1), &rt.CreateLinearGradientBrush(&down, None, &stops)?);
                                 match v.music {
                                     Some(t) if !lyric_heights.is_empty() => {
-                                        let tops = lyrics::tops(&lyric_heights, 8.0 * s);
-                                        let phase = lyrics::phase(&t.lyrics, t.position_ms());
-                                        let focus = lyrics::focus(&tops, &lyric_heights, phase);
+                                        let phase = self.lyric_motion.phase();
+                                        let focus = self.lyric_motion.focus();
                                         let middle = (y0 + y1) / 2.0;
                                         for (j, (_, line)) in t.lyrics.iter().enumerate() {
-                                            let (top, h) = (middle + tops[j] - focus, lyric_heights[j]);
+                                            let (top, h) = (middle + lyric_tops[j] - focus, lyric_heights[j]);
                                             if top + h < y0 || top > y1 {
                                                 continue;
                                             }
@@ -2597,15 +2613,14 @@ impl Renderer {
             let reach = if open > 0.0 { (SHADOW_STEPS as f32 * SHADOW_STEP + SHADOW_DY) * s } else { 0.0 };
             let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((nh + reach).ceil() as i32).min(h));
             self.place(hwnd, (x, y, w, h), region);
-            // The lyrics need frames while they show and the song plays, but a slow trickle is enough
-            // between lines; only a lyric gliding to the next line asks for full-speed frames.
+            // Poll the media clock between lines; the spring requests vsync until it settles,
+            // including after pausing in the middle of a transition.
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
-            let lyric_glide = lyrics_run && v.music.is_some_and(|t| lyrics::phase(&t.lyrics, t.position_ms()).fract() != 0.0);
             self.slow_frames = lyrics_run;
             // Icon completion posts WM_ICONS; waiting for I/O never keeps animation alive.
             // The Weather page's icon moves for a moment when the panel or the page opens.
             let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && v.page_age < icons::DUR;
-            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_glide)
+            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving)
         }
     }
 }
@@ -2613,6 +2628,26 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lyric_layout_cache_resets_motion_for_tracks_and_dpi() {
+        let mut renderer = Renderer::new().unwrap();
+        let fonts = renderer.fonts(1.0).unwrap();
+        let first = Arc::new(vec![(0, "first".into()), (5000, "second".into())]);
+        renderer.lyric_heights(&first, LYRIC_W, 20.0, &fonts);
+        renderer.lyric_motion.step(10.0, 0.0, 4900, 0.016, 1.0);
+        renderer.lyric_motion.step(50.0, 1.0, 4920, 0.02, 1.0);
+        let before = renderer.lyric_motion.focus();
+        renderer.lyric_heights(&first, LYRIC_W, 20.0, &fonts);
+        assert_eq!(renderer.lyric_motion.focus(), before, "cached layout preserves motion");
+        let other = Arc::new(vec![(0, "another song".into())]);
+        renderer.lyric_heights(&other, LYRIC_W, 20.0, &fonts);
+        assert!(!renderer.lyric_motion.step(90.0, 0.0, 4920, 0.016, 1.0));
+        assert_eq!(renderer.lyric_motion.focus(), 90.0, "new lyrics land on their own current line");
+        renderer.lyric_heights(&other, LYRIC_W * 1.5, 30.0, &fonts);
+        assert!(!renderer.lyric_motion.step(135.0, 0.0, 4936, 0.016, 1.0));
+        assert_eq!(renderer.lyric_motion.focus(), 135.0, "DPI change resets pixel coordinates");
+    }
 
     #[test]
     fn closed_page_does_not_queue_icons() {

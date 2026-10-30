@@ -1,9 +1,6 @@
-//! Where the lyrics scroll to and how bright each line is, from the song position. Pure maths: the
-//! renderer measures how tall each wrapped line is and draws; this decides what is centred.
+//! Select lyrics from the media clock; advance their motion from the frame clock.
 
-/// A line glides into the focus this long before its time stamp, so the scroll is a short smooth
-/// move that ends as the line starts, not a slow creep.
-pub const GLIDE_MS: u64 = 380;
+const LEAD_MS: u64 = 80;
 /// Brightness of a line that is not the one being sung.
 pub const DIM: f32 = 0.42;
 
@@ -12,19 +9,66 @@ fn smooth(x: f32) -> f32 {
     x * x * (3.0 - 2.0 * x)
 }
 
-/// Fractional index of the line in focus at `pos_ms`: line `i` while it is sung, gliding to
-/// `i + 1` over the last GLIDE_MS before that line starts. Before the first line it sits on 0.
+pub fn current_index(lines: &[(u64, String)], pos_ms: u64) -> Option<usize> {
+    lines.partition_point(|(t, _)| *t <= pos_ms.saturating_add(LEAD_MS)).checked_sub(1)
+}
+
+/// Target line, held until the next timestamp. Motion is independent of media polling.
 pub fn phase(lines: &[(u64, String)], pos_ms: u64) -> f32 {
-    let started = lines.partition_point(|(t, _)| *t <= pos_ms);
-    let Some(i) = started.checked_sub(1) else { return 0.0 };
-    let mut p = i as f32;
-    if let Some(&(next, _)) = lines.get(i + 1) {
-        let start = next.saturating_sub(GLIDE_MS).max(lines[i].0);
-        if pos_ms > start {
-            p += smooth((pos_ms - start) as f32 / (next - start).max(1) as f32);
+    current_index(lines, pos_ms).unwrap_or(0) as f32
+}
+
+#[derive(Default)]
+struct Spring {
+    x: f32,
+    v: f32,
+}
+
+impl Spring {
+    fn step(&mut self, goal: f32, dt: f32, k: f32, c: f32) -> bool {
+        // Match the notch's small integration slices so low-refresh frames stay stable.
+        let mut left = dt.clamp(0.0, 0.1);
+        while left > 0.0 {
+            let h = left.min(0.004);
+            self.v += (k * (goal - self.x) - c * self.v) * h;
+            self.x += self.v * h;
+            left -= h;
+        }
+        if (self.x - goal).abs() < 0.002 && self.v.abs() < 0.05 {
+            self.x = goal;
+            self.v = 0.0;
+            false
+        } else {
+            true
         }
     }
-    p
+}
+
+#[derive(Default)]
+pub struct Motion {
+    scroll: Spring,
+    highlight: Spring,
+    position: Option<u64>,
+}
+
+impl Motion {
+    pub fn focus(&self) -> f32 { self.scroll.x }
+    pub fn phase(&self) -> f32 { self.highlight.x }
+
+    /// First display and real seeks land directly; ordinary playback retargets the springs.
+    pub fn step(&mut self, focus: f32, phase: f32, position: u64, dt: f32, rate: f64) -> bool {
+        let extra = (dt.max(0.0) as f64 * rate.max(0.0) * 1000.0) as u64;
+        let reset = self.position.is_none_or(|last| last.saturating_add(extra).abs_diff(position) > 1000)
+            || dt > 0.25;
+        self.position = Some(position);
+        if reset {
+            self.scroll = Spring { x: focus, v: 0.0 };
+            self.highlight = Spring { x: phase, v: 0.0 };
+            return false;
+        }
+        let moving = self.scroll.step(focus, dt, 150.0, 21.0);
+        self.highlight.step(phase, dt, 220.0, 28.0) || moving
+    }
 }
 
 /// Top of each line when they are stacked with `gap` between them.
@@ -55,8 +99,7 @@ pub fn focus(tops: &[f32], heights: &[f32], phase: f32) -> f32 {
     centre(i) + (centre(i + 1) - centre(i)) * (phase - i as f32).clamp(0.0, 1.0)
 }
 
-/// Brightness of line `j`: full on the focus line, DIM two lines away and beyond, in between
-/// while the focus glides.
+/// Brightness interpolates with the animated highlight, separately from line selection.
 pub fn line_alpha(j: usize, phase: f32) -> f32 {
     DIM + (1.0 - DIM) * (1.0 - (j as f32 - phase).abs()).clamp(0.0, 1.0)
 }
@@ -76,30 +119,72 @@ mod tests {
     }
 
     #[test]
-    fn phase_sits_on_a_line_then_glides_to_the_next_as_it_starts() {
+    fn phase_selects_the_last_line_with_an_eighty_ms_lead() {
         let l = lines(&[1000, 5000, 9000]);
         assert_eq!(phase(&[], 3000), 0.0);
         assert_eq!(phase(&l, 0), 0.0, "before the first line");
         assert_eq!(phase(&l, 1000), 0.0, "first line starts");
         assert_eq!(phase(&l, 4000), 0.0, "still on line 0, before the glide");
-        let mid = phase(&l, 5000 - GLIDE_MS / 2);
-        assert!(mid > 0.3 && mid < 0.7, "halfway through the glide: {mid}");
+        assert_eq!(phase(&l, 4919), 0.0, "animation must not select a future line early");
+        assert_eq!(phase(&l, 4920), 1.0, "the next line is selected 80 ms early");
         assert_eq!(phase(&l, 5000), 1.0, "next line starts: focus is on it");
         assert_eq!(phase(&l, 7000), 1.0);
         assert_eq!(phase(&l, 99_000), 2.0, "after the last line");
     }
 
     #[test]
-    fn phase_never_goes_backwards_or_jumps() {
-        // Lines closer together than the glide still move forward smoothly, in whole steps of at most one line.
+    fn selection_handles_close_and_duplicate_timestamps_and_seeks() {
         let l = lines(&[0, 200, 400, 5000]);
         let mut last = 0.0f32;
         for pos in (0..6000).step_by(10) {
             let p = phase(&l, pos);
             assert!(p >= last - 1e-6, "went back at {pos}: {last} -> {p}");
-            assert!(p - last <= 0.6, "jumped at {pos}: {last} -> {p}");
             last = p;
         }
+        assert_eq!(phase(&lines(&[0, 200, 200, 400]), 120), 2.0);
+        assert_eq!(phase(&l, 0), 0.0, "backward seek selects its destination directly");
+    }
+
+    #[test]
+    fn motion_continues_between_media_updates_and_settles_when_paused() {
+        let mut m = Motion::default();
+        assert!(!m.step(10.0, 0.0, 4900, 0.016, 1.0));
+        assert!(m.step(50.0, 1.0, 4920, 0.020, 1.0));
+        let first = m.focus();
+        assert!(first > 10.0 && first < 50.0);
+        assert!(m.step(50.0, 1.0, 4920, 0.016, 0.0));
+        assert!(m.focus() > first, "motion must continue without a new playback position");
+        let mut moving = true;
+        for _ in 0..120 { moving = m.step(50.0, 1.0, 4920, 0.016, 0.0); }
+        assert!(!moving);
+        assert_eq!((m.focus(), m.phase()), (50.0, 1.0));
+    }
+
+    #[test]
+    fn seeks_and_long_frame_gaps_do_not_scroll_through_unrelated_lines() {
+        let mut m = Motion::default();
+        m.step(10.0, 0.0, 1000, 0.016, 1.0);
+        assert!(!m.step(900.0, 20.0, 90_000, 0.016, 1.0));
+        assert_eq!((m.focus(), m.phase()), (900.0, 20.0));
+        assert!(!m.step(50.0, 1.0, 5000, 0.016, 1.0));
+        assert_eq!((m.focus(), m.phase()), (50.0, 1.0));
+        assert!(!m.step(80.0, 2.0, 5500, 0.5, 1.0));
+        assert_eq!(m.focus(), 80.0);
+    }
+
+    #[test]
+    fn scroll_is_consistent_across_refresh_rates_and_playback_speeds() {
+        let sample = |fps: u32| {
+            let mut m = Motion::default();
+            m.step(0.0, 0.0, 1000, 0.0, 2.0);
+            for frame in 1..=fps / 2 {
+                m.step(80.0, 1.0, 1000 + frame as u64 * 2000 / fps as u64, 1.0 / fps as f32, 2.0);
+            }
+            m.focus()
+        };
+        let (slow, fast) = (sample(30), sample(144));
+        assert!(slow > 79.0 && fast > 79.0);
+        assert!((slow - fast).abs() < 0.2, "30 Hz {slow}, 144 Hz {fast}");
     }
 
     #[test]

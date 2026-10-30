@@ -588,10 +588,9 @@ fn parse_stamp(tag: &str) -> Option<u64> {
     Some(m * 60_000 + (secs * 1000.0).round() as u64)
 }
 
-/// Line being sung at `pos_ms` (the last one that started), skipping empty spacer lines.
+/// Current line with the same 80 ms lead as the expanded lyrics, hiding empty spacer lines.
 pub fn current_line(lines: &[(u64, String)], pos_ms: u64) -> Option<&str> {
-    let i = lines.partition_point(|l| l.0 <= pos_ms);
-    let (_, text) = lines.get(i.checked_sub(1)?)?;
+    let (_, text) = lines.get(crate::lyrics::current_index(lines, pos_ms)?)?;
     (!text.is_empty()).then_some(text.as_str())
 }
 
@@ -900,6 +899,8 @@ mod tests {
         let l = parse_lrc(lrc);
         assert_eq!(l, vec![(1000, "Câu một".into()), (3500, "Điệp khúc".into()), (5000, String::new()), (10000, "Điệp khúc".into())]);
         assert_eq!(current_line(&l, 500), None);
+        assert_eq!(current_line(&l, 919), None);
+        assert_eq!(current_line(&l, 920), Some("Câu một"));
         assert_eq!(current_line(&l, 1000), Some("Câu một"));
         assert_eq!(current_line(&l, 4000), Some("Điệp khúc"));
         assert_eq!(current_line(&l, 6000), None);
