@@ -274,6 +274,19 @@ impl Notch {
         }
     }
 
+    /// Advance the animation, or snap straight to the goal when OS reduced-motion is on.
+    pub fn step_mode(&mut self, dt: f32, reduced_motion: bool) -> bool {
+        if reduced_motion {
+            let t = self.goal();
+            for (s, t) in self.size.iter_mut().zip(t) {
+                s.pos = t;
+                s.vel = 0.0;
+            }
+            return false;
+        }
+        self.step(dt)
+    }
+
     /// Advance the animation. Returns true while still moving.
     pub fn step(&mut self, dt: f32) -> bool {
         let t = self.goal();
@@ -523,6 +536,17 @@ mod tests {
         assert_eq!(alert_size(9), alert_size(BANNER_MAX_LINES as u8), "longer text ends with ... instead");
         assert_eq!(alert_size(0), target(Mode::Alert, false), "status banner (volume, brightness) keeps its size");
         assert!(alert_size(4)[1] < MAX_H);
+    }
+
+    #[test]
+    fn reduced_motion_snaps_straight_to_goal() {
+        let mut n = Notch::new(false);
+        assert!(!n.step_mode(1.0 / 120.0, true));
+        assert_eq!(n.size(), target(Mode::Collapsed, false));
+        n.on_enter();
+        n.on_dwell(true);
+        assert!(!n.step_mode(1.0 / 120.0, true));
+        assert_eq!(n.size(), target(Mode::Expanded, false));
     }
 
     #[test]

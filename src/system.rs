@@ -8,7 +8,9 @@ use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::System::Registry::*;
 use windows::Win32::Foundation::SYSTEMTIME;
+use windows::core::BOOL;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
+use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
 
 const WEEKDAYS: [&str; 7] = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 const WEEKDAYS_EN: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -157,6 +159,15 @@ pub fn log(line: &str) {
         }
         let _ = writeln!(f, "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {line}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
     }
+}
+
+/// True when Windows "Animation effects" (Settings > Accessibility > Visual effects) is turned off.
+pub fn reduced_motion() -> bool {
+    let mut on = BOOL(1);
+    let ok = unsafe {
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, Some((&mut on as *mut BOOL).cast()), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0))
+    };
+    ok.is_ok() && !on.as_bool()
 }
 
 /// The PC's region setting counts in US units (Control Panel > Region > measurement system, the

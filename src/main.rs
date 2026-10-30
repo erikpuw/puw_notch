@@ -138,6 +138,7 @@ struct App {
     frame_ms: u32,
     vsync: Vsync,
     hovered_button: Option<Button>,
+    pressed_button: Option<Button>,
     /// Foreground window + rect at the last check: busy sampling waits for it to hold still.
     last_foreground: Option<(isize, RECT)>,
     page: Page,
@@ -151,6 +152,7 @@ struct App {
     edit_item: Option<usize>,
     caret: bool,
     todo_scroll: usize,
+    todo_pos: f32,
     /// Notifications page: what Windows still keeps, newest first, and its first visible row.
     notes: Vec<notify::Note>,
     note_scroll: usize,
@@ -244,6 +246,8 @@ impl App {
             banner_age: self.banner_at.elapsed().as_secs_f32(),
             lyrics: self.lyrics_wide(),
             hovered: self.hovered_button,
+            pressed: self.pressed_button,
+            reduced_motion: system::reduced_motion(),
             page: self.page,
             leaving: self.page_anim.map(|(from, t0, dir)| (from, (t0.elapsed().as_secs_f32() / PAGE_MORPH_S).min(1.0), dir)),
             list: ListView {
@@ -255,6 +259,7 @@ impl App {
                 edit_item: self.edit_item,
                 caret: self.caret,
                 scroll: self.scroll(),
+                todo_pos: self.todo_pos,
                 note_pos: self.note_pos,
             },
             todos: &self.todo.items,
@@ -301,7 +306,8 @@ impl App {
         let playing = self.track.as_ref().is_some_and(|t| t.playing);
         let bars = playing && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek);
         let aurora = playing && self.notch.mode == Mode::Expanded && self.page == Page::Music;
-        !self.hidden && (bars || aurora || self.robot.visible())
+        let anim = !system::reduced_motion();
+        !self.hidden && ((anim && (bars || aurora)) || self.robot.visible())
     }
 
     fn settings(&self) -> system::Settings {
@@ -349,7 +355,8 @@ impl App {
             self.lyrics_open = false;
         }
         self.notch.set_wide(self.lyrics_wide());
-        let mut moving = self.notch.step(dt);
+        let reduced = system::reduced_motion();
+        let mut moving = self.notch.step_mode(dt, reduced);
         if self.hidden && self.notch.is_hidden() {
             unsafe { let _ = ShowWindow(self.hwnd, SW_HIDE); }
             self.animating = false;
@@ -357,13 +364,18 @@ impl App {
             return;
         }
         // The Notifications list glides to the row the wheel asked for.
-        let goal = self.note_scroll as f32;
-        if self.note_pos != goal {
-            self.note_pos += (goal - self.note_pos) * (1.0 - (-dt * 14.0).exp());
-            if (goal - self.note_pos).abs() < 0.01 {
-                self.note_pos = goal;
+        for (pos, goal) in [(&mut self.todo_pos, self.todo_scroll as f32), (&mut self.note_pos, self.note_scroll as f32)] {
+            if *pos != goal {
+                if reduced {
+                    *pos = goal;
+                } else {
+                    *pos += (goal - *pos) * (1.0 - (-dt * 14.0).exp());
+                    if (goal - *pos).abs() < 0.01 {
+                        *pos = goal;
+                    }
+                    moving = true;
+                }
             }
-            moving = true;
         }
         // The page morph runs on the same frames; drop it once it has played out.
         let morphing = match self.page_anim {
@@ -455,6 +467,7 @@ impl App {
         // Ask Windows for the next leave again: the old request may be gone.
         self.tracking = false;
         self.hovered_button = None;
+        self.pressed_button = None;
         unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
         self.notch.on_leave();
         self.kick();
@@ -661,6 +674,19 @@ impl App {
                 self.lyrics_open = !self.lyrics_open;
                 self.kick();
             }
+            Button::PageDot(next) => {
+                if next != self.page {
+                    self.cancel_task_edit();
+                    self.end_edit();
+                    let cur = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as i32;
+                    let tgt = PAGES.iter().position(|p| *p == next).unwrap_or(0) as i32;
+                    self.page_anim = Some((self.page, Instant::now(), if tgt >= cur { 1 } else { -1 }));
+                    self.page = next;
+                    self.page_since = Instant::now();
+                    self.settings_open = None;
+                    self.kick();
+                }
+            }
             Button::PagePrev | Button::PageNext => {
                 self.cancel_task_edit();
                 self.end_edit();
@@ -860,11 +886,13 @@ impl App {
             let fg = unsafe { GetForegroundWindow() };
             system::log(&if hide { format!("hidden, foreground {}", screen::class_name(fg)) } else { "shown again".to_string() });
             if hide {
+                self.pressed_button = None;
                 self.cancel_seek();
                 self.end_edit();
                 self.hover_in = false;
                 self.tracking = false;
                 self.hovered_button = None;
+        self.pressed_button = None;
                 self.page_anim = None;
                 unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
             } else {
@@ -1026,6 +1054,7 @@ impl App {
                     return Some(LRESULT(0));
                 }
                 self.hovered_button = None;
+                self.pressed_button = None;
                 self.tracking = false;
                 self.hover_in = false;
                 unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
@@ -1035,6 +1064,20 @@ impl App {
                 }
                 self.kick();
             }
+            WM_KEYDOWN if self.notch.mode == Mode::Expanded && !self.editing => match wp.0 as u16 {
+                0x25 | 0x27 => {
+                    let dir = if wp.0 as u16 == 0x27 { 1 } else { -1 };
+                    let i = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as i32;
+                    let next = PAGES[(i + dir).rem_euclid(PAGES.len() as i32) as usize];
+                    self.page_anim = Some((self.page, Instant::now(), dir));
+                    self.page = next;
+                    self.page_since = Instant::now();
+                    self.settings_open = None;
+                    self.kick();
+                }
+                0x20 if self.page == Page::Music => self.music.send(music::Cmd::PlayPause),
+                _ => {}
+            },
             WM_CHAR if self.editing => self.type_char(wp.0 as u16),
             // Lost the keyboard (clicked elsewhere): stop typing, keep the draft.
             WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => self.end_edit(),
@@ -1045,12 +1088,15 @@ impl App {
                 let scroll = if self.page == Page::Notify { &mut self.note_scroll } else { &mut self.todo_scroll };
                 *scroll = if delta > 0 { scroll.saturating_sub(1) } else { (*scroll + 1).min(max) };
                 // The Notifications list eases there frame by frame (see `frame`).
-                if self.page == Page::Notify { self.kick(); } else { self.redraw(); }
+                self.kick();
             }
             WM_LBUTTONDOWN => {
                 let x = (lp.0 & 0xffff) as i16 as f32;
                 let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
-                if self.notch.mode == Mode::Expanded && self.hit(x, y) == Some(Button::Seek) {
+                let hit = (self.notch.mode == Mode::Expanded).then(|| self.hit(x, y)).flatten();
+                self.pressed_button = hit;
+                if hit == Some(Button::Seek) {
+                    self.pressed_button = None;
                     self.seek_drag = self.track.as_ref().and_then(SeekDrag::new);
                     if self.seek_drag.is_some() {
                         unsafe { SetCapture(self.hwnd); }
@@ -1058,9 +1104,12 @@ impl App {
                         self.hovered_button = Some(Button::Seek);
                         self.update_seek(x);
                     }
+                } else if hit.is_some() {
+                    self.redraw();
                 }
             }
             WM_CAPTURECHANGED | WM_CANCELMODE => {
+                self.pressed_button = None;
                 self.cancel_seek();
                 self.release_stale_hover();
                 self.redraw();
@@ -1068,6 +1117,7 @@ impl App {
             WM_LBUTTONUP => {
                 let x = (lp.0 & 0xffff) as i16 as f32;
                 let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+                self.pressed_button = None;
                 if self.seek_drag.is_some() {
                     self.update_seek(x);
                     let drag = self.seek_drag.take().unwrap();
@@ -1415,6 +1465,7 @@ fn run() -> windows::core::Result<()> {
             frame_ms: 0,
             vsync: Vsync::start(hwnd),
             hovered_button: None,
+            pressed_button: None,
             last_foreground: None,
             page: Page::Music,
             todo: todo::Todo::load(system::now_stamp()),
@@ -1424,6 +1475,7 @@ fn run() -> windows::core::Result<()> {
             edit_item: None,
             caret: false,
             todo_scroll: 0,
+            todo_pos: 0.0,
             notes: Vec::new(),
             note_scroll: 0,
             note_pos: 0.0,

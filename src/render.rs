@@ -69,6 +69,8 @@ pub struct View<'a> {
     /// The lyrics are open beside the player (Music page, open panel): the panel is wider.
     pub lyrics: bool,
     pub hovered: Option<Button>,
+    pub pressed: Option<Button>,
+    pub reduced_motion: bool,
     pub page: Page,
     /// Page switch in progress: (page sliding out, progress 0..1, direction +1 next / -1 previous).
     pub leaving: Option<(Page, f32, i32)>,
@@ -132,7 +134,10 @@ pub struct ListView<'a> {
     /// First visible row.
     pub scroll: usize,
     /// Notifications list position in rows while it glides to `scroll` (a wheel step eases).
+    /// Notifications list position in rows while it glides to `scroll` (a wheel step eases).
     pub note_pos: f32,
+    /// Tasks list position in rows while it glides to `scroll` (a wheel step eases).
+    pub todo_pos: f32,
 }
 
 pub struct HealthView<'a> {
@@ -163,6 +168,7 @@ pub enum Button {
     Lyrics,
     PagePrev,
     PageNext,
+    PageDot(Page),
     ListInput,
     /// Tick / untick task at this index (the whole row, text included). To-do only.
     ListToggle(usize),
@@ -316,6 +322,14 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     if !wide {
         out.push((Button::PagePrev, r(10.0, ARROW_Y, ARROW, ARROW)));
         out.push((Button::PageNext, r(w - 10.0 - ARROW, ARROW_Y, ARROW, ARROW)));
+        let (dot, dot_wide, gap) = (5.0, 14.0, 5.0);
+        let total = dot_wide + (PAGES.len() as f32 - 1.0) * (dot + gap);
+        let mut dx = w / 2.0 - total / 2.0;
+        for p in PAGES {
+            let dw = if p == page { dot_wide } else { dot };
+            out.push((Button::PageDot(p), r(dx - 2.5, DOTS_Y - 4.0, dw + 5.0, 13.0)));
+            dx += dw + gap;
+        }
     }
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {
@@ -323,7 +337,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
         Page::Todo => {
             out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
             out.push((Button::ListClear, r(cl + cw - 26.0, INPUT_Y, 26.0, INPUT_H)));
-            out.push((Button::Gear(Card::Tasks), r(cl + cw - 20.0, COUNT_Y - 2.0, 20.0, 18.0)));
+            out.push((Button::Gear(Card::Tasks), r(cl + cw - 22.0, COUNT_Y - 3.0, 22.0, 20.0)));
             if settings == Some(Card::Tasks) {
                 out.push((Button::RemindStep(-1), r(cl + cw - 112.0, ROW_Y, 22.0, 22.0)));
                 out.push((Button::RemindStep(1), r(cl + cw - 24.0, ROW_Y, 22.0, 22.0)));
@@ -358,15 +372,17 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
         }
         Page::Health => {
             for (card, x) in [(Card::Water, cl), (Card::Sit, cl + CARD_W + CARD_GAP)] {
-                out.push((Button::Gear(card), r(x + CARD_W - 28.0, CARD_TOP + 4.0, 22.0, 22.0)));
+                out.push((Button::Gear(card), r(x + CARD_W - 29.0, CARD_TOP + 3.0, 24.0, 24.0)));
                 if settings == Some(card) {
                     for (k, &(set, switch)) in setting_rows(card).iter().enumerate() {
                         let y = SET_Y + k as f32 * SET_ROW;
                         if switch {
-                            out.push((Button::Toggle(set), r(x + CARD_W - 46.0, y + 1.0, 34.0, 16.0)));
+                            out.push((Button::Toggle(set), r(x + CARD_W - 46.0, y, 36.0, 18.0)));
                         } else {
-                            out.push((Button::Step(set, -1), r(x + CARD_W - 90.0, y, 18.0, 18.0)));
-                            out.push((Button::Step(set, 1), r(x + CARD_W - 30.0, y, 18.0, 18.0)));
+
+
+                            out.push((Button::Step(set, -1), r(x + CARD_W - 91.0, y, 20.0, 18.0)));
+                            out.push((Button::Step(set, 1), r(x + CARD_W - 31.0, y, 20.0, 18.0)));
                         }
                     }
                 } else if card == Card::Water {
@@ -835,6 +851,10 @@ pub struct Renderer {
     icon_loader: IconLoader,
     /// Icon slots that just changed glyph: (current, previous, when) for the morph.
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
+    /// Animated pagination dot widths (0.0 = dot, 1.0 = wide pill), initialized on first open frame.
+    dot_widths: Option<[f32; 5]>,
+    /// Animated switch knob positions (0.0 = off, 1.0 = on) for [WaterOn, SitOn].
+    switches: Option<[f32; 2]>,
     /// Round caps and joins for the robot face's strokes.
     round: ID2D1StrokeStyle,
 }
@@ -949,7 +969,7 @@ impl Renderer {
             }, None)?;
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0),
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
-                fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
+                fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), dot_widths: None, switches: None, round })
         }
     }
 
@@ -1528,6 +1548,48 @@ impl Renderer {
             self.bars = bars_to;
         }
         let bars_level = self.bars;
+        let mut dots_busy = false;
+        let dot_targets = PAGES.map(|p| if p == v.page { 1.0 } else { 0.0 });
+        let dot_w = match self.dot_widths {
+            Some(mut cur) if v.mode == Mode::Expanded && !v.reduced_motion => {
+                let k = 1.0 - (-dt * 18.0).exp();
+                for (c, t) in cur.iter_mut().zip(dot_targets) {
+                    *c += (t - *c) * k;
+                    if (t - *c).abs() > 0.01 {
+                        dots_busy = true;
+                    } else {
+                        *c = t;
+                    }
+                }
+                self.dot_widths = Some(cur);
+                cur
+            }
+            _ => {
+                self.dot_widths = Some(dot_targets);
+                dot_targets
+            }
+        };
+        let mut switches_busy = false;
+        let sw_targets = [if v.health.h.water_on { 1.0 } else { 0.0 }, if v.health.h.sit_on { 1.0 } else { 0.0 }];
+        let sw_pos = match self.switches {
+            Some(mut cur) if page == Some(Page::Health) && v.health.settings.is_some() && !v.reduced_motion => {
+                let k = 1.0 - (-dt * 18.0).exp();
+                for (c, t) in cur.iter_mut().zip(sw_targets) {
+                    *c += (t - *c) * k;
+                    if (t - *c).abs() > 0.01 {
+                        switches_busy = true;
+                    } else {
+                        *c = t;
+                    }
+                }
+                self.switches = Some(cur);
+                cur
+            }
+            _ => {
+                self.switches = Some(sw_targets);
+                sw_targets
+            }
+        };
         // The banner's line icon (status / device) with its paths as geometry.
         let banner_line = (|| {
             let icon = if v.mode == Mode::Alert { v.banner?.icon.unwrap_or(ICON_BELL) } else { return None };
@@ -1660,7 +1722,7 @@ impl Renderer {
                     }
                     (e.1, e.2.elapsed().as_secs_f32() / ICON_MORPH_S)
                 };
-                if t >= 1.0 || prev == icon {
+                if v.reduced_motion || t >= 1.0 || prev == icon {
                     return text(icon, f, b, center, c);
                 }
                 morphing.set(true);
@@ -1715,7 +1777,7 @@ impl Renderer {
             let aurora_a = open * level * gate;
             if aurora_a > 0.01 && v.mode != Mode::Alert {
                 let [c1, c2] = self.cover.as_ref().map_or([GLOW_NEUTRAL; 2], |c| c.aurora);
-                let t = v.phase;
+                let t = if v.reduced_motion { 0.0 } else { v.phase };
                 let (c1, c2) = (dim_to_lum(c1, AURORA_MAX_LUM), dim_to_lum(c2, AURORA_MAX_LUM));
                 // First colour on the left into the second on the right; each stop's strength
                 // drifts on its own, so brighter and darker stretches travel along the band.
@@ -1773,6 +1835,12 @@ impl Renderer {
                 }
             }
 
+            // 1px Liquid Glass inner border along the open panel / banner sides and bottom corners.
+            if open > 0.0 {
+                rt.PushAxisAlignedClip(&rect(l - ear, ear, r + ear, nh + 2.0 * s), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                rt.DrawGeometry(&shape, &self.brush(grey(1.0, 0.08 * open))?, 1.0 * s, &self.round);
+                rt.PopAxisAlignedClip();
+            }
             // Each layout fades in as the pill reaches its size.
             let fade = |from: f32, span: f32| ((nh - from * s) / (span * s)).clamp(0.0, 1.0);
             let small_a = 1.0 - fade(39.0, 20.0);
@@ -1831,7 +1899,7 @@ impl Renderer {
                     let bw = 2.0 * s;
                     for i in 0..4 {
                         let k = i as f32;
-                        let amp = bars_level * (0.5 + 0.5 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin());
+                        let amp = if v.reduced_motion { bars_level * 0.55 } else { bars_level * (0.5 + 0.5 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin()) };
                         let bh = (4.0 + 10.0 * amp) * s;
                         let bx = r - 14.0 * s - (4.0 - k) * (bw + 2.0 * s);
                         let my = nh / 2.0;
@@ -1856,7 +1924,8 @@ impl Renderer {
                     let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
                     let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
                     let age = v.banner_age;
-                    let (pop_scale, pop_alpha) = icons::pop(age);
+                    let age = if v.reduced_motion { 9.0 } else { v.banner_age };
+                    let (pop_scale, pop_alpha) = if v.reduced_motion { (1.0, 1.0) } else { icons::pop(age) };
                     let pop = translate(-mx, -my) * scaling(pop_scale) * translate(mx, my);
                     if let Some((ic, geoms)) = &banner_line {
                         icon_busy = age < icons::DUR;
@@ -1946,7 +2015,7 @@ impl Renderer {
                 };
                 match v.leaving {
                     Some((from, t, dir)) => {
-                        let d = dir as f32 * 24.0 * s;
+                        let d = if v.reduced_motion { 0.0 } else { dir as f32 * 24.0 * s };
                         let (out_a, in_a) = page_fades(t);
                         draw_title(from, -d * t.min(1.0), out_a)?;
                         draw_title(v.page, d * (1.0 - ease_out_back(t)), in_a)?;
@@ -1985,6 +2054,16 @@ impl Renderer {
                     let scroll = if current { lv.scroll } else { 0 };
                     let settings = if current { v.health.settings } else { None };
                     let hovered = if current { v.hovered } else { None };
+                    let pressed = if current && !v.reduced_motion { v.pressed } else { None };
+                    let page_xform = Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: dx, M32: 0.0 };
+                    let set_press = |b: Button, r: D2D_RECT_F| {
+                        if pressed == Some(b) {
+                            let (mx, my) = ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0);
+                            rt.SetTransform(&(translate(-mx, -my) * scaling(0.96) * translate(mx, my) * page_xform));
+                        } else {
+                            rt.SetTransform(&page_xform);
+                        }
+                    };
                     let btns = page_buttons(cx, s, page, rows_of(page), scroll, settings, v.lyrics);
                     let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
                     // A soft disc behind an icon-only button under the mouse: the colour change alone
@@ -2043,17 +2122,22 @@ impl Renderer {
                     };
                     // Edit / delete on every list row, so they are there without a pointer to hover
                     // with (touch, pen); lit while the row is hovered or being edited.
-                    let row_tools = |i: usize, lit: bool| -> Result<()> {
-                        let rest = if lit { 0.65 } else { 0.4 };
+                    let row_tools = |i: usize, y: f32, lit: bool| -> Result<()> {
+                        let rest = if lit { 0.7 } else { 0.52 };
                         let edit_hot = hovered == Some(Button::ListEdit(i)) || (current && lv.edit_item == Some(i));
-                        if let Some(eb) = btns.iter().filter(|(b, _)| *b == Button::ListEdit(i)).map(|(_, r)| *r).last() {
+                        let eb = rect(cr - 54.0 * s, y, cr - 28.0 * s, y + ROW_H * s);
+                        if true {
+                            set_press(Button::ListEdit(i), eb);
                             hover_disc(Button::ListEdit(i))?;
                             text(ICON_EDIT, F_SMALL_ICON, eb, center, if edit_hot { solid(YELLOW, a) } else { grey(rest, a) })?;
                         }
-                        if let Some(db) = rect_of(Button::ListDelete(i)) {
+                        let db = rect(cr - 26.0 * s, y, cr, y + ROW_H * s);
+                        if true {
+                            set_press(Button::ListDelete(i), db);
                             let c = if hovered == Some(Button::ListDelete(i)) { color(1.0, 0.45, 0.4, a) } else { grey(rest, a) };
                             hover_disc(Button::ListDelete(i))?;
                             text(ICON_CLOSE, F_SMALL_ICON, db, center, c)?;
+                            rt.SetTransform(&page_xform);
                         }
                         Ok(())
                     };
@@ -2062,13 +2146,13 @@ impl Renderer {
                             || (current && lv.edit_item == Some(i))
                     };
                     // Scroll position of `n` rows shown `rows` at a time from `y0`, `row_h` apart.
-                    let scrollbar = |n: usize, rows: usize, y0: f32, row_h: f32| -> Result<()> {
+                    let scrollbar = |n: usize, rows: usize, y0: f32, row_h: f32, pos: f32| -> Result<()> {
                         if n > rows {
                             let (top, bottom) = (y0 * s, (y0 + row_h * rows as f32) * s);
                             let x = cr + 6.0 * s;
                             rt.FillRoundedRectangle(&rounded(rect(x, top, x + 3.0 * s, bottom), 1.5 * s), &self.brush(grey(0.2, a))?);
                             let len = (bottom - top) * rows as f32 / n as f32;
-                            let start = top + (bottom - top - len) * scroll as f32 / (n - rows) as f32;
+                            let start = top + (bottom - top - len) * (pos / (n - rows) as f32).clamp(0.0, 1.0);
                             rt.FillRoundedRectangle(&rounded(rect(x, start, x + 3.0 * s, start + len), 1.5 * s), &self.brush(grey(0.6, a))?);
                         }
                         Ok(())
@@ -2076,7 +2160,7 @@ impl Renderer {
                     // Time label coloured by how close it is: orange within the early reminder, red when past.
                     let time_color = |due: u64, quiet: bool| {
                         let left = minutes(due) - minutes(lv.now);
-                        if quiet { grey(0.4, a) } else if left <= 0 { color(1.0, 0.35, 0.3, a) }
+                        if quiet { grey(0.52, a) } else if left <= 0 { color(1.0, 0.35, 0.3, a) }
                         else if left <= lv.remind_before.max(15) as i64 { color(1.0, 0.62, 0.2, a) } else { grey(0.6, a) }
                     };
 
@@ -2121,6 +2205,7 @@ impl Renderer {
                             let playing = v.music.is_some_and(|t| t.playing);
                             for (b, br) in buttons_from(l / s, s) {
                                 let on = b.enabled(v.music);
+                                set_press(b, br);
                                 if b == Button::Lyrics {
                                     // A speech bubble with two lines; filled while the lyrics are open.
                                     let (bx, by) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
@@ -2156,6 +2241,7 @@ impl Renderer {
                                     else if hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
                                 micon(if b == Button::Previous { "prev" } else { "next" }, icon, F_ICON, br, c)?;
                             }
+                            rt.SetTransform(&page_xform);
                             // Lyrics beside the player, fading in as the panel widens: the line being
                             // sung is bright and centred, the others dim; the whole column glides up
                             // as the song moves on. Long lines wrap onto more lines.
@@ -2226,10 +2312,11 @@ impl Renderer {
                                         rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: (sb.left + sb.right) / 2.0, Y: (sb.top + sb.bottom) / 2.0 }, radiusX: 11.0 * s, radiusY: 11.0 * s },
                                             &self.brush(grey(if hovered == Some(b) { 0.3 } else { 0.2 }, a))?);
                                         text(icon, F_TINY_ICON, sb, center, grey(1.0, a))?;
+                                        rt.SetTransform(&page_xform);
                                     }
                                 }
                                 text(tr("Việc có giờ còn được nhắc đúng giờ", "Timed tasks also ring on time"), F_LABEL,
-                                    rect(cl, y + 26.0 * s, cr, y + 44.0 * s), lead, grey(0.5, a))?;
+                                    rect(cl, y + 26.0 * s, cr, y + 44.0 * s), lead, grey(0.56, a))?;
                             } else {
                                 if v.todos.is_empty() {
                                     let mid = (cl + cr) / 2.0;
@@ -2237,11 +2324,17 @@ impl Renderer {
                                     rt.DrawEllipse(&ring, &self.brush(grey(0.3, a))?, 1.5 * s, None);
                                     text(ICON_CHECK, F_TINY_ICON, rect(mid - 11.0 * s, (ROW_Y + 1.0) * s, mid + 11.0 * s, (ROW_Y + 23.0) * s), center, grey(0.3, a))?;
                                     text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, rect(cl, (ROW_Y + 28.0) * s, cr, (ROW_Y + 46.0) * s), center, grey(0.7, a))?;
-                                    text(tr("Gõ vào ô trên rồi nhấn Enter", "Type above and press Enter"), F_LABEL, rect(cl, (ROW_Y + 46.0) * s, cr, (ROW_Y + 62.0) * s), center, grey(0.5, a))?;
+                                    text(tr("Gõ vào ô trên rồi nhấn Enter", "Type above and press Enter"), F_LABEL, rect(cl, (ROW_Y + 46.0) * s, cr, (ROW_Y + 62.0) * s), center, grey(0.56, a))?;
                                 }
-                                for (b, br) in btns.iter() {
-                                    let Button::ListToggle(i) = *b else { continue };
-                                    let Some(item) = v.todos.get(i) else { continue };
+                                {
+                                let pos = if current && !v.reduced_motion { lv.todo_pos } else { scroll as f32 };
+                                let first = pos.floor().max(0.0) as usize;
+                                rt.PushAxisAlignedClip(&rect(cl - 8.0 * s, ROW_Y * s, cr + 4.0 * s, (ROW_Y + ROW_H * LIST_ROWS as f32) * s), D2D1_ANTIALIAS_MODE_ALIASED);
+                                for (i, item) in v.todos.iter().enumerate().skip(first).take(LIST_ROWS + 1) {
+                                    let y = (ROW_Y + (i as f32 - pos) * ROW_H) * s;
+                                    let br = rect(cl, y, cr - 56.0 * s, y + ROW_H * s);
+
+
                                     let hot = row_hovered(i);
                                     if hot {
                                         rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &self.brush(grey(0.1, a))?);
@@ -2274,21 +2367,29 @@ impl Renderer {
                                     }
                                     // Text, struck through when done.
                                     let tb = rect(br.left + d + 10.0 * s, br.top, text_right, br.bottom);
-                                    text(&item.text, F_BODY, tb, lead, grey(if done { 0.5 } else { 1.0 }, a))?;
+                                    text(&item.text, F_BODY, tb, lead, grey(if done { 0.52 } else { 1.0 }, a))?;
                                     if done {
                                         let tw = width(&item.text, F_BODY).min(tb.right - tb.left);
                                         let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
-                                        rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &self.brush(grey(0.5, a))?);
+                                        rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &self.brush(grey(0.52, a))?);
                                     }
-                                    row_tools(i, hot)?;
+                                    row_tools(i, y, hot)?;
                                 }
-                                scrollbar(v.todos.len(), LIST_ROWS, ROW_Y, ROW_H)?;
+                                rt.PopAxisAlignedClip();
+                                scrollbar(v.todos.len(), LIST_ROWS, ROW_Y, ROW_H, pos)?;
+                                }
+
                             }
                         }
                         Page::Notify => {
                             if v.notes.is_empty() {
-                                let area = rect(cl, NOTE_Y * s, cr, (NOTE_Y + NOTE_H * NOTE_ROWS as f32) * s);
-                                text(tr("Chưa có thông báo", "No notifications"), F_BODY, area, center, grey(0.55, a))?;
+
+                                let mid = (cl + cr) / 2.0;
+                                let ring = D2D1_ELLIPSE { point: Vector2 { X: mid, Y: (NOTE_Y + 26.0) * s }, radiusX: 12.0 * s, radiusY: 12.0 * s };
+                                rt.DrawEllipse(&ring, &self.brush(grey(0.32, a))?, 1.5 * s, None);
+                                text(ICON_BELL, F_SMALL_ICON, rect(mid - 12.0 * s, (NOTE_Y + 14.0) * s, mid + 12.0 * s, (NOTE_Y + 38.0) * s), center, grey(0.38, a))?;
+                                text(tr("Chưa có thông báo", "No notifications"), F_BODY, rect(cl, (NOTE_Y + 44.0) * s, cr, (NOTE_Y + 62.0) * s), center, grey(0.72, a))?;
+                                text(tr("Thông báo mới từ Windows sẽ hiện tại đây", "New Windows notifications will appear here"), F_LABEL, rect(cl, (NOTE_Y + 62.0) * s, cr, (NOTE_Y + 78.0) * s), center, grey(0.56, a))?;
                             }
                             let today = (lv.now / 10_000) as u32;
                             // Rows glide to their place after a wheel step: drawn from the fractional
@@ -2329,17 +2430,19 @@ impl Renderer {
                                 text(&line2, F_BODY, rect(tx, y + 19.0 * s, cr, y + 37.0 * s), lead, grey(0.65, a))?;
                             }
                             rt.PopAxisAlignedClip();
-                            scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
+                            scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H, pos)?;
                             if let Some(cb) = rect_of(Button::NotesClear) {
                                 let hot = hovered == Some(Button::NotesClear);
                                 let label = tr("Xóa hết", "Clear all");
                                 let pw = (width(label, F_LABEL) + 2.0 * CLEAR_PAD * s).min(cb.right - cb.left);
                                 let pb = rect((cb.right - pw).round(), cb.top.round(), cb.right.round(), cb.bottom.round());
                                 let radius = (pb.bottom - pb.top) / 2.0;
+                                set_press(Button::NotesClear, pb);
                                 rt.FillRoundedRectangle(&rounded(pb, radius), &self.brush(grey(if hot { 0.28 } else { 0.16 }, a))?);
                                 let edge = rect(pb.left + 0.5, pb.top + 0.5, pb.right - 0.5, pb.bottom - 0.5);
                                 rt.DrawRoundedRectangle(&rounded(edge, radius - 0.5), &self.brush(grey(1.0, a * if hot { 0.35 } else { 0.22 }))?, 1.0, None);
                                 text(label, F_LABEL, pb, center, grey(if hot { 1.0 } else { 0.85 }, a))?;
+                                rt.SetTransform(&page_xform);
                             }
                         }
                         Page::Weather => {
@@ -2355,7 +2458,7 @@ impl Renderer {
                                     // x before it switches the weather off.
                                     text(&place.name, F_TITLE, rect(cl, 68.0 * s, cr - (CREDIT_W + 32.0) * s, 88.0 * s), lead, grey(1.0, a))?;
                                     let fetched = wx.updated.map_or(String::new(), |u| format!(" · {}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100));
-                                    let credit = if stale { solid(ORANGE, a) } else { grey(0.5, a) };
+                                    let credit = if stale { solid(ORANGE, a) } else { grey(0.55, a) };
                                     text(&format!("Open-Meteo{fetched}"), F_LABEL, rect(cr - CREDIT_W * s, 68.0 * s, cr, 88.0 * s), trail, credit)?;
                                     if let Some(ob) = rect_of(Button::CityOff) {
                                         let hot = hovered == Some(Button::CityOff);
@@ -2412,10 +2515,13 @@ impl Renderer {
                                     // A muted sun above the words, as the Tasks page has its ring.
                                     if let Some((ic, geoms)) = &weather_empty {
                                         let mid = (cl + cr) / 2.0;
-                                        draw_wx_icon(ic, geoms, mid - 16.0 * s, 72.0 * s, 32.0 * s, Some(((0.4, 0.4, 0.4), (0.4, 0.4, 0.4))), a, 9.0)?;
+                                        let wx_loading = wx.looking || (wx.place.is_some() && wx.now.is_none());
+                                        let empty_age = if wx_loading && !v.reduced_motion { v.phase % icons::DUR } else { 9.0 };
+                                        let empty_tint = if wx_loading { (0.75, 0.62, 0.28) } else { (0.4, 0.4, 0.4) };
+                                        draw_wx_icon(ic, geoms, mid - 16.0 * s, 72.0 * s, 32.0 * s, Some((empty_tint, empty_tint)), a, empty_age)?;
                                     }
                                     text(&first, F_BODY, rect(cl, 110.0 * s, cr, 130.0 * s), center, grey(0.75, a))?;
-                                    text(second, F_LABEL, rect(cl, 130.0 * s, cr, 150.0 * s), center, grey(0.5, a))?;
+                                    text(second, F_LABEL, rect(cl, 130.0 * s, cr, 150.0 * s), center, grey(0.56, a))?;
                                 }
                             }
                         }
@@ -2426,6 +2532,8 @@ impl Renderer {
                                 let x = if card == Card::Water { cl } else { cl + (CARD_W + CARD_GAP) * s };
                                 let cb = rect(x, CARD_TOP * s, x + CARD_W * s, CARD_BOTTOM * s);
                                 rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(grey(0.11, a))?);
+                                let card_edge = rect(cb.left + 0.5 * s, cb.top + 0.5 * s, cb.right - 0.5 * s, cb.bottom - 0.5 * s);
+                                rt.DrawRoundedRectangle(&rounded(card_edge, 13.5 * s), &self.brush(grey(1.0, a * 0.07))?, 1.0 * s, None);
                                 let accent = if card == Card::Water { BLUE } else { ORANGE };
                                 // Title row: icon, name, gear.
                                 let ty = (CARD_TOP + 4.0) * s;
@@ -2460,12 +2568,15 @@ impl Renderer {
                                         text(label, F_LABEL, row, lead, grey(0.65, a))?;
                                         if switch {
                                             if let Some(sb) = rect_of(Button::Toggle(set)) {
-                                                let on = if set == Setting::WaterOn { h.water_on } else { h.sit_on };
+                                                set_press(Button::Toggle(set), sb);
+                                                let sw_t = sw_pos[if set == Setting::WaterOn { 0 } else { 1 }];
                                                 let rad = (sb.bottom - sb.top) / 2.0;
-                                                rt.FillRoundedRectangle(&rounded(sb, rad), &self.brush(if on { solid(GREEN, a) } else { grey(0.3, a) })?);
-                                                let kx = if on { sb.right - rad } else { sb.left + rad };
+                                                let track_c = color(0.3 + (GREEN.0 - 0.3) * sw_t, 0.3 + (GREEN.1 - 0.3) * sw_t, 0.3 + (GREEN.2 - 0.3) * sw_t, a);
+                                                rt.FillRoundedRectangle(&rounded(sb, rad), &self.brush(track_c)?);
+                                                let kx = sb.left + rad + (sb.right - sb.left - 2.0 * rad) * sw_t;
                                                 let knob = D2D1_ELLIPSE { point: Vector2 { X: kx, Y: (sb.top + sb.bottom) / 2.0 }, radiusX: rad - 2.0 * s, radiusY: rad - 2.0 * s };
-                                                rt.FillEllipse(&knob, &self.brush(grey(1.0, a))?)
+                                                rt.FillEllipse(&knob, &self.brush(grey(1.0, a))?);
+                                                rt.SetTransform(&page_xform);
                                             }
                                         } else {
                                             let value = match set {
@@ -2480,7 +2591,9 @@ impl Renderer {
                                                     let hot = hovered == Some(Button::Step(set, dir));
                                                     let c = D2D1_ELLIPSE { point: Vector2 { X: (bb.left + bb.right) / 2.0, Y: (bb.top + bb.bottom) / 2.0 }, radiusX: 8.0 * s, radiusY: 8.0 * s };
                                                     rt.FillEllipse(&c, &self.brush(grey(if hot { 0.32 } else { 0.2 }, a))?);
+                                                    set_press(Button::Step(set, dir), bb);
                                                     text(icon, F_TINY_ICON, bb, center, grey(1.0, a))?;
+                                                    rt.SetTransform(&page_xform);
                                                 }
                                                 text(&value, F_LABEL, rect(mb.right, mb.top, pb.left, pb.bottom), center, grey(1.0, a))?;
                                             }
@@ -2488,7 +2601,7 @@ impl Renderer {
                                     }
                                     if card == Card::Sit {
                                         let y = (SET_Y + 2.0 * SET_ROW) * s;
-                                        text(tr("Rời máy ≥ 5 phút: tính lại", "Away ≥ 5 min: starts over"), F_LABEL, rect(x + 12.0 * s, y, x + CARD_W * s - 8.0 * s, y + SET_ROW * s), lead, grey(0.5, a))?;
+                                        text(tr("Rời máy ≥ 5 phút: tính lại", "Away ≥ 5 min: starts over"), F_LABEL, rect(x + 12.0 * s, y, x + CARD_W * s - 8.0 * s, y + SET_ROW * s), lead, grey(0.58, a))?;
                                     }
                                     continue;
                                 }
@@ -2524,15 +2637,27 @@ impl Renderer {
                                 if let Some(pb) = rect_of(ab) {
                                     let hot = hovered == Some(ab);
                                     let k = if hot { 1.0 } else { 0.82 };
-                                    rt.FillRoundedRectangle(&rounded(pb, 12.0 * s), &self.brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
+                                    set_press(ab, pb);
+                                    let fill = if card == Card::Water {
+                                        let k = if hot { 0.78 } else { 0.68 };
+                                        color(0.18 * k, 0.54 * k, 1.0 * k, a)
+                                    } else {
+                                        let k = if hot { 1.0 } else { 0.82 };
+                                        color(accent.0 * k, accent.1 * k, accent.2 * k, a)
+                                    };
+                                    rt.FillRoundedRectangle(&rounded(pb, 12.0 * s), &self.brush(fill)?);
                                     // Dark label on the orange button: white on it is only 3.1:1.
                                     text(&action, F_SMALL, pb, center, if card == Card::Sit { grey(0.06, a) } else { grey(1.0, a) })?;
+                                    rt.SetTransform(&page_xform);
                                 }
                                 if let Some(sb) = rect_of(Button::Snooze) {
                                     if card == Card::Water {
                                         let hot = hovered == Some(Button::Snooze);
                                         rt.FillRoundedRectangle(&rounded(sb, 12.0 * s), &self.brush(grey(if hot { 0.3 } else { 0.2 }, a))?);
+                                        set_press(Button::Snooze, sb);
+                                        rt.FillRoundedRectangle(&rounded(sb, 12.0 * s), &self.brush(grey(if hot { 0.3 } else { 0.2 }, a))?);
                                         text(tr("Để sau", "Later"), F_LABEL, sb, center, grey(1.0, a))?;
+                                        rt.SetTransform(&page_xform);
                                     }
                                 }
                             }
@@ -2547,7 +2672,7 @@ impl Renderer {
                 match v.leaving {
                     Some((from, t, dir)) => {
                         let span = (cr - cl) * 0.55;
-                        let d = dir as f32;
+                        let d = if v.reduced_motion { 0.0 } else { dir as f32 };
                         let (out_a, in_a) = page_fades(t);
                         draw_page(from, -d * span * t.min(1.0), out_a)?;
                         draw_page(v.page, d * span * (1.0 - ease_out_back(t)), in_a)?;
@@ -2577,17 +2702,29 @@ impl Renderer {
                             radiusX: (br.right - br.left) / 2.0,
                             radiusY: (br.bottom - br.top) / 2.0,
                         };
+
+                        if v.pressed == Some(b) && !v.reduced_motion {
+                            let (mx, my) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
+                            rt.SetTransform(&(translate(-mx, -my) * scaling(0.95) * translate(mx, my)));
+                        }
+
                         rt.FillEllipse(&circle, &self.brush(grey(if hot { 0.26 } else { 0.15 }, a))?);
                         text(icon, F_SMALL_ICON, *br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
+                        rt.SetTransform(&Matrix3x2::identity());
                     }
                 }
                 let (dot, wide, gap) = (5.0 * s, 14.0 * s, 5.0 * s);
                 let total = wide + (PAGES.len() as f32 - 1.0) * (dot + gap);
                 let mut dx = cx - total / 2.0;
-                for p in PAGES {
-                    let on = p == v.page;
-                    let dw = if on { wide } else { dot };
-                    rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &self.brush(if on { grey(1.0, a) } else { grey(0.45, a) })?);
+
+
+
+                for (idx, p) in PAGES.into_iter().enumerate() {
+                    let f = dot_w[idx];
+                    let dw = dot + (wide - dot) * f;
+                    let base_g = if v.hovered == Some(Button::PageDot(p)) { 0.75 } else { 0.52 };
+                    let g = base_g + (1.0 - base_g) * f;
+                    rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &self.brush(grey(g, a))?);
                     dx += dw + gap;
                 }
             }
@@ -2619,8 +2756,10 @@ impl Renderer {
             self.slow_frames = lyrics_run;
             // Icon completion posts WM_ICONS; waiting for I/O never keeps animation alive.
             // The Weather page's icon moves for a moment when the panel or the page opens.
-            let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && v.page_age < icons::DUR;
-            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving)
+
+            let wx_loading = v.weather.looking || (v.weather.place.is_some() && v.weather.now.is_none());
+            let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && !v.reduced_motion && (v.page_age < icons::DUR || wx_loading);
+            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving || dots_busy || switches_busy)
         }
     }
 }
@@ -2700,9 +2839,9 @@ mod tests {
             let note = Note { app: "Test".into(), id: "PuwNotch.NewIcon".into(), title: "Test".into(), body: String::new(), at: 0, open: None };
             let mut view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "12:00", date: "30/10",
                 battery: None, banner: None, music: Some(&track), live: false, robot: None, phase: 0.0, banner_age: 9.0,
-                lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: std::slice::from_ref(&note),
+                lyrics: false, hovered: None, pressed: None, reduced_motion: false, page: Page::Notify, leaving: None, todos: &[], notes: std::slice::from_ref(&note),
                 weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             for mode in [Mode::Collapsed, Mode::Mini] {
                 view.mode = mode;
@@ -2995,6 +3134,25 @@ mod tests {
             let has_arrows = |wide| page_buttons(cx, scale, Page::Music, 0, 0, None, wide).iter().any(|(b, _)| matches!(b, Button::PagePrev | Button::PageNext));
             assert!(!has_arrows(true));
             assert!(has_arrows(false));
+            // Page dots are clickable when narrow, and hidden when lyrics are wide.
+            let dots: Vec<_> = page_buttons(cx, scale, Page::Music, 0, 0, None, false).into_iter().filter(|(b, _)| matches!(b, Button::PageDot(_))).collect();
+            assert_eq!(dots.len(), PAGES.len());
+            for (p, (_, r)) in PAGES.into_iter().zip(dots) {
+                assert_eq!(hit_button(cx, scale, (r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0, None, Page::Music, 0, 0, None, false), Some(Button::PageDot(p)));
+            }
+            assert!(page_buttons(cx, scale, Page::Music, 0, 0, None, true).iter().all(|(b, _)| !matches!(b, Button::PageDot(_))));
+            for k in [0.68f32, 0.78] {
+                let lum = luminance(0.18 * k, 0.54 * k, 1.0 * k);
+                let ratio = 1.05 / (lum + 0.05);
+                assert!(ratio >= 4.5, "water button k={k}: white text contrast is {ratio:.2}:1");
+            }
+            for k in [0.82f32, 1.0] {
+                let bg = luminance(ORANGE.0 * k, ORANGE.1 * k, ORANGE.2 * k);
+                let fg = luminance(0.06, 0.06, 0.06);
+                let ratio = (bg + 0.05) / (fg + 0.05);
+                assert!(ratio >= 4.5, "sit button k={k}: dark text contrast is {ratio:.2}:1");
+            }
+            assert!((luminance(0.58, 0.58, 0.58) + 0.05) / (luminance(0.11, 0.11, 0.11) + 0.05) >= 4.5);
         }
     }
 
@@ -3021,9 +3179,9 @@ mod tests {
             let mut size = target(Mode::Expanded, false);
             size[0] += LYRICS_EXTRA_W;
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, pressed: None, reduced_motion: false, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
@@ -3062,9 +3220,9 @@ mod tests {
             size[0] += LYRICS_EXTRA_W;
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10",
                 battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track),
-                live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
+                live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, pressed: None, reduced_motion: false, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             // Let the cover decode and the glow reach its steady strength.
@@ -3111,9 +3269,9 @@ mod tests {
             let mut sheet = Vec::new();
             for (items, counts, typed) in &frames {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
-                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
+                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, pressed: None, reduced_motion: false, page: Page::Todo,
                     leaving: None, todos: items, notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
-                    list: ListView { counts: *counts, remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
+                    list: ListView { counts: *counts, remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -3180,9 +3338,9 @@ mod tests {
             let n = frames.len() as i32;
             for (mode, music, page, st, typed, unit) in &frames {
                 let view = View { mode: *mode, size: target(*mode, *music), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
-                    banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: *page,
+                    banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, pressed: None, reduced_motion: false, page: *page,
                     leaving: None, todos: &[], notes: &[], weather: st, page_age: 9.0, unit: *unit,
-                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -3211,9 +3369,9 @@ mod tests {
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Banner preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let toast = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: None };
             let view = View { mode: Mode::Alert, size: notch::alert_size(1), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
-                banner: Some(&toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
+                banner: Some(&toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, pressed: None, reduced_motion: false, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
@@ -3247,8 +3405,8 @@ mod tests {
             for (i, t) in [0.0f32, 1.5, 3.0, 4.5].into_iter().enumerate() {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16", date: "T5, 29/10",
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
-                    phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    phase: t, banner_age: 0.0, lyrics: false, hovered: None, pressed: None, reduced_motion: false, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 // The first frame waits for the cover and the fade-in.
                 for _ in 0..(if i == 0 { 80 } else { 1 }) {
@@ -3318,9 +3476,9 @@ mod tests {
                 if lyrics {
                     size[0] += LYRICS_EXTRA_W;
                 }
-                let view = View { mode, size, time, date, battery, banner: None, music, live, robot: None, phase: 1.3, banner_age: 0.0, lyrics, hovered: None, page,
+                let view = View { mode, size, time, date, battery, banner: None, music, live, robot: None, phase: 1.3, banner_age: 0.0, lyrics, hovered: None, pressed: None, reduced_motion: false, page,
                     leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C,
-                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                     health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
                 // A fresh renderer per picture, run for a second and a half: the cover decodes, the
                 // glow and the equaliser reach their resting strength.
@@ -3357,9 +3515,9 @@ mod tests {
             let mut sheet = Vec::new();
             for (percent, charging, saver) in states {
                 let view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "16:00", date: "", battery: Some(Battery { percent, charging, saver }),
-                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music,
+                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, pressed: None, reduced_motion: false, page: Page::Music,
                     leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 sheet.extend_from_slice(&renderer.grabbed);
@@ -3391,9 +3549,9 @@ mod tests {
                 note("Outlook", "Lịch họp tuần", "Phòng 3, 9:00 thứ Hai", 202610281730)];
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "16:00", date: "T5, 29/10",
                 battery: Some(Battery { percent: 79, charging: true, saver: false }), banner: None, music: None, live: false, robot: None,
-                phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: &notes,
+                phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, pressed: None, reduced_motion: false, page: Page::Notify, leaving: None, todos: &[], notes: &notes,
                 weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 202610291600, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 202610291600, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
@@ -3423,9 +3581,9 @@ mod tests {
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: Some(Button::PlayPause), page: Page::Music,
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: Some(Button::PlayPause), pressed: None, reduced_motion: false, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
@@ -3550,8 +3708,8 @@ mod tests {
                 let view = View { mode, size: notch.size(), time: "09:41", date: &date, battery: Some(Battery { percent: 82, charging, saver: false }),
                     banner: (mode == Mode::Alert).then_some(&toast), music: live.then_some(&track), live: notch.live, robot: eyes, phase: now,
                     banner_age: (now - 19.6).max(0.0), lyrics: false,
-                    hovered: (mode == Mode::Expanded && (10.0..18.2).contains(&now)).then_some(Button::PageNext), page, leaving,
-                    list: ListView { counts: (3, 1), remind_before: 15, now: 202610290941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    hovered: (mode == Mode::Expanded && (10.0..18.2).contains(&now)).then_some(Button::PageNext), pressed: None, reduced_motion: false, page, leaving,
+                    list: ListView { counts: (3, 1), remind_before: 15, now: 202610290941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0, todo_pos: 0.0 },
                     todos: &todos, notes: &notes, health: HealthView { h: &health, now: crate::todo::minutes(202610290941), minute_of_day: 9 * 60 + 41, settings: None },
                     weather: &wx, page_age: if mode == Mode::Expanded { now - page_since } else { 0.0 }, unit: weather::Unit::C };
                 renderer.present(hwnd, 0, 0, w, h, scale, &view).unwrap();
