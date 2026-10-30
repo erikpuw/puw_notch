@@ -58,6 +58,9 @@ pub struct Track {
 }
 
 impl Track {
+    pub(crate) fn same_media(&self, other: &Track) -> bool {
+        self.source_id == other.source_id && self.title == other.title && self.artist == other.artist
+    }
     /// 0 when the player reports no timeline (e.g. foobar2000): nothing to extrapolate from.
     pub fn position_ms(&self) -> u64 {
         self.position_after(self.at.map_or(Duration::ZERO, |at| at.elapsed()))
@@ -124,6 +127,12 @@ impl Music {
         if let Some(track) = self.snapshot() { let _ = self.cmds.send(Some((c, track))); }
     }
 
+    pub fn seek(&self, preview: &Track) {
+        if let Some(track) = self.snapshot().filter(|t| t.can_seek && t.duration_ms > 0 && t.art_key == preview.art_key && t.same_media(preview)) {
+            let _ = self.cmds.send(Some((Cmd::Seek(preview.position_ms.min(track.duration_ms)), track)));
+        }
+    }
+
     pub fn set_page_open(&self, open: bool) {
         if self.page_open.swap(open, Ordering::Relaxed) != open {
             let _ = self.cmds.send(None);
@@ -148,6 +157,32 @@ fn playback_snapshot(source_id: String, playing: bool, previous: Option<&Track>)
     t.at = Some(Instant::now());
     t.playing = playing;
     t
+}
+
+fn session_command(s: &GlobalSystemMediaTransportControlsSession, cmd: &Cmd, track: &Track) -> bool {
+    let foobar = track.source_id.to_ascii_lowercase().contains("foobar2000");
+    if let Cmd::Seek(position) = cmd {
+        let supported = s.GetPlaybackInfo().and_then(|i| i.Controls()).and_then(|c| c.IsPlaybackPositionEnabled()).unwrap_or(false);
+        if foobar && !supported { return crate::foobar::seek(*position, track.duration_ms); }
+    }
+    let op = match cmd {
+        Cmd::PlayPause => {
+            let info = s.GetPlaybackInfo().ok();
+            if info.as_ref().and_then(|i| i.Controls().ok()).is_some_and(|c| c.IsPlayPauseToggleEnabled().unwrap_or(false)) {
+                s.TryTogglePlayPauseAsync()
+            } else if info.and_then(|i| i.PlaybackStatus().ok()) == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
+                s.TryPauseAsync()
+            } else { s.TryPlayAsync() }
+        }
+        Cmd::Next => s.TrySkipNextAsync(),
+        Cmd::Previous => s.TrySkipPreviousAsync(),
+        Cmd::Seek(position) => s.TryChangePlaybackPositionAsync(track.seek_ticks(*position)),
+    };
+    let accepted = op.and_then(|o| o.get()) == Ok(true);
+    accepted || match cmd {
+        Cmd::Seek(position) if foobar => crate::foobar::seek(*position, track.duration_ms),
+        _ => false,
+    }
 }
 
 fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>, target: isize, page_open: Arc<AtomicBool>, pill_visible: Arc<AtomicBool>) {
@@ -187,24 +222,14 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
         let had_command = cmd.is_some();
         let mut command_error = None;
         if let Some((cmd, track)) = &cmd {
-            let accepted = if native_target { crate::itunes::command(cmd) }
+            let seek_current = if matches!(cmd, Cmd::Seek(_)) {
+                if native_target { crate::itunes::read() } else { session.as_ref().and_then(read) }
+                    .filter(|current| current.can_seek && current.same_media(track))
+            } else { None };
+            let accepted = if matches!(cmd, Cmd::Seek(_)) && seek_current.is_none() { false }
+            else if native_target { crate::itunes::command(cmd) }
             else if let Some(s) = &session {
-            let op = match cmd {
-                Cmd::PlayPause => {
-                    let info = s.GetPlaybackInfo().ok();
-                    if info.as_ref().and_then(|i| i.Controls().ok()).is_some_and(|c| c.IsPlayPauseToggleEnabled().unwrap_or(false)) {
-                        s.TryTogglePlayPauseAsync()
-                    } else if info.and_then(|i| i.PlaybackStatus().ok()) == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
-                        s.TryPauseAsync()
-                    } else { s.TryPlayAsync() }
-                }
-                Cmd::Next => s.TrySkipNextAsync(),
-                Cmd::Previous => s.TrySkipPreviousAsync(),
-                Cmd::Seek(position) => {
-                    s.TryChangePlaybackPositionAsync(track.seek_ticks(*position))
-                }
-            };
-            op.and_then(|o| o.get()) == Ok(true)
+                session_command(s, cmd, seek_current.as_ref().unwrap_or(track))
             } else { false };
             if !accepted { command_error = Some(crate::i18n::tr("Trình phát chưa nhận lệnh. Hãy thử lại.", "The player did not take the command. Try again.")); }
         }
@@ -342,13 +367,16 @@ fn read(s: &GlobalSystemMediaTransportControlsSession) -> Option<Track> {
         at: Some(Instant::now()),
         ..Default::default()
     };
-    if track.duration_ms == 0 && track.source_id.to_ascii_lowercase().contains("foobar2000") {
+    if track.source_id.to_ascii_lowercase().contains("foobar2000") && (track.duration_ms == 0 || !track.can_seek) {
         if let Some(timing) = crate::foobar::timeline() {
-            track.duration_ms = timing.duration_ms;
-            track.position_ms = timing.position_ms;
-            track.start_ticks = 0;
-            track.reported_position = (timing.position_ms as i64).saturating_mul(10_000);
-            track.updated_ticks = 0;
+            if track.duration_ms == 0 {
+                track.duration_ms = timing.duration_ms;
+                track.position_ms = timing.position_ms;
+                track.start_ticks = 0;
+                track.reported_position = (timing.position_ms as i64).saturating_mul(10_000);
+                track.updated_ticks = 0;
+            }
+            track.can_seek |= timing.can_seek && track.duration_ms > 0;
         }
     }
     Some(track)
@@ -559,6 +587,61 @@ pub fn current_line(lines: &[(u64, String)], pos_ms: u64) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "seeks the selected live player and restores its position through the music worker"]
+    fn live_worker_seek_and_restore() {
+        let music = Music::start(HWND::default());
+        music.set_pill_visible(true);
+        let end = Instant::now() + Duration::from_secs(5);
+        let before = loop {
+            if let Some(t) = music.snapshot().filter(|t| t.can_seek && t.duration_ms > 30_000) { break t; }
+            assert!(Instant::now() < end, "a seekable player must be open");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let mut preview = before.clone();
+        preview.position_ms = before.duration_ms / 2;
+        music.seek(&preview);
+        std::thread::sleep(Duration::from_millis(800));
+        let actual = music.snapshot();
+        preview.position_ms = before.position_ms();
+        music.seek(&preview);
+        std::thread::sleep(Duration::from_millis(800));
+        let restored = music.snapshot();
+        eprintln!("source={} requested={} actual={:?} restore={} restored={:?}", before.source_id,
+            before.duration_ms / 2, actual.as_ref().map(Track::position_ms), preview.position_ms,
+            restored.as_ref().map(Track::position_ms));
+        assert!(actual.is_some_and(|t| t.same_media(&before) && t.command_error.is_none()
+            && t.position_ms().abs_diff(before.duration_ms / 2) < 3_000));
+        assert!(restored.is_some_and(|t| t.same_media(&before) && t.command_error.is_none()
+            && t.position_ms().abs_diff(preview.position_ms) < 3_000));
+    }
+
+    #[test]
+    fn seek_queues_once_for_the_same_track_and_rejects_stale_previews() {
+        let track = Track { source_id: "player".into(), title: "Song".into(), artist: "Artist".into(),
+            duration_ms: 120_000, can_seek: true, art_key: 7, ..Track::default() };
+        let now = Arc::new(Mutex::new(Some(track.clone())));
+        let (cmds, rx) = channel();
+        let music = Music { now: now.clone(), cmds, page_open: Arc::new(AtomicBool::new(true)), pill_visible: Arc::new(AtomicBool::new(false)) };
+        let mut preview = track.clone();
+        preview.position_ms = u64::MAX;
+        music.seek(&preview);
+        let (command, target) = rx.try_recv().unwrap().unwrap();
+        assert!(matches!(command, Cmd::Seek(120_000)));
+        assert_eq!(target.source_id, track.source_id);
+        assert!(rx.try_recv().is_err());
+        for changed in [Track { art_key: 8, ..track.clone() }, Track { title: "Next song".into(), ..track.clone() },
+            Track { source_id: "other player".into(), ..track.clone() }, Track { can_seek: false, ..track.clone() },
+            Track { duration_ms: 0, ..track.clone() }] {
+            *now.lock().unwrap() = Some(changed);
+            music.seek(&preview);
+            assert!(rx.try_recv().is_err());
+        }
+        *now.lock().unwrap() = None;
+        music.seek(&preview);
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn page_sync_wakes_immediately_and_only_on_visibility_changes() {

@@ -17,7 +17,7 @@
 
 - **Notch**: giờ, icon pin (3 nấc, sét xanh khi sạc, vàng khi tiết kiệm pin), sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi đè lên tab hoặc chữ bên dưới; khi chơi game / xem phim toàn màn hình, thu mượt về mép trên rồi ẩn hẳn, thoát toàn màn hình thì bung lại.
 - **5 trang** (chuyển bằng ‹ ›):
-  - **Nhạc**: ảnh bìa, lời bài hát đồng bộ (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời giãn bảng ngang để xem lời chạy theo bài; nền và đường aurora theo màu ảnh bìa. Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
+  - **Nhạc**: ảnh bìa, lời bài hát đồng bộ (LRCLIB), ⏮ ⏯ ⏭; bấm hoặc kéo thanh tiến độ để tua, xem trước thời gian khi kéo và gửi lệnh lúc thả. Hỗ trợ tua qua Windows media controls khi app cho phép, iTunes qua adapter riêng, foobar2000 qua seekbar của giao diện Default UI. App không hỗ trợ tua hoặc nguồn live không có thời lượng thì khóa thanh; đổi bài khi đang kéo sẽ hủy thao tác. Nút lời giãn bảng ngang để xem lời chạy theo bài; nền và đường aurora theo màu ảnh bìa.
   - **Việc**: một danh sách cho việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Tick / sửa / xóa; quá giờ tô đỏ kèm "Trễ". ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
   - **Thông báo**: ~30 thông báo Windows gần nhất kèm icon app; bấm một dòng để mở app đã gửi; cuộn mượt, nút "Xóa hết" ẩn các thông báo đã có (Windows vẫn giữ).
   - **Sức khỏe**: nhắc uống nước và đứng dậy, chỉnh được giờ và mức.

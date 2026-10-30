@@ -73,6 +73,25 @@ const MENU_ABOUT: usize = 16;
 const MENU_VOLUME_KEYS: usize = 17;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
+struct SeekDrag {
+    track: music::Track,
+}
+
+impl SeekDrag {
+    fn new(track: &music::Track) -> Option<Self> {
+        (track.can_seek && track.duration_ms > 0).then(|| Self { track: track.clone() })
+    }
+
+    fn update(&mut self, cx: f32, scale: f32, x: f32, wide: bool) {
+        self.track.position_ms = render::seek_at(cx, scale, x, self.track.duration_ms, wide);
+        self.track.at = None;
+    }
+
+    fn current(&self, track: Option<&music::Track>) -> bool {
+        track.is_some_and(|t| t.can_seek && t.duration_ms > 0 && t.art_key == self.track.art_key && t.same_media(&self.track))
+    }
+}
+
 struct App {
     hwnd: HWND,
     notch: Notch,
@@ -107,6 +126,7 @@ struct App {
     mic_muted: Option<bool>,
     music: music::Music,
     track: Option<music::Track>,
+    seek_drag: Option<SeekDrag>,
     /// Idle robot eyes, the tray switch for them and when they last moved.
     robot: robot::Robot,
     robot_on: bool,
@@ -217,7 +237,7 @@ impl App {
             date: &self.date,
             battery: self.battery,
             banner: self.banner.as_ref(),
-            music: self.track.as_ref(),
+            music: self.seek_drag.as_ref().map(|drag| &drag.track).or(self.track.as_ref()),
             live: self.notch.live,
             robot: eyes,
             phase: self.started.elapsed().as_secs_f32(),
@@ -369,6 +389,9 @@ impl App {
     /// player keeps the pill for a few seconds (`music::shows_pill`); the panel's Music page keeps it.
     fn refresh_music(&mut self) {
         self.track = self.music.snapshot();
+        if self.seek_drag.as_ref().is_some_and(|drag| !drag.current(self.track.as_ref())) {
+            self.cancel_seek();
+        }
         let playing = self.track.as_ref().is_some_and(|t| t.playing);
         self.paused_since = if self.track.is_some() && !playing { Some(self.paused_since.unwrap_or_else(Instant::now)) } else { None };
         let live = music::shows_pill(playing, self.paused_since.map(|t| t.elapsed()));
@@ -425,7 +448,7 @@ impl App {
 
     /// Let go of a panel the mouse has left without Windows saying so (see `notch::hover_stale`).
     fn release_stale_hover(&mut self) {
-        if !notch::hover_stale(self.notch.mode, self.hover_in, self.editing, self.cursor_inside()) {
+        if self.seek_drag.is_some() || !notch::hover_stale(self.notch.mode, self.hover_in, self.editing, self.cursor_inside()) {
             return;
         }
         self.hover_in = false;
@@ -610,18 +633,30 @@ impl App {
         self.lyrics_open && self.page == Page::Music && self.notch.mode == Mode::Expanded
     }
 
+    fn cancel_seek(&mut self) {
+        if self.seek_drag.take().is_some() {
+            unsafe { if GetCapture() == self.hwnd { let _ = ReleaseCapture(); } }
+        }
+    }
+
+    fn update_seek(&mut self, x: f32) {
+        let wide = self.lyrics_wide();
+        if let Some(drag) = &mut self.seek_drag {
+            drag.update(self.win.2 as f32 / 2.0, self.scale, x, wide);
+        }
+        self.redraw();
+    }
+
     fn click(&mut self, x: f32, y: f32) {
         if self.notch.mode != Mode::Expanded {
             return;
         }
-        let cx = self.win.2 as f32 / 2.0;
         let Some(button) = self.hit(x, y) else { return };
-        let duration = self.track.as_ref().map_or(0, |t| t.duration_ms);
         match button {
             Button::Previous => self.music.send(music::Cmd::Previous),
             Button::PlayPause => self.music.send(music::Cmd::PlayPause),
             Button::Next => self.music.send(music::Cmd::Next),
-            Button::Seek => self.music.send(music::Cmd::Seek(render::seek_at(cx, self.scale, x, duration, self.lyrics_wide()))),
+            Button::Seek => return, // Committed only by the captured press/drag/release gesture.
             Button::Lyrics => {
                 self.lyrics_open = !self.lyrics_open;
                 self.kick();
@@ -825,6 +860,7 @@ impl App {
             let fg = unsafe { GetForegroundWindow() };
             system::log(&if hide { format!("hidden, foreground {}", screen::class_name(fg)) } else { "shown again".to_string() });
             if hide {
+                self.cancel_seek();
                 self.end_edit();
                 self.hover_in = false;
                 self.tracking = false;
@@ -950,6 +986,10 @@ impl App {
                 _ => return None,
             },
             WM_MOUSEMOVE => {
+                if self.seek_drag.is_some() {
+                    self.update_seek((lp.0 & 0xffff) as i16 as f32);
+                    return Some(LRESULT(0));
+                }
                 if !self.tracking {
                     let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: self.hwnd, dwHoverTime: 0 };
                     self.tracking = unsafe { TrackMouseEvent(&mut tme) }.is_ok();
@@ -981,12 +1021,16 @@ impl App {
                 return Some(LRESULT(1));
             }
             WM_MOUSELEAVE => {
+                if self.seek_drag.is_some() {
+                    self.tracking = false;
+                    return Some(LRESULT(0));
+                }
                 self.hovered_button = None;
                 self.tracking = false;
                 self.hover_in = false;
                 unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
                 // Typing keeps the panel open; it closes when the box lets go of the keyboard.
-                if !self.editing {
+                if !self.editing && self.seek_drag.is_none() {
                     self.notch.on_leave();
                 }
                 self.kick();
@@ -1003,9 +1047,41 @@ impl App {
                 // The Notifications list eases there frame by frame (see `frame`).
                 if self.page == Page::Notify { self.kick(); } else { self.redraw(); }
             }
+            WM_LBUTTONDOWN => {
+                let x = (lp.0 & 0xffff) as i16 as f32;
+                let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+                if self.notch.mode == Mode::Expanded && self.hit(x, y) == Some(Button::Seek) {
+                    self.seek_drag = self.track.as_ref().and_then(SeekDrag::new);
+                    if self.seek_drag.is_some() {
+                        unsafe { SetCapture(self.hwnd); }
+                        if unsafe { GetCapture() } != self.hwnd { self.seek_drag = None; }
+                        self.hovered_button = Some(Button::Seek);
+                        self.update_seek(x);
+                    }
+                }
+            }
+            WM_CAPTURECHANGED | WM_CANCELMODE => {
+                self.cancel_seek();
+                self.release_stale_hover();
+                self.redraw();
+            }
             WM_LBUTTONUP => {
                 let x = (lp.0 & 0xffff) as i16 as f32;
                 let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+                if self.seek_drag.is_some() {
+                    self.update_seek(x);
+                    let drag = self.seek_drag.take().unwrap();
+                    if drag.current(self.music.snapshot().as_ref()) {
+                        self.music.seek(&drag.track);
+                        let mut preview = drag.track;
+                        preview.at = Some(Instant::now());
+                        self.track = Some(preview);
+                    }
+                    unsafe { if GetCapture() == self.hwnd { let _ = ReleaseCapture(); } }
+                    self.release_stale_hover();
+                    self.redraw();
+                    return Some(LRESULT(0));
+                }
                 match self.banner_target() {
                     // A notification banner: clicking it opens its picture, link or app.
                     Some(target) => open_target(target),
@@ -1330,6 +1406,7 @@ fn run() -> windows::core::Result<()> {
             mic_muted: None,
             music: music::Music::start(hwnd),
             track: None,
+            seek_drag: None,
             robot: robot::Robot::default(),
             robot_on: settings.robot,
             robot_at: Instant::now(),
@@ -1400,6 +1477,38 @@ fn run() -> windows::core::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seek_drag_previews_clamps_and_cancels_when_the_track_changes() {
+        let track = music::Track { source_id: "player".into(), title: "Song".into(), art_key: 7,
+            duration_ms: 120_000, can_seek: true, playing: true, ..Default::default() };
+        let mut drag = SeekDrag::new(&track).unwrap();
+        for wide in [false, true] {
+            for scale in [1.0, 1.5, 2.0] {
+                let cx = 410.0 * scale;
+                let (_, bar) = render::buttons(cx, scale, wide)[3];
+                drag.update(cx, scale, (bar.left + bar.right) / 2.0, wide);
+                assert_eq!(drag.track.position_ms(), 60_000);
+                assert!(drag.track.playing && drag.track.at.is_none());
+                drag.update(cx, scale, bar.left - 100.0, wide);
+                assert_eq!(drag.track.position_ms(), 0);
+                drag.update(cx, scale, bar.right + 100.0, wide);
+                assert_eq!(drag.track.position_ms(), 120_000);
+            }
+        }
+        assert!(drag.current(Some(&track)));
+        let mut changed = track.clone();
+        changed.art_key += 1;
+        assert!(!drag.current(Some(&changed)));
+        changed = track.clone();
+        changed.source_id = "other player".into();
+        assert!(!drag.current(Some(&changed)));
+        changed = track.clone();
+        changed.can_seek = false;
+        assert!(!drag.current(Some(&changed)));
+        assert!(SeekDrag::new(&changed).is_none());
+        assert!(!drag.current(None));
+    }
 
     #[test]
     fn about_text_names_the_app_its_version_and_where_to_get_it() {

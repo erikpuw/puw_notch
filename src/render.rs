@@ -2096,6 +2096,10 @@ impl Renderer {
                             if dur > 0 {
                                 let p = (pos as f32 / dur as f32).clamp(0.0, 1.0);
                                 rt.FillRoundedRectangle(&bar(bl + (brr - bl) * p), &self.brush(grey(1.0, a))?);
+                                if Button::Seek.enabled(v.music) {
+                                    let radius = if hovered == Some(Button::Seek) { 5.0 } else { 3.0 } * s;
+                                    rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: bl + (brr - bl) * p, Y: by }, radiusX: radius, radiusY: radius }, &self.brush(grey(1.0, a))?);
+                                }
                             }
                             let playing = v.music.is_some_and(|t| t.playing);
                             for (b, br) in buttons_from(l / s, s) {
