@@ -1923,7 +1923,6 @@ impl Renderer {
                     let icon = t.icon.unwrap_or(ICON_BELL);
                     let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
                     let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
-                    let age = v.banner_age;
                     let age = if v.reduced_motion { 9.0 } else { v.banner_age };
                     let (pop_scale, pop_alpha) = if v.reduced_motion { (1.0, 1.0) } else { icons::pop(age) };
                     let pop = translate(-mx, -my) * scaling(pop_scale) * translate(mx, my);
@@ -2636,7 +2635,6 @@ impl Renderer {
                                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                                 if let Some(pb) = rect_of(ab) {
                                     let hot = hovered == Some(ab);
-                                    let k = if hot { 1.0 } else { 0.82 };
                                     set_press(ab, pb);
                                     let fill = if card == Card::Water {
                                         let k = if hot { 0.78 } else { 0.68 };
@@ -2653,7 +2651,6 @@ impl Renderer {
                                 if let Some(sb) = rect_of(Button::Snooze) {
                                     if card == Card::Water {
                                         let hot = hovered == Some(Button::Snooze);
-                                        rt.FillRoundedRectangle(&rounded(sb, 12.0 * s), &self.brush(grey(if hot { 0.3 } else { 0.2 }, a))?);
                                         set_press(Button::Snooze, sb);
                                         rt.FillRoundedRectangle(&rounded(sb, 12.0 * s), &self.brush(grey(if hot { 0.3 } else { 0.2 }, a))?);
                                         text(tr("Để sau", "Later"), F_LABEL, sb, center, grey(1.0, a))?;
