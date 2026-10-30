@@ -570,6 +570,8 @@ const COVER_SHADOW_PAD: f32 = 8.0;
 const COVER_SHADOW_DROP: f32 = 2.0;
 const COVER_SHADOW_ALPHA: f32 = 0.55;
 const COVER_SHADOW_SHRINK: f32 = 4.0;
+const COVER_REFLECTION_GAP: f32 = 2.0;
+const COVER_REFLECTION_H: f32 = 8.0;
 
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
@@ -1591,6 +1593,27 @@ impl Renderer {
                         b.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: x, M32: y });
                         b.SetOpacity(a);
                         rt.FillRoundedRectangle(&rounded(rect(x, y, x + size.width, y + size.height), radius), &b);
+                        if box_.right - box_.left > 40.0 * s {
+                            let top = y + size.height + COVER_REFLECTION_GAP * s;
+                            let bottom = top + COVER_REFLECTION_H * s;
+                            let stops = rt.CreateGradientStopCollection(&[
+                                D2D1_GRADIENT_STOP { position: 0.0, color: color(1.0, 1.0, 1.0, 0.24) },
+                                D2D1_GRADIENT_STOP { position: 1.0, color: color(1.0, 1.0, 1.0, 0.0) },
+                            ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                            let fade = rt.CreateLinearGradientBrush(&D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                                startPoint: Vector2 { X: x, Y: top }, endPoint: Vector2 { X: x, Y: bottom },
+                            }, None, &stops)?;
+                            let params = D2D1_LAYER_PARAMETERS { contentBounds: rect(x, top, x + size.width, bottom),
+                                geometricMask: std::mem::ManuallyDrop::new(None), maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                maskTransform: Matrix3x2::identity(), opacity: a,
+                                opacityBrush: std::mem::ManuallyDrop::new(Some(fade.into())), layerOptions: D2D1_LAYER_OPTIONS_NONE };
+                            b.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: -1.0, M31: x, M32: top + size.height });
+                            b.SetOpacity(1.0);
+                            rt.PushLayer(&params, None);
+                            rt.FillRoundedRectangle(&rounded(rect(x, top, x + size.width, top + size.height), radius), &b);
+                            rt.PopLayer();
+                            drop(std::mem::ManuallyDrop::into_inner(params.opacityBrush));
+                        }
                     }
                     None => {
                         rt.FillRoundedRectangle(&rounded(box_, radius), &self.brush(grey(0.2, a))?);
@@ -2765,6 +2788,62 @@ mod tests {
         // The shadow reaches PAD past the dropped cover; pages are cut at DOTS_Y - 3.
         let bottom = COVER_TOP + COVER + COVER_SHADOW_DROP + COVER_SHADOW_PAD;
         assert!(bottom <= DOTS_Y - 3.0, "shadow ends at {bottom}, clipped at {}", DOTS_Y - 3.0);
+        assert!(COVER_TOP + COVER + COVER_REFLECTION_GAP + COVER_REFLECTION_H <= DOTS_Y - 3.0);
+    }
+
+    #[test]
+    fn cover_reflection_fades_inside_the_existing_page_at_each_dpi() {
+        fn bmp(width: i32, height: i32, pixels: &[u8]) -> Vec<u8> {
+            let mut bytes = Vec::from(&b"BM"[..]);
+            bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(&[0; 4]); bytes.extend_from_slice(&54u32.to_le_bytes());
+            bytes.extend_from_slice(&40u32.to_le_bytes()); bytes.extend_from_slice(&width.to_le_bytes());
+            bytes.extend_from_slice(&(-height).to_le_bytes()); bytes.extend_from_slice(&1u16.to_le_bytes());
+            bytes.extend_from_slice(&32u16.to_le_bytes()); bytes.extend_from_slice(&[0; 24]);
+            bytes.extend_from_slice(pixels);
+            bytes
+        }
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Cover reflection check"), WS_POPUP,
+                0, 0, 1060, 420, None, None, None, None).unwrap();
+            let art = bmp(2, 2, &[255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255]);
+            let track = Track { title: "Reflection".into(), art_key: 1, art: Some(Arc::new(art)), ..Track::default() };
+            let mut view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "12:00", date: "30/10",
+                battery: None, banner: None, music: Some(&track), live: false, robot: None, phase: 0.0, banner_age: 9.0,
+                lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[],
+                weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            for scale in [1.0, 1.5, 2.0] {
+                let (w, h) = ((530.0 * scale) as i32, (210.0 * scale) as i32);
+                renderer.present(hwnd, 0, 0, w, h, scale, &view).unwrap();
+                if scale == 1.0 {
+                    if let Ok(path) = std::env::var("PUW_REFLECTION_PREVIEW") {
+                        std::fs::write(path, bmp(w, h, &renderer.grabbed)).unwrap();
+                    }
+                }
+                let pixel = |x: f32, y: f32| {
+                    let i = (((y * scale).round() as i32 * w + (x * scale).round() as i32) * 4) as usize;
+                    &renderer.grabbed[i..i + 4]
+                };
+                let top = pixel(149.0, COVER_TOP + 10.0);
+                let bottom = pixel(149.0, COVER_TOP + COVER - 10.0);
+                assert!(top[0] > top[2] + 100 && bottom[2] > bottom[0] + 100, "the original cover stays upright and 120 px tall");
+                let near = pixel(149.0, 163.0);
+                let tail = pixel(149.0, 169.0);
+                assert!(near[2] > near[0] + 12, "the reflection starts with the cover's bottom red edge: {near:?}");
+                assert!(near[2] > tail[2] + 15, "the reflection fades before the existing page clip: {near:?} -> {tail:?}");
+                assert_eq!(view.size, [440.0, 186.0, 28.0]);
+            }
+            view.page = Page::Todo;
+            renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
+            let i = (163 * 530 + 149) * 4;
+            assert_eq!(renderer.grabbed[i], renderer.grabbed[i + 2], "other pages have no cover reflection");
+            DestroyWindow(hwnd).unwrap();
+        }
     }
 
     #[test]
