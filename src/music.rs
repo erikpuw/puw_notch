@@ -4,6 +4,7 @@
 
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::core::{w, HSTRING};
@@ -52,6 +53,7 @@ pub struct Track {
     pub art_key: u64,
     /// Synced lyric lines (ms, text), sorted. Empty = none found (yet).
     pub lyrics: Arc<Vec<(u64, String)>>,
+    pub(crate) assets_ready: bool,
 }
 
 impl Track {
@@ -78,6 +80,7 @@ impl Track {
         }
         self.art = previous.art.clone();
         self.lyrics = previous.lyrics.clone();
+        self.assets_ready = previous.assets_ready;
         self.command_error = previous.command_error;
     }
 
@@ -95,7 +98,9 @@ pub enum Cmd {
 
 pub struct Music {
     pub now: Arc<Mutex<Option<Track>>>,
-    cmds: Sender<(Cmd, Track)>,
+    // None wakes the worker when the Music page opens or closes.
+    cmds: Sender<Option<(Cmd, Track)>>,
+    page_open: Arc<AtomicBool>,
 }
 
 impl Music {
@@ -103,13 +108,21 @@ impl Music {
         let now = Arc::new(Mutex::new(None));
         let (cmds, rx) = channel();
         let shared = now.clone();
+        let page_open = Arc::new(AtomicBool::new(false));
+        let demand = page_open.clone();
         let target = hwnd.0 as isize;
-        std::thread::spawn(move || worker(shared, rx, target));
-        Music { now, cmds }
+        std::thread::spawn(move || worker(shared, rx, target, demand));
+        Music { now, cmds, page_open }
     }
 
     pub fn send(&self, c: Cmd) {
-        if let Some(track) = self.snapshot() { let _ = self.cmds.send((c, track)); }
+        if let Some(track) = self.snapshot() { let _ = self.cmds.send(Some((c, track))); }
+    }
+
+    pub fn set_page_open(&self, open: bool) {
+        if self.page_open.swap(open, Ordering::Relaxed) != open {
+            let _ = self.cmds.send(None);
+        }
     }
 
     pub fn snapshot(&self) -> Option<Track> {
@@ -117,7 +130,16 @@ impl Music {
     }
 }
 
-fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target: isize) {
+fn playback_snapshot(source_id: String, playing: bool, previous: Option<&Track>) -> Track {
+    let mut t = previous.filter(|p| p.source_id == source_id).cloned().unwrap_or_else(|| Track { rate: 1.0, ..Track::default() });
+    t.source_id = source_id;
+    t.position_ms = t.position_ms();
+    t.at = Some(Instant::now());
+    t.playing = playing;
+    t
+}
+
+fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>, target: isize, page_open: Arc<AtomicBool>) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); };
     let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().and_then(|op| op.get()).ok();
@@ -125,13 +147,24 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
     let mut art_key = 0u64;
     let (assets, jobs) = channel();
     let asset_shared = shared.clone();
-    std::thread::spawn(move || asset_worker(asset_shared, jobs, target));
+    let asset_demand = page_open.clone();
+    std::thread::spawn(move || asset_worker(asset_shared, jobs, target, asset_demand));
+    let mut requested = None;
     loop {
+        let mut resync = false;
         let cmd = match rx.recv_timeout(POLL) {
-            Ok(c) => Some(c),
+            Ok(c) => {
+                if c.is_none() {
+                    requested = None;
+                    resync = true;
+                }
+                c
+            }
             Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => None,
         };
+        let detailed = page_open.load(Ordering::Relaxed);
+        if !detailed { requested = None; }
         let native_target = cmd.as_ref().is_some_and(|(_, t)| t.source_id == crate::itunes::SOURCE_ID);
         let mut session = match &cmd {
             Some(_) if native_target => None,
@@ -163,8 +196,17 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
             } else { false };
             if !accepted { command_error = Some(crate::i18n::tr("Trình phát chưa nhận lệnh. Hãy thử lại.", "The player did not take the command. Try again.")); }
         }
-        let standard = session.as_ref().and_then(read);
-        let native = if cmd.is_none() || native_target { crate::itunes::read() } else { None };
+        let cached = shared.lock().ok().and_then(|g| g.clone());
+        let standard = session.as_ref().and_then(|s| {
+            if detailed || had_command { return read(s); }
+            let source = s.SourceAppUserModelId().ok()?.to_string();
+            let playing = s.GetPlaybackInfo().ok()?.PlaybackStatus().ok()? == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
+            Some(playback_snapshot(source, playing, cached.as_ref()))
+        });
+        let native = if cmd.is_none() || native_target {
+            if detailed || had_command { crate::itunes::read() }
+            else { crate::itunes::playing().map(|playing| playback_snapshot(crate::itunes::SOURCE_ID.to_owned(), playing, cached.as_ref())) }
+        } else { None };
         let native_foreground = unsafe { FindWindowW(None, w!("iTunes")).is_ok_and(|h| h == GetForegroundWindow()) };
         let selected = if native_target || (cmd.is_none() && prefer_itunes(standard.as_ref(), native.as_ref(), native_foreground)) {
             session = None;
@@ -188,7 +230,7 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
             art_key += 1;
         }
         t.art_key = art_key;
-        let visible_change = had_command || prev.as_ref().is_none_or(|p| changed_track || p.playing != t.playing || p.duration_ms != t.duration_ms);
+        let visible_change = (detailed && resync) || had_command || prev.as_ref().is_none_or(|p| changed_track || p.playing != t.playing || p.duration_ms != t.duration_ms);
         if let Ok(mut g) = shared.lock() {
             if let Some(p) = g.as_ref().filter(|p| !changed_track && p.art_key == art_key) {
                 t.inherit_cached(p);
@@ -199,30 +241,40 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Cmd, Track)>, target:
         if visible_change {
             notify();
         }
-        if changed_track { let _ = assets.send((t, session)); }
+        if detailed && !t.assets_ready && requested != Some(art_key) {
+            if assets.send((t, session)).is_ok() { requested = Some(art_key); }
+        }
     }
 }
 
-fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<GlobalSystemMediaTransportControlsSession>)>, target: isize) {
+fn asset_job_current(shared: &Mutex<Option<Track>>, page_open: &AtomicBool, key: u64) -> bool {
+    page_open.load(Ordering::Relaxed) && shared.lock().is_ok_and(|g| g.as_ref().is_some_and(|c| c.art_key == key && !c.assets_ready))
+}
+
+fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<GlobalSystemMediaTransportControlsSession>)>, target: isize, page_open: Arc<AtomicBool>) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     while let Ok(mut job) = rx.recv() {
         for newer in rx.try_iter() { job = newer; }
         let (t, session) = job;
-        if !shared.lock().is_ok_and(|g| g.as_ref().is_some_and(|c| c.art_key == t.art_key)) { continue; }
-        let art = match session {
+        if !asset_job_current(&shared, &page_open, t.art_key) { continue; }
+        let art = t.art.clone().or_else(|| match session {
             Some(s) => s.TryGetMediaPropertiesAsync().and_then(|o| o.get())
                 .and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)),
             None if t.source_id == crate::itunes::SOURCE_ID => crate::itunes::artwork(&t.title, &t.artist),
             None => None,
-        }.map(Arc::new);
+        }.map(Arc::new));
         if let Ok(mut g) = shared.lock() {
             if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) { cur.art = art; }
         }
+        if !asset_job_current(&shared, &page_open, t.art_key) { continue; }
         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
-        if t.title.is_empty() { continue; }
-        let lines = fetch_lyrics(&t.title, &t.artist, t.duration_ms / 1000);
+        let lines = fetch_lyrics(&t.title, &t.artist, t.duration_ms / 1000, &page_open);
+        if !asset_job_current(&shared, &page_open, t.art_key) { continue; }
         if let Ok(mut g) = shared.lock() {
-            if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) { cur.lyrics = Arc::new(lines); }
+            if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) {
+                cur.lyrics = Arc::new(lines);
+                cur.assets_ready = true;
+            }
         }
         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
     }
@@ -314,10 +366,11 @@ fn read_stream(r: &IRandomAccessStreamReference) -> Option<Vec<u8>> {
 
 /// LRCLIB, most precise first: exact (title + artist + duration), field search, then free text.
 /// Names are cleaned first: video titles carry "| Official MV", channel names "Official" etc.
-fn fetch_lyrics(title: &str, artist: &str, duration_s: u64) -> Vec<(u64, String)> {
+fn fetch_lyrics(title: &str, artist: &str, duration_s: u64, page_open: &AtomicBool) -> Vec<(u64, String)> {
     let base = "https://lrclib.net/api";
     let (title, artist) = clean_names(title, artist);
-    if title.is_empty() {
+    let active = || page_open.load(Ordering::Relaxed);
+    if title.is_empty() || !active() {
         return Vec::new();
     }
     let fields = format!("track_name={}&artist_name={}", url_encode(&title), url_encode(&artist));
@@ -335,6 +388,7 @@ fn fetch_lyrics(title: &str, artist: &str, duration_s: u64) -> Vec<(u64, String)
     }
     searches.push(format!("{base}/search?q={}", url_encode(&title)));
     for url in searches {
+        if !active() { break; }
         let Some(body) = http_get(&url) else { continue };
         let Ok(items) = JsonArray::Parse(&HSTRING::from(body)) else { continue };
         let n = items.Size().unwrap_or(0);
@@ -487,6 +541,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn page_sync_wakes_immediately_and_only_on_visibility_changes() {
+        let (cmds, rx) = channel();
+        let music = Music { now: Arc::new(Mutex::new(None)), cmds, page_open: Arc::new(AtomicBool::new(false)) };
+        music.set_page_open(false);
+        assert!(rx.try_recv().is_err());
+        music.set_page_open(true);
+        assert!(rx.try_recv().unwrap().is_none());
+        music.set_page_open(true);
+        assert!(rx.try_recv().is_err());
+        music.set_page_open(false);
+        assert!(rx.try_recv().unwrap().is_none());
+    }
+
+    #[test]
+    fn closed_page_skips_queued_assets_and_keeps_cache() {
+        let track = Track { title: "Must not fetch".into(), art_key: 7,
+            art: Some(Arc::new(vec![1, 2, 3])), lyrics: Arc::new(vec![(0, "cached".into())]), ..Track::default() };
+        let shared = Arc::new(Mutex::new(Some(track.clone())));
+        let (tx, rx) = channel();
+        tx.send((track.clone(), None)).unwrap();
+        drop(tx);
+        asset_worker(shared.clone(), rx, 0, Arc::new(AtomicBool::new(false)));
+        let current = shared.lock().unwrap();
+        let current = current.as_ref().unwrap();
+        assert!(Arc::ptr_eq(current.art.as_ref().unwrap(), track.art.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(&current.lyrics, &track.lyrics));
+        assert!(!current.assets_ready);
+    }
+
+    #[test]
+    fn reopened_page_does_not_reload_completed_assets() {
+        let track = Track { title: "Must not refetch".into(), art_key: 7, assets_ready: true,
+            art: Some(Arc::new(vec![1])), lyrics: Arc::new(vec![(0, "cached".into())]), ..Track::default() };
+        let shared = Arc::new(Mutex::new(Some(track.clone())));
+        let (tx, rx) = channel();
+        tx.send((track.clone(), None)).unwrap();
+        drop(tx);
+        asset_worker(shared.clone(), rx, 0, Arc::new(AtomicBool::new(true)));
+        let current = shared.lock().unwrap();
+        let current = current.as_ref().unwrap();
+        assert!(Arc::ptr_eq(current.art.as_ref().unwrap(), track.art.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(&current.lyrics, &track.lyrics));
+        assert!(current.assets_ready);
+    }
+
+    #[test]
+    fn pill_playback_snapshot_keeps_cached_assets_but_not_another_players() {
+        let previous = Track { source_id: "player".into(), title: "cached title".into(), art_key: 7,
+            duration_ms: 60_000, position_ms: 10_000, rate: 1.0, playing: true, assets_ready: true,
+            art: Some(Arc::new(vec![1])), ..Track::default() };
+        let paused = playback_snapshot("player".into(), false, Some(&previous));
+        assert!(!paused.playing);
+        assert_eq!(paused.title, previous.title);
+        assert_eq!(paused.position_ms(), 10_000);
+        assert!(paused.assets_ready);
+        assert!(Arc::ptr_eq(paused.art.as_ref().unwrap(), previous.art.as_ref().unwrap()));
+        let other = playback_snapshot("other".into(), true, Some(&previous));
+        assert!(other.playing && other.title.is_empty() && other.art.is_none());
+        assert!(!other.assets_ready);
+    }
+
+    #[test]
+    fn closing_page_stops_lyrics_lookup_before_any_request() {
+        assert!(fetch_lyrics("Must not fetch", "Artist", 120, &AtomicBool::new(false)).is_empty());
+    }
+
+    #[test]
     fn pill_stays_ten_seconds_after_pausing() {
         assert!(shows_pill(true, None), "playing");
         assert!(shows_pill(false, Some(Duration::from_secs(9))), "just paused: still there to resume");
@@ -611,7 +732,7 @@ mod tests {
     #[ignore]
     fn lrclib_live() {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
-        let lines = fetch_lyrics("Lạc Trôi", "Sơn Tùng M-TP", 0);
+        let lines = fetch_lyrics("Lạc Trôi", "Sơn Tùng M-TP", 0, &AtomicBool::new(true));
         assert!(lines.len() > 10, "got {} lines", lines.len());
         eprintln!("first: {:?}", &lines[..3]);
     }
@@ -642,7 +763,7 @@ mod tests {
     #[ignore]
     fn lrclib_video_title() {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
-        let lines = fetch_lyrics("SƠN TÙNG M-TP | LẠC TRÔI | OFFICIAL MUSIC VIDEO", "Sơn Tùng M-TP Official", 0);
+        let lines = fetch_lyrics("SƠN TÙNG M-TP | LẠC TRÔI | OFFICIAL MUSIC VIDEO", "Sơn Tùng M-TP Official", 0, &AtomicBool::new(true));
         assert!(lines.len() > 10, "got {} lines", lines.len());
     }
 

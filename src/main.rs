@@ -142,6 +142,7 @@ struct App {
     /// Page switch in progress: (page leaving, start, direction).
     page_anim: Option<(Page, Instant, i32)>,
     icons_morphing: bool,
+    active_page: Option<Page>,
     /// Window that had the keyboard before typing started; it gets it back after.
     prev_foreground: HWND,
     /// First half of a UTF-16 pair arriving in WM_CHAR (emoji).
@@ -188,7 +189,19 @@ impl App {
         self.win = (m.left + (m.right - m.left - w) / 2, m.top, w, h);
     }
 
+    fn sync_page_work(&mut self) {
+        let page = render::visible_page(self.notch.mode, self.hidden, self.page);
+        if self.active_page != page {
+            self.active_page = page;
+            self.music.set_page_open(page == Some(Page::Music));
+            self.renderer.set_page_open(page == Some(Page::Notify));
+            if page == Some(Page::Notify) { self.refresh_notes(); }
+        }
+    }
+
     fn redraw(&mut self) {
+        self.sync_page_work();
+        if self.hidden { return; }
         // The page's own motion plays from the moment the panel opens.
         if self.notch.mode != Mode::Expanded {
             self.page_since = Instant::now();
@@ -252,6 +265,8 @@ impl App {
     }
 
     fn kick(&mut self) {
+        self.sync_page_work();
+        if self.hidden { return; }
         if !self.animating {
             self.animating = true;
             self.last_frame = Instant::now();
@@ -305,6 +320,11 @@ impl App {
     }
 
     fn frame(&mut self) {
+        if self.hidden {
+            self.animating = false;
+            self.set_frame_interval(0);
+            return;
+        }
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
@@ -481,7 +501,7 @@ impl App {
         // New ones get a banner; the Notifications page lists what Windows still keeps.
         let new = self.notifications.as_mut().map(|r| r.poll()).unwrap_or_default();
         let showing_notes = self.notch.mode == Mode::Expanded && self.page == Page::Notify;
-        if !new.is_empty() || showing_notes {
+        if showing_notes && !self.hidden {
             self.refresh_notes();
             changed |= showing_notes;
         }
@@ -576,10 +596,6 @@ impl App {
         if let Some(r) = &self.notifications {
             self.notes = r.recent(NOTES_MAX, system::utc_offset_min());
         }
-        // Fetch the icons now, so the page finds them ready when it is opened.
-        for n in &self.notes {
-            self.renderer.prefetch_icon(&n.id);
-        }
         self.clamp_scroll();
     }
 
@@ -618,9 +634,6 @@ impl App {
                 self.page = next;
                 self.page_since = Instant::now();
                 self.settings_open = None;
-                if next == Page::Notify {
-                    self.refresh_notes();
-                }
                 self.kick();
             }
             Button::ListInput => self.begin_edit(),
@@ -809,6 +822,13 @@ impl App {
             let fg = unsafe { GetForegroundWindow() };
             system::log(&if hide { format!("hidden, foreground {}", screen::class_name(fg)) } else { "shown again".to_string() });
             unsafe { let _ = ShowWindow(self.hwnd, if hide { SW_HIDE } else { SW_SHOWNOACTIVATE }); }
+            self.sync_page_work();
+            if hide {
+                self.animating = false;
+                self.set_frame_interval(0);
+            } else {
+                self.kick();
+            }
         }
     }
 
@@ -1024,6 +1044,11 @@ impl App {
             WM_MUSIC => {
                 self.refresh_music();
                 if !self.animating {
+                    self.redraw();
+                }
+            }
+            render::WM_ICONS => {
+                if self.active_page == Some(Page::Notify) || (!self.hidden && self.notch.mode == Mode::Alert) {
                     self.redraw();
                 }
             }
@@ -1323,6 +1348,7 @@ fn run() -> windows::core::Result<()> {
             settings_open: None,
             page_anim: None,
             icons_morphing: false,
+            active_page: None,
             prev_foreground: HWND::default(),
             high_surrogate: None,
             weather: weather::Weather::start(hwnd, settings.place.clone()),
@@ -1337,7 +1363,6 @@ fn run() -> windows::core::Result<()> {
         if let Some(r) = app.notifications.as_mut() {
             r.cleared = settings.notes_cleared;
         }
-        app.refresh_notes();
         let _ = RegisterPowerSettingNotification(HANDLE(hwnd.0), &status::VIDEO_BRIGHTNESS, DEVICE_NOTIFY_WINDOW_HANDLE);
         status::take_volume_keys(settings.volume_keys);
         status::watch_lock_keys(hwnd);

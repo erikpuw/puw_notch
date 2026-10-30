@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::Instant;
 
 use crate::connectivity::DeviceKind;
@@ -32,6 +33,12 @@ use crate::music::Track;
 use crate::notch::{self, target, Mode, LYRICS_EXTRA_W};
 use crate::notify::{Note, Toast};
 use crate::system::Battery;
+
+pub const WM_ICONS: u32 = WM_APP + 10;
+
+pub fn visible_page(mode: Mode, hidden: bool, page: Page) -> Option<Page> {
+    (mode == Mode::Expanded && !hidden).then_some(page)
+}
 use crate::health::{self, Health, Setting};
 use crate::i18n::tr;
 use crate::robot::{curious_eyes, Eyes, Face};
@@ -710,29 +717,45 @@ fn hue_bins(pixels: &[u8]) -> [(f32, [f32; 3]); 12] {
 /// showed as a stutter when the Notifications page opened. Answers are (id, width, height, premultiplied BGRA).
 struct IconLoader {
     ask: Sender<String>,
-    got: Receiver<(String, Option<(u32, u32, Vec<u8>)>)>,
+    got: Receiver<LoadedIcon>,
     /// Asked for, not answered yet.
     pending: HashSet<String>,
+    page_open: Arc<AtomicBool>,
+    hwnd: Arc<AtomicIsize>,
+}
+
+struct LoadedIcon {
+    id: String,
+    pixels: Option<(u32, u32, Vec<u8>)>,
+    deferred: bool,
 }
 
 impl IconLoader {
     fn start() -> Self {
         let (ask, asked) = channel::<String>();
         let (answer, got) = channel();
+        let page_open = Arc::new(AtomicBool::new(false));
+        let hwnd = Arc::new(AtomicIsize::new(0));
+        let (open, target) = (page_open.clone(), hwnd.clone());
         std::thread::spawn(move || unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let wic: Option<IWICImagingFactory> = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
             for id in asked {
-                let pixels = wic.as_ref().and_then(|wic| match id.strip_prefix("img:") {
+                let deferred = !id.starts_with("img:") && !open.load(Ordering::Relaxed);
+                let pixels = wic.as_ref().filter(|_| !deferred).and_then(|wic| match id.strip_prefix("img:") {
                     Some(path) => image_pixels(wic, path),
                     None => app_icon_pixels(wic, &id),
                 });
-                if answer.send((id, pixels)).is_err() {
+                if answer.send(LoadedIcon { id, pixels, deferred }).is_err() {
                     break;
+                }
+                let hwnd = target.load(Ordering::Relaxed);
+                if hwnd != 0 {
+                    let _ = PostMessageW(Some(HWND(hwnd as _)), WM_ICONS, Default::default(), Default::default());
                 }
             }
         });
-        IconLoader { ask, got, pending: HashSet::new() }
+        IconLoader { ask, got, pending: HashSet::new(), page_open, hwnd }
     }
 }
 
@@ -1204,7 +1227,12 @@ impl Renderer {
     }
 
     /// Ask for an app's icon ahead of time, so the Notifications page finds it ready.
-    pub fn prefetch_icon(&mut self, id: &str) {
+    pub fn set_page_open(&self, open: bool) {
+        self.icon_loader.page_open.store(open, Ordering::Relaxed);
+    }
+
+    fn prefetch_icon(&mut self, id: &str) {
+        if !id.starts_with("img:") && !self.icon_loader.page_open.load(Ordering::Relaxed) { return; }
         if !self.app_icons.contains_key(id) && self.icon_loader.pending.insert(id.to_string()) {
             let _ = self.icon_loader.ask.send(id.to_string());
         }
@@ -1212,8 +1240,9 @@ impl Renderer {
 
     /// Turn the icons the loader has finished into bitmaps.
     fn take_icons(&mut self) {
-        while let Ok((id, pixels)) = self.icon_loader.got.try_recv() {
+        while let Ok(LoadedIcon { id, pixels, deferred }) = self.icon_loader.got.try_recv() {
             self.icon_loader.pending.remove(&id);
+            if deferred { continue; }
             let bitmap = pixels.and_then(|(w, h, px)| unsafe {
                 let props = D2D1_BITMAP_PROPERTIES { pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED }, dpiX: 96.0, dpiY: 96.0 };
                 self.rt.CreateBitmap(D2D_SIZE_U { width: w, height: h }, Some(px.as_ptr() as *const _), w * 4, &props).ok()
@@ -1473,12 +1502,17 @@ impl Renderer {
     }
 
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
+        let page = visible_page(v.mode, false, v.page);
+        self.set_page_open(page == Some(Page::Notify));
+        self.icon_loader.hwnd.store(hwnd.0 as isize, Ordering::Relaxed);
         self.ensure_surface(hwnd, w, h)?;
         self.take_icons();
         let fonts = self.fonts(scale)?;
-        let cover = v.music.and_then(|t| self.cover(t, (COVER * scale).round() as u32, (20.0 * scale).round() as u32));
+        let cover = if page == Some(Page::Music) {
+            v.music.and_then(|t| self.cover(t, (COVER * scale).round() as u32, (20.0 * scale).round() as u32))
+        } else { v.music.and_then(|t| self.cover.as_ref().filter(|c| c.track_key == t.art_key).and_then(|c| c.bitmaps.clone())) };
         let cover_shadow = cover.as_ref().and_then(|_| self.cover_shadow(scale));
-        let target = if v.live && v.page == Page::Music { self.cover.as_ref().and_then(|c| c.glow) } else { None };
+        let target = if v.live && page == Some(Page::Music) { self.cover.as_ref().and_then(|c| c.glow) } else { None };
         let now = Instant::now();
         let dt = now.duration_since(self.glow.2).as_secs_f32().min(0.1);
         let (tint, level, glow_busy) = glow_step(self.glow.0, self.glow.1, target, dt);
@@ -1520,11 +1554,11 @@ impl Renderer {
         })();
         // Height of each wrapped lyric line, while the panel is wider than the player.
         let lyric_heights: Vec<f32> = match v.music {
-            Some(t) if v.page == Page::Music && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
+            Some(t) if page == Some(Page::Music) && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
                 self.lyric_heights(&t.lyrics, LYRIC_W * scale, 20.0 * scale, &fonts),
             _ => Vec::new(),
         };
-        let note_icons: Vec<Option<ID2D1Bitmap>> = if v.page == Page::Notify { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
+        let note_icons: Vec<Option<ID2D1Bitmap>> = if page == Some(Page::Notify) { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
         let banner_image: Option<ID2D1Bitmap> = v.banner.filter(|_| v.mode == Mode::Alert).and_then(|b| b.image.as_deref()).and_then(|p| self.app_icon(&format!("img:{p}")));
         let rt = &self.rt;
@@ -2564,11 +2598,10 @@ impl Renderer {
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
             let lyric_glide = lyrics_run && v.music.is_some_and(|t| lyrics::phase(&t.lyrics, t.position_ms()).fract() != 0.0);
             self.slow_frames = lyrics_run;
-            // Icons still on their way to the Notifications page: come back for them.
-            let icons_coming = v.page == Page::Notify && !self.icon_loader.pending.is_empty();
+            // Icon completion posts WM_ICONS; waiting for I/O never keeps animation alive.
             // The Weather page's icon moves for a moment when the panel or the page opens.
             let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && v.page_age < icons::DUR;
-            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_glide || icons_coming)
+            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_glide)
         }
     }
 }
@@ -2576,6 +2609,79 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_page_does_not_queue_icons() {
+        let mut renderer = Renderer::new().unwrap();
+        renderer.prefetch_icon("PuwNotch.ClosedPageTest");
+        assert!(renderer.icon_loader.pending.is_empty(), "a closed page must not start loading icons");
+    }
+
+    #[test]
+    fn page_work_stops_in_pill_mini_banner_and_fullscreen() {
+        for mode in [Mode::Collapsed, Mode::Mini, Mode::Peek, Mode::PeekMini, Mode::Alert] {
+            assert_eq!(visible_page(mode, false, Page::Notify), None);
+        }
+        assert_eq!(visible_page(Mode::Expanded, true, Page::Music), None);
+        assert_eq!(visible_page(Mode::Expanded, false, Page::Music), Some(Page::Music));
+        assert_eq!(visible_page(Mode::Expanded, false, Page::Notify), Some(Page::Notify));
+    }
+
+    #[test]
+    fn icons_load_on_open_and_banner_images_still_load_when_closed() {
+        let mut renderer = Renderer::new().unwrap();
+        renderer.set_page_open(true);
+        renderer.prefetch_icon("PuwNotch.OpenPageTest");
+        assert!(renderer.icon_loader.pending.contains("PuwNotch.OpenPageTest"));
+        renderer.set_page_open(false);
+        renderer.prefetch_icon("PuwNotch.ClosedPageTest");
+        assert!(!renderer.icon_loader.pending.contains("PuwNotch.ClosedPageTest"));
+        renderer.prefetch_icon("img:PuwNotch.MissingBannerImage");
+        assert!(renderer.icon_loader.pending.contains("img:PuwNotch.MissingBannerImage"));
+    }
+
+    #[test]
+    fn icon_worker_defers_queued_page_work_after_close() {
+        let loader = IconLoader::start();
+        loader.ask.send("PuwNotch.CancelledIcon".into()).unwrap();
+        let result = loader.got.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(result.deferred && result.pixels.is_none());
+        assert_eq!(result.id, "PuwNotch.CancelledIcon");
+    }
+
+    #[test]
+    fn pending_icons_do_not_keep_frames_alive_and_closed_pages_do_not_prepare_music() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Page lifecycle test"), WS_POPUP,
+                0, 0, 530, 210, None, None, None, None).unwrap();
+            let mut renderer = Renderer::new().unwrap();
+            renderer.icon_loader.pending.insert("PuwNotch.HungIcon".into());
+            let track = Track { art_key: 7, ..Track::default() };
+            let note = Note { app: "Test".into(), id: "PuwNotch.NewIcon".into(), title: "Test".into(), body: String::new(), at: 0, open: None };
+            let mut view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "12:00", date: "30/10",
+                battery: None, banner: None, music: Some(&track), live: false, robot: None, phase: 0.0, banner_age: 9.0,
+                lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: std::slice::from_ref(&note),
+                weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+            for mode in [Mode::Collapsed, Mode::Mini] {
+                view.mode = mode;
+                view.size = target(mode, false);
+                assert!(!renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap(), "closed page must settle even with an unfinished icon");
+                assert!(!renderer.icon_loader.pending.contains(&note.id));
+                assert!(renderer.cover.is_none(), "closed page must not decode a cover");
+            }
+            view.mode = Mode::Expanded;
+            view.size = target(Mode::Expanded, false);
+            assert!(!renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap(), "open page also waits for icons by message, not VSync");
+            assert!(renderer.icon_loader.pending.contains(&note.id));
+            view.page = Page::Music;
+            renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
+            assert!(renderer.cover.is_some(), "opening Music prepares its cover cache");
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
 
     #[test]
     fn glow_tint_picks_the_strongest_hue_and_greys_out_dull_covers() {

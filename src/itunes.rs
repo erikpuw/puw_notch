@@ -138,6 +138,10 @@ fn seconds_to_ms(seconds: f64) -> u64 {
     if seconds.is_finite() && seconds > 0.0 { (seconds * 1000.0).round() as u64 } else { 0 }
 }
 
+pub fn playing() -> Option<bool> {
+    property(&app()?, "PlayerState")?.as_i32().map(|state| state == 1)
+}
+
 pub fn read() -> Option<Track> {
     let app = app()?;
     let current = dispatch_property(&app, "CurrentTrack")?;
