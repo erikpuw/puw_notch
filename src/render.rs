@@ -2619,7 +2619,7 @@ mod tests {
 
     #[test]
     fn page_work_stops_in_pill_mini_banner_and_fullscreen() {
-        for mode in [Mode::Collapsed, Mode::Mini, Mode::Peek, Mode::PeekMini, Mode::Alert] {
+        for mode in [Mode::Collapsed, Mode::Mini, Mode::Peek, Mode::PeekMini, Mode::Alert, Mode::Hidden] {
             assert_eq!(visible_page(mode, false, Page::Notify), None);
         }
         assert_eq!(visible_page(Mode::Expanded, true, Page::Music), None);
@@ -2692,6 +2692,19 @@ mod tests {
             view.phase = 0.4;
             renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
             assert_ne!(first, renderer.grabbed, "the playing pill's equaliser must move between frames");
+            let mut notch = crate::notch::Notch::new(false);
+            notch.set_live(true);
+            for _ in 0..240 { notch.step(1.0 / 120.0); }
+            notch.set_hidden(true);
+            view.mode = Mode::Hidden;
+            for _ in 0..240 {
+                notch.step(1.0 / 120.0);
+                if notch.is_hidden() { break; }
+                view.size = notch.size();
+                renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
+            }
+            assert!(notch.is_hidden(), "fullscreen shrink must reach a size where the OS window can hide");
+            assert!(!renderer.icon_loader.page_open.load(Ordering::Relaxed));
             DestroyWindow(hwnd).unwrap();
         }
     }

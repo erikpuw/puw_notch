@@ -191,7 +191,7 @@ impl App {
 
     fn sync_page_work(&mut self) {
         let page = render::visible_page(self.notch.mode, self.hidden, self.page);
-        self.music.set_pill_visible(!self.hidden && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek));
+        self.music.set_pill_visible(!self.hidden && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek | Mode::Mini | Mode::PeekMini));
         if self.active_page != page {
             self.active_page = page;
             self.music.set_page_open(page == Some(Page::Music));
@@ -202,7 +202,7 @@ impl App {
 
     fn redraw(&mut self) {
         self.sync_page_work();
-        if self.hidden { return; }
+        if self.hidden && self.notch.is_hidden() { return; }
         // The page's own motion plays from the moment the panel opens.
         if self.notch.mode != Mode::Expanded {
             self.page_since = Instant::now();
@@ -267,7 +267,7 @@ impl App {
 
     fn kick(&mut self) {
         self.sync_page_work();
-        if self.hidden { return; }
+        if self.hidden && self.notch.is_hidden() { return; }
         if !self.animating {
             self.animating = true;
             self.last_frame = Instant::now();
@@ -321,11 +321,6 @@ impl App {
     }
 
     fn frame(&mut self) {
-        if self.hidden {
-            self.animating = false;
-            self.set_frame_interval(0);
-            return;
-        }
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
@@ -335,6 +330,12 @@ impl App {
         }
         self.notch.set_wide(self.lyrics_wide());
         let mut moving = self.notch.step(dt);
+        if self.hidden && self.notch.is_hidden() {
+            unsafe { let _ = ShowWindow(self.hwnd, SW_HIDE); }
+            self.animating = false;
+            self.set_frame_interval(0);
+            return;
+        }
         // The Notifications list glides to the row the wheel asked for.
         let goal = self.note_scroll as f32;
         if self.note_pos != goal {
@@ -819,17 +820,21 @@ impl App {
     fn set_hidden(&mut self, hide: bool) {
         if self.hidden != hide {
             self.hidden = hide;
+            self.notch.set_hidden(hide);
             // Which window made it hide: a notch missing after start-up may be hidden, not gone.
             let fg = unsafe { GetForegroundWindow() };
             system::log(&if hide { format!("hidden, foreground {}", screen::class_name(fg)) } else { "shown again".to_string() });
-            unsafe { let _ = ShowWindow(self.hwnd, if hide { SW_HIDE } else { SW_SHOWNOACTIVATE }); }
-            self.sync_page_work();
             if hide {
-                self.animating = false;
-                self.set_frame_interval(0);
+                self.end_edit();
+                self.hover_in = false;
+                self.tracking = false;
+                self.hovered_button = None;
+                self.page_anim = None;
+                unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
             } else {
-                self.kick();
+                unsafe { let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE); }
             }
+            self.kick();
         }
     }
 

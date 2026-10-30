@@ -15,7 +15,7 @@
 
 ## Tính năng
 
-- **Notch**: giờ, icon pin (3 nấc, sét xanh khi sạc, vàng khi tiết kiệm pin), sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi đè lên tab hoặc chữ bên dưới, ẩn khi chơi game / xem phim toàn màn hình.
+- **Notch**: giờ, icon pin (3 nấc, sét xanh khi sạc, vàng khi tiết kiệm pin), sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi đè lên tab hoặc chữ bên dưới; khi chơi game / xem phim toàn màn hình, thu mượt về mép trên rồi ẩn hẳn, thoát toàn màn hình thì bung lại.
 - **5 trang** (chuyển bằng ‹ ›):
   - **Nhạc**: ảnh bìa, lời bài hát đồng bộ (LRCLIB), ⏮ ⏯ ⏭, bấm để tua, nút lời giãn bảng ngang để xem lời chạy theo bài; nền và đường aurora theo màu ảnh bìa. Hỗ trợ mọi app dùng media Windows, iTunes, foobar2000.
   - **Việc**: một danh sách cho việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Tick / sửa / xóa; quá giờ tô đỏ kèm "Trễ". ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
@@ -24,7 +24,7 @@
   - **Thời tiết**: gõ tên thành phố một lần (có dấu hay không đều được), viên thuốc hiện icon + nhiệt độ; trang có icon lớn, cảm nhận, độ ẩm, gió. °C | °F theo vùng Windows, bấm để đổi. Làm mới 30 phút ở luồng nền, quá 90 phút chuyển "cũ"; nút × tắt thời tiết.
 - **Banner**: thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth, mạng, pin, tiết kiệm pin, USB cắm / rút. Chụp màn hình (Win+Shift+S) thì banner có ảnh thu nhỏ, bấm để mở ảnh.
 - **Robot khi để yên**: 30 giây không đụng máy thì mặt LED thay đồng hồ, đổi biểu cảm; 5 phút thì ngủ; quay lại thì cười chào rồi trả về đồng hồ. Bật / tắt ở tray.
-- **Tải theo phần đang hiện**: pill nhạc vẫn nhận bài mới và cập nhật ảnh bìa khi đổi bài; sóng nhạc tiếp tục chuyển động khi đang phát. Lời bài hát chỉ tải khi mở trang Nhạc; icon thông báo chỉ tải khi mở trang Thông báo. Thu về mini hoặc tự ẩn thì ngừng đọc metadata nhạc chi tiết và không bắt đầu tải ảnh bìa hay lời. Mở bảng dùng cache và sync lại trang đang xem. Chờ icon không giữ vòng vẽ chạy. Giờ, pin, thời tiết, thông báo và nhắc việc vẫn cập nhật; yêu cầu tải đã chạy có thể hoàn tất vào cache.
+- **Tải theo phần đang hiện**: pill và mini vẫn nhận bài mới, cập nhật cache ảnh bìa khi đổi bài; pill tiếp tục chạy sóng nhạc giả lập khi đang phát. Đóng page thì giữ cache, ngừng tải lời bài hát và icon của page; mở lại thì dùng cache và sync trang đang xem. Lời chỉ tải khi mở trang Nhạc, icon thông báo chỉ tải khi mở trang Thông báo. Ẩn toàn màn hình thì ngừng đọc metadata nhạc chi tiết và không bắt đầu tải ảnh bìa hay lời. Chờ icon không giữ vòng vẽ chạy. Giờ, pin, thời tiết, phát hiện nội dung bị che, thông báo và nhắc việc vẫn cập nhật; yêu cầu tải đã chạy có thể hoàn tất vào cache.
 - **Ẩn bảng âm lượng của Windows** (tray, mặc định tắt): app tự xử lý phím âm lượng nên chỉ notch hiện. Phím độ sáng và mic của laptop thường đi qua firmware nên chưa chặn được.
 - **Tray**: Notch tối giản, Robot, Ẩn bảng âm lượng, Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát.
 

@@ -15,6 +15,8 @@ pub enum Mode {
     Expanded,
     /// Banner for a new Windows notification; ends by timer.
     Alert,
+    /// Shrinks into the screen edge before the fullscreen window is hidden.
+    Hidden,
 }
 
 /// (width, height, corner radius) the notch animates towards in each mode.
@@ -29,6 +31,7 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
         (Mode::PeekMini, _) => [72.0, 8.0, 4.0],
         (Mode::Expanded, _) => [440.0, 186.0, 28.0],
         (Mode::Alert, _) => [360.0, 64.0, 22.0],
+        (Mode::Hidden, _) => [0.0; 3],
     }
 }
 
@@ -155,6 +158,16 @@ impl Notch {
         self.is_resting() && self.size() == self.goal()
     }
 
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.mode = if hidden { Mode::Hidden } else { self.rest_mode() };
+        self.wide = false;
+    }
+
+    /// Wait for the springs to stop, including any overshoot, before hiding the OS window.
+    pub fn is_hidden(&self) -> bool {
+        self.mode == Mode::Hidden && self.size.iter().all(|s| s.pos == 0.0 && s.vel == 0.0)
+    }
+
     /// Current (w, h, r). The bounce can swing past zero when shrinking to the mini line; clamp.
     pub fn size(&self) -> [f32; 3] {
         [self.size[0].pos.max(0.0), self.size[1].pos.max(0.0), self.size[2].pos.max(0.0)]
@@ -190,7 +203,7 @@ impl Notch {
 
     pub fn on_leave(&mut self) {
         // A banner ends by its own timer, not by the mouse passing over it.
-        if self.mode != Mode::Alert {
+        if !matches!(self.mode, Mode::Alert | Mode::Hidden) {
             self.mode = self.rest_mode();
         }
     }
@@ -198,7 +211,7 @@ impl Notch {
     /// New banner with `lines` lines of notification text (0 = status banner). Returns true if
     /// shown (not while the panel is open).
     pub fn on_alert(&mut self, lines: u8) -> bool {
-        if self.mode == Mode::Expanded {
+        if matches!(self.mode, Mode::Expanded | Mode::Hidden) {
             return false;
         }
         self.mode = Mode::Alert;
@@ -275,6 +288,50 @@ impl Notch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_shrinks_to_zero_and_restores_the_resting_size() {
+        for minimal in [false, true] {
+            let mut notch = Notch::new(minimal);
+            for _ in 0..240 { notch.step(1.0 / 120.0); }
+            let before = notch.size();
+            notch.set_hidden(true);
+            assert_eq!(notch.size(), before, "requesting fullscreen must not jump the size");
+            assert!(!notch.is_hidden());
+            assert!(notch.step(1.0 / 120.0));
+            assert!(notch.size()[0] > 0.0 && notch.size()[0] < before[0]);
+            assert!(!notch.on_enter());
+            assert!(!notch.on_alert(0));
+            notch.on_leave();
+            notch.on_dwell(true);
+            for _ in 0..240 { notch.step(1.0 / 120.0); }
+            assert!(notch.is_hidden());
+            assert_eq!(notch.size(), [0.0; 3]);
+            assert!(!notch.step(1.0 / 120.0), "fully hidden must stop rendering");
+            notch.set_hidden(false);
+            assert_eq!(notch.size(), [0.0; 3], "restoring must animate out of zero");
+            for _ in 0..240 { notch.step(1.0 / 120.0); }
+            let mode = if minimal { Mode::Mini } else { Mode::Collapsed };
+            assert_eq!(notch.mode, mode);
+            assert_eq!(notch.size(), target(mode, false));
+        }
+    }
+
+    #[test]
+    fn leaving_fullscreen_mid_shrink_reverses_without_a_size_jump() {
+        let mut notch = Notch::new(false);
+        notch.on_enter();
+        notch.on_dwell(true);
+        for _ in 0..240 { notch.step(1.0 / 120.0); }
+        notch.set_hidden(true);
+        for _ in 0..8 { notch.step(1.0 / 120.0); }
+        let shrinking = notch.size();
+        notch.set_hidden(false);
+        assert_eq!(notch.size(), shrinking);
+        for _ in 0..240 { notch.step(1.0 / 120.0); }
+        assert_eq!(notch.mode, Mode::Collapsed);
+        assert_eq!(notch.size(), target(Mode::Collapsed, false));
+    }
 
     #[test]
     fn stale_hover_is_an_open_panel_with_the_cursor_gone() {
