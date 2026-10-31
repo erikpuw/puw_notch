@@ -1,5 +1,5 @@
 //! The battery as a ring, the way iOS shows it: a thick track, an arc of the charge from the top
-//! clockwise with round ends, and the device in the middle (a laptop; a bolt while charging).
+//! clockwise with round ends, and a bolt in the middle while charging.
 //! Green normally and while charging, yellow in battery saver, red at 20 % or less.
 
 use super::*;
@@ -69,11 +69,6 @@ impl Renderer {
                 sink.EndFigure(D2D1_FIGURE_END_CLOSED);
                 sink.Close()?;
                 rt.FillGeometry(&geo, &white, None);
-            } else {
-                // A laptop: the screen and the base.
-                let (p, q) = (at(-3.8, -3.6), at(3.8, 1.4));
-                rt.DrawRoundedRectangle(&rounded(rect(p.X, p.Y, q.X, q.Y), 0.9 * k), &white, 1.2 * k, None);
-                rt.DrawLine(at(-5.4, 3.7), at(5.4, 3.7), &white, 1.4 * k, &self.round);
             }
         }
         Ok(())
