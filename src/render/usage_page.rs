@@ -1,4 +1,4 @@
-//! The Limits page: the apps as a segmented control (a dot says whether one has counted), then
+//! The Limits page: the apps as a segmented control (dimmer while one has not counted), then
 //! cards on the same grey as the other pages. One or two limits (Claude, Codex) get a card each
 //! with a ring and the time left; three or more (Antigravity) get a card per group with a bar per
 //! window, so the numbers stay readable.
@@ -76,9 +76,10 @@ impl Renderer {
                 } else if hovered == Some(Button::UsageTab(i)) {
                     rt.FillRoundedRectangle(&rounded(inner, 9.0 * s), &self.brush(grey(0.17, a))?);
                 }
-                let dot = D2D1_ELLIPSE { point: Vector2 { X: b.left + 12.0 * s, Y: (b.top + b.bottom) / 2.0 }, radiusX: 3.0 * s, radiusY: 3.0 * s };
-                rt.FillEllipse(&dot, &self.brush(if self.usage.get(*app).is_some() { solid(GREEN, a) } else { grey(0.35, a) })?);
-                text(app.name(), F_LABEL, rect(b.left + 18.0 * s, b.top, b.right - 4.0 * s, b.bottom), center, grey(if i == tab { 1.0 } else { 0.62 }, a))?;
+                // An app that has not counted yet is dimmer; the label is centred in its segment.
+                let counted = self.usage.get(*app).is_some();
+                let shade = match (i == tab, counted) { (true, true) => 1.0, (true, false) => 0.7, (false, true) => 0.62, (false, false) => 0.38 };
+                text(app.name(), F_LABEL, b, center, grey(shade, a))?;
             }
 
             let top = CARDS_TOP * s;
