@@ -245,14 +245,15 @@ const ROW_H: f32 = 26.0;
 pub const LIST_ROWS: usize = 3;
 /// Weather page, from the content's left: the temperature and the sky in words beside the icon,
 /// the two unit chips (°C, °F) under the words (left, top, width of each, height), the column of
-/// feels like / humidity / wind (left, width); the 24-hour strip takes the column's place when open.
+/// right-hand block's left edge: feels like / humidity / wind, the outlook line under them and, when
+/// open, the 24-hour strip all start there (after the chips, leaving the sky's words room for
+/// "Giông sấm") and run to the content's right.
 const TEMP_X: f32 = 64.0;
 const UNIT_X: f32 = TEMP_X;
 const UNIT_Y: f32 = 134.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 18.0;
-const DETAIL_X: f32 = 150.0;
-const DETAIL_W: f32 = 140.0;
+const DETAIL_X: f32 = UNIT_X + 2.0 * UNIT_W + 20.0;
 /// The 24h button before the x on the city line.
 const HOURS_BTN_W: f32 = 38.0;
 /// Width of the text at the right of the city line ("Open-Meteo · 14:30"), and so where the
@@ -2452,7 +2453,7 @@ impl Renderer {
                                         text(unit.symbol(), F_LABEL, chip, center, grey(if on { 1.0 } else { 0.55 }, a))?;
                                     }
                                     text(weather::describe(n.sky), F_BODY, rect(cl + TEMP_X * s, 116.0 * s, cl + (DETAIL_X - 4.0) * s, 132.0 * s), lead, grey(0.7, a))?;
-                                    let (dl, dr) = (cl + DETAIL_X * s, cl + (DETAIL_X + DETAIL_W) * s);
+                                    let (dl, dr) = (cl + DETAIL_X * s, cr);
                                     if open {
                                         // The 24h button swaps the details for the next 24 hours, every third hour:
                                         // time, icon, temperature, and the chance of rain when there is one.
@@ -2467,20 +2468,31 @@ impl Renderer {
                                             }
                                         }
                                     } else {
-                                        // Feels like, humidity, wind, close beside the temperature.
-                                        let rows = [
-                                            (tr("Cảm giác", "Feels like"), format!("{}{}", v.unit.number(n.feels), v.unit.symbol())),
-                                            (tr("Độ ẩm", "Humidity"), format!("{:.0}%", n.humidity)),
-                                            (tr("Gió", "Wind"), format!("{:.0} km/h", n.wind)),
+                                        // Feels like, humidity, wind, then from the next 24 hours when rain comes and the
+                                        // high; wind that will turn strong rides on the wind row ("11 → 34 km/h 17h").
+                                        let o = weather::outlook(&wx.hours);
+                                        let wind = match o.wind {
+                                            Some(h) if h.wind > n.wind => format!("{:.0} → {:.0} km/h {}h", n.wind, h.wind, h.hour),
+                                            _ => format!("{:.0} km/h", n.wind),
+                                        };
+                                        let mut rows = vec![
+                                            (tr("Cảm giác", "Feels like"), format!("{}{}", v.unit.number(n.feels), v.unit.symbol()), grey(0.95, a)),
+                                            (tr("Độ ẩm", "Humidity"), format!("{:.0}%", n.humidity), grey(0.95, a)),
+                                            (tr("Gió", "Wind"), wind, grey(0.95, a)),
                                         ];
-                                        for (k, (label, value)) in rows.iter().enumerate() {
-                                            let y = (86.0 + k as f32 * 16.0) * s;
-                                            text(label, F_LABEL, rect(dl, y, dr - 60.0 * s, y + 18.0 * s), lead, grey(0.55, a))?;
-                                            text(value, F_LABEL, rect(dl, y, dr, y + 18.0 * s), trail, grey(0.95, a))?;
-                                        }
-                                        // The next 24 hours in one line, after the unit chips: rain, the high, strong wind.
                                         if !wx.hours.is_empty() {
-                                            text(&weather::outlook(&wx.hours, v.unit), F_LABEL, rect(cl + (UNIT_X + 2.0 * UNIT_W + 10.0) * s, (UNIT_Y + 1.0) * s, cr, (UNIT_Y + UNIT_H + 1.0) * s), lead, grey(0.75, a * fade))?;
+                                            rows.push(match o.rain {
+                                                Some(h) => (tr("Mưa", "Rain"), format!("{}h · {}%", h.hour, h.rain), solid(BLUE, a * fade)),
+                                                None => (tr("Mưa", "Rain"), tr("Không có", "None").to_string(), grey(0.95, a * fade)),
+                                            });
+                                            if let Some(h) = o.high {
+                                                rows.push((tr("Nắng nhất", "High"), format!("{}° · {}h", v.unit.number(h.temp), h.hour), grey(0.95, a * fade)));
+                                            }
+                                        }
+                                        for (k, (label, value, ink)) in rows.iter().enumerate() {
+                                            let y = (84.0 + k as f32 * 16.0) * s;
+                                            text(label, F_LABEL, rect(dl, y, dr - 70.0 * s, y + 18.0 * s), lead, grey(0.55, a))?;
+                                            text(value, F_LABEL, rect(dl, y, dr, y + 18.0 * s), trail, *ink)?;
                                         }
                                     }
                                 }

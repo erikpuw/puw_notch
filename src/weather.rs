@@ -130,20 +130,21 @@ const RAIN_LIKELY: u8 = 50;
 /// Wind at or above this (km/h) is told as strong.
 const WIND_STRONG: f32 = 30.0;
 
-/// The next 24 hours in one short line: when rain is likely (or none), the daytime high, strong wind.
-pub fn outlook(hours: &[Hour], unit: Unit) -> String {
-    let mut parts = Vec::new();
-    match hours.iter().find(|h| h.rain >= RAIN_LIKELY) {
-        Some(h) => parts.push(format!("{} {}h {}%", tr("Mưa", "Rain"), h.hour, h.rain)),
-        None => parts.push(tr("Không mưa", "No rain").to_string()),
+/// The hours worth telling in the next 24: the first with rain likely, the hottest by day, the
+/// windiest once strong.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Outlook {
+    pub rain: Option<Hour>,
+    pub high: Option<Hour>,
+    pub wind: Option<Hour>,
+}
+
+pub fn outlook(hours: &[Hour]) -> Outlook {
+    Outlook {
+        rain: hours.iter().find(|h| h.rain >= RAIN_LIKELY).copied(),
+        high: hours.iter().filter(|h| h.day).max_by(|a, b| a.temp.total_cmp(&b.temp)).copied(),
+        wind: hours.iter().filter(|h| h.wind >= WIND_STRONG).max_by(|a, b| a.wind.total_cmp(&b.wind)).copied(),
     }
-    if let Some(h) = hours.iter().filter(|h| h.day).max_by(|a, b| a.temp.total_cmp(&b.temp)) {
-        parts.push(format!("{} {}°", tr("Nắng", "High"), unit.number(h.temp)));
-    }
-    if let Some(h) = hours.iter().filter(|h| h.wind >= WIND_STRONG).max_by(|a, b| a.wind.total_cmp(&b.wind)) {
-        parts.push(format!("{} {:.0} km/h", tr("Gió", "Wind"), h.wind));
-    }
-    parts.join(" · ")
 }
 
 /// Conditions older than this (minutes) are shown as old: a failed fetch keeps the last ones.
@@ -397,7 +398,7 @@ pub fn describe(sky: Sky) -> &'static str {
         Sky::Fog => tr("Sương mù", "Fog"),
         Sky::Rain => tr("Có mưa", "Rain"),
         Sky::Snow => tr("Tuyết", "Snow"),
-        Sky::Storm => tr("Giông sấm chớp", "Thunderstorm"),
+        Sky::Storm => tr("Có giông", "Storm"),
     }
 }
 
@@ -578,13 +579,13 @@ mod tests {
     #[test]
     fn outlook_tells_rain_heat_and_wind() {
         let h = |hour: u8, temp: f32, rain: u8, wind: f32, day: bool| Hour { hour, temp, rain, wind, sky: Sky::Clear, day };
-        let dry = [h(9, 28.0, 10, 8.0, true), h(13, 33.0, 20, 12.0, true), h(21, 26.0, 0, 5.0, false)];
-        assert_eq!(outlook(&dry, Unit::C), format!("{} · {} 33°", tr("Không mưa", "No rain"), tr("Nắng", "High")));
-        let wet = [h(9, 28.0, 30, 8.0, true), h(15, 30.0, 70, 35.0, true), h(16, 29.0, 90, 40.0, true)];
-        let line = outlook(&wet, Unit::C);
-        assert!(line.contains("15h 70%"), "first likely hour, not the wettest: {line}");
-        assert!(line.ends_with("40 km/h"), "strongest wind: {line}");
-        assert!(!outlook(&[h(2, 20.0, 0, 5.0, false)], Unit::C).contains('°'), "no daytime: no hottest hour");
+        let dry = outlook(&[h(9, 28.0, 10, 8.0, true), h(13, 33.0, 20, 12.0, true), h(21, 34.0, 0, 5.0, false)]);
+        assert_eq!((dry.rain, dry.wind), (None, None), "no rain, light wind");
+        assert_eq!(dry.high.map(|h| h.hour), Some(13), "the hottest by day, not the warm night");
+        let wet = outlook(&[h(9, 28.0, 30, 8.0, true), h(15, 30.0, 70, 35.0, true), h(16, 29.0, 90, 40.0, true)]);
+        assert_eq!(wet.rain.map(|h| h.hour), Some(15), "first likely hour, not the wettest");
+        assert_eq!(wet.wind.map(|h| h.hour), Some(16), "strongest wind");
+        assert_eq!(outlook(&[h(2, 20.0, 0, 5.0, false)]).high, None, "no daytime: no high");
     }
 
     #[test]
@@ -613,7 +614,7 @@ mod tests {
         assert!((-5.0..50.0).contains(&now.temp) && (0.0..=100.0).contains(&now.humidity), "{now:?}");
         assert_eq!(hours.len(), 24, "{hours:?}");
         println!("Da Nang now: {now:?}
-{}", outlook(&hours, Unit::C));
+{:?}", outlook(&hours));
     }
 
 
