@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use windows::core::{w, HSTRING, PCWSTR};
@@ -28,6 +29,8 @@ pub const WM_USAGE: u32 = WM_APP + 12;
 
 /// How often the apps are read again.
 const POLL: Duration = Duration::from_secs(60);
+/// ... and this often while the Limits page is open.
+const POLL_OPEN: Duration = Duration::from_secs(5);
 /// How much of a Codex session log's end is searched for the last rate-limit event.
 const CODEX_TAIL: u64 = 512 * 1024;
 /// Newest Codex logs tried before giving up.
@@ -479,12 +482,15 @@ fn read_all() -> Snapshot {
 /// The worker that keeps a `Snapshot` fresh and tells the window when it changes.
 pub struct Monitor {
     shared: Arc<Mutex<Snapshot>>,
+    /// The Limits page is open: read more often.
+    open: Arc<AtomicBool>,
 }
 
 impl Monitor {
     pub fn start(hwnd: HWND) -> Monitor {
         let shared = Arc::new(Mutex::new(Snapshot::default()));
-        let (mine, target) = (shared.clone(), hwnd.0 as isize);
+        let open = Arc::new(AtomicBool::new(false));
+        let (mine, target, watching) = (shared.clone(), hwnd.0 as isize, open.clone());
         std::thread::spawn(move || {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             loop {
@@ -495,10 +501,19 @@ impl Monitor {
                         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_USAGE, WPARAM(0), LPARAM(0)); }
                     }
                 }
-                std::thread::sleep(POLL);
+                // Second by second, so opening the page does not wait out a minute.
+                let mut waited = Duration::ZERO;
+                while waited < if watching.load(Ordering::Relaxed) { POLL_OPEN } else { POLL } {
+                    std::thread::sleep(Duration::from_secs(1));
+                    waited += Duration::from_secs(1);
+                }
             }
         });
-        Monitor { shared }
+        Monitor { shared, open }
+    }
+
+    pub fn set_page_open(&self, open: bool) {
+        self.open.store(open, Ordering::Relaxed);
     }
 
     pub fn snapshot(&self) -> Snapshot {

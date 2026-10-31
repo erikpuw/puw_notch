@@ -239,6 +239,7 @@ impl App {
             self.active_page = page;
             self.music.set_page_open(page == Some(Page::Music));
             self.renderer.set_page_open(page == Some(Page::Notify));
+            self.usage.set_page_open(page == Some(Page::Usage));
             if page == Some(Page::Notify) { self.refresh_notes(); }
         }
     }
