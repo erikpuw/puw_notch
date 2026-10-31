@@ -1,15 +1,18 @@
-//! The Limits page: a tab per app (a dot says whether it has counted), a ring per limit under it:
-//! the percent used in the middle, the window and its group below, and when it starts over.
+//! The Limits page: the apps as a segmented control (a dot says whether one has counted), then
+//! cards on the same grey as the other pages. One or two limits (Claude, Codex) get a card each
+//! with a ring and the time left; three or more (Antigravity) get a card per group with a bar per
+//! window, so the numbers stay readable.
 
 use super::*;
-use crate::usage::{self, APPS};
+use crate::usage::{self, Bar, APPS};
 
-/// Logical px: where the group names sit, the ring's centre and the label lines under it.
-const GROUP_Y: f32 = 60.0;
-const RING_Y: f32 = 98.0;
-const LABEL_H: f32 = 14.0;
-/// Widest a ring's column gets, so two or three rings sit together instead of far apart.
-const SLOT_W: f32 = 112.0;
+/// Logical px: the cards' top and height (the tabs end at 56), the gap between cards, their padding.
+const CARDS_TOP: f32 = 64.0;
+const CARDS_H: f32 = 92.0;
+const GAP: f32 = 6.0;
+const PAD: f32 = 12.0;
+/// Widest a card gets, so one or two limits do not stretch over the whole page.
+const CARD_MAX_W: f32 = 172.0;
 const RED: (f32, f32, f32) = (1.0, 0.35, 0.35);
 
 /// Green while there is room, orange getting close, red nearly out.
@@ -25,6 +28,23 @@ fn split_label(label: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// The limits grouped by their group name, in order ("" for those without one).
+fn groups(bars: &[Bar]) -> Vec<(String, Vec<&Bar>)> {
+    let mut out: Vec<(String, Vec<&Bar>)> = Vec::new();
+    for bar in bars {
+        let group = split_label(&bar.label).0.unwrap_or("").replace(" · ", "·");
+        match out.iter_mut().find(|(g, _)| *g == group) {
+            Some((_, list)) => list.push(bar),
+            None => out.push((group, vec![bar])),
+        }
+    }
+    // The short window first, then the week.
+    for (_, list) in &mut out {
+        list.sort_by_key(|b| b.weekly);
+    }
+    out
+}
+
 impl Renderer {
     /// `tabs` are the page's buttons, `(cl, cr)` the content's left and right edge, `a` its opacity.
     pub(super) fn draw_usage(
@@ -37,46 +57,86 @@ impl Renderer {
         hovered: Option<Button>,
     ) -> Result<()> {
         let rt = &self.rt;
-        let center = DWRITE_TEXT_ALIGNMENT_CENTER;
+        let (center, lead, trail) = (DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING);
         let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
         let tab = self.usage_tab.min(APPS.len() - 1);
+        let now = usage::now_secs();
         unsafe {
-            for (i, app) in APPS.iter().enumerate() {
-                let Some(&(_, b)) = tabs.iter().find(|(x, _)| *x == Button::UsageTab(i)) else { continue };
-                let shade = if i == tab { 0.22 } else if hovered == Some(Button::UsageTab(i)) { 0.17 } else { 0.11 };
-                rt.FillRoundedRectangle(&rounded(b, 11.0 * s), &self.brush(grey(shade, a))?);
-                let dot = D2D1_ELLIPSE { point: Vector2 { X: b.left + 11.0 * s, Y: (b.top + b.bottom) / 2.0 }, radiusX: 3.0 * s, radiusY: 3.0 * s };
-                let counted = self.usage.get(*app).is_some();
-                rt.FillEllipse(&dot, &self.brush(if counted { solid(GREEN, a) } else { grey(0.35, a) })?);
-                text(app.name(), F_LABEL, rect(b.left + 18.0 * s, b.top, b.right - 4.0 * s, b.bottom), center, grey(if i == tab { 1.0 } else { 0.65 }, a))?;
+            // The segmented control: one dark track, the chosen app lifted on it.
+            let segment = |i: usize| tabs.iter().find(|(x, _)| *x == Button::UsageTab(i)).map(|(_, b)| *b);
+            if let (Some(first), Some(last)) = (segment(0), segment(APPS.len() - 1)) {
+                let track = rect(first.left, first.top, last.right, first.bottom);
+                rt.FillRoundedRectangle(&rounded(track, 11.0 * s), &self.brush(grey(0.11, a))?);
             }
-            let now = usage::now_secs();
+            for (i, app) in APPS.iter().enumerate() {
+                let Some(b) = segment(i) else { continue };
+                let inner = rect(b.left + 2.0 * s, b.top + 2.0 * s, b.right - 2.0 * s, b.bottom - 2.0 * s);
+                if i == tab {
+                    rt.FillRoundedRectangle(&rounded(inner, 9.0 * s), &self.brush(grey(0.26, a))?);
+                } else if hovered == Some(Button::UsageTab(i)) {
+                    rt.FillRoundedRectangle(&rounded(inner, 9.0 * s), &self.brush(grey(0.17, a))?);
+                }
+                let dot = D2D1_ELLIPSE { point: Vector2 { X: b.left + 12.0 * s, Y: (b.top + b.bottom) / 2.0 }, radiusX: 3.0 * s, radiusY: 3.0 * s };
+                rt.FillEllipse(&dot, &self.brush(if self.usage.get(*app).is_some() { solid(GREEN, a) } else { grey(0.35, a) })?);
+                text(app.name(), F_LABEL, rect(b.left + 18.0 * s, b.top, b.right - 4.0 * s, b.bottom), center, grey(if i == tab { 1.0 } else { 0.62 }, a))?;
+            }
+
+            let top = CARDS_TOP * s;
+            let card = |left: f32, width: f32| -> Result<D2D_RECT_F> {
+                let r = rect(left, top, left + width, top + CARDS_H * s);
+                self.rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(grey(0.11, a))?);
+                Ok(r)
+            };
             let Some(bars) = self.usage.get(APPS[tab]) else {
-                text(APPS[tab].open_hint(), F_LABEL, rect(cl, 62.0 * s, cr, 122.0 * s), center, grey(0.6, a))?;
+                let r = card(cl, cr - cl)?;
+                text(APPS[tab].open_hint(), F_LABEL, rect(r.left + PAD * s, r.top, r.right - PAD * s, r.bottom), center, grey(0.6, a))?;
                 return Ok(());
             };
-            // One column per limit, together in the middle; more of them (Antigravity) get smaller rings.
-            let n = bars.len().max(1);
-            let slot = ((cr - cl) / n as f32).min(SLOT_W * s);
-            let d = if n <= 3 { 54.0 * s } else { 46.0 * s };
-            let mut x = cl + ((cr - cl) - slot * n as f32) / 2.0;
-            let grouped = bars.iter().any(|b| split_label(&b.label).0.is_some());
-            let down = if grouped { 0.0 } else { 6.0 * s };
-            for bar in bars {
-                let (group, window) = split_label(&bar.label);
-                let mid = x + slot / 2.0;
-                if let Some(group) = group {
-                    text(&group.replace(" · ", "·"), F_LABEL, rect(x, GROUP_Y * s, x + slot, (GROUP_Y + LABEL_H) * s), center, grey(0.6, a))?;
+
+            if bars.len() <= 2 {
+                // A card per limit: the ring with its percent, the window and the time left beside it.
+                let width = (((cr - cl) - GAP * s) / 2.0).min(CARD_MAX_W * s);
+                let mut x = cl + ((cr - cl) - width * bars.len() as f32 - GAP * s * (bars.len() as f32 - 1.0)) / 2.0;
+                for bar in bars {
+                    let r = card(x, width)?;
+                    let d = 56.0 * s;
+                    let mid = (r.top + r.bottom) / 2.0;
+                    let ring_x = r.left + PAD * s + d / 2.0;
+                    self.draw_ring((ring_x, mid), d, d * 0.15, bar.used / 100.0, ring_colour(bar.used), a)?;
+                    text(&format!("{}%", bar.used.round()), F_TITLE, rect(ring_x - d / 2.0, mid - d / 2.0, ring_x + d / 2.0, mid + d / 2.0), center, grey(1.0, a))?;
+                    let tx = ring_x + d / 2.0 + 10.0 * s;
+                    let (_, window) = split_label(&bar.label);
+                    let line = 17.0 * s;
+                    let (y0, y1) = if bar.resets_at > 0 { (mid - line, mid) } else { (mid - line / 2.0, mid + line / 2.0) };
+                    text(window, F_TITLE, rect(tx, y0, r.right - PAD * s, y1), lead, grey(1.0, a))?;
+                    if bar.resets_at > 0 {
+                        let left = format!("{} {}", crate::i18n::tr("Còn", "In"), usage::in_words(bar.resets_at, now));
+                        text(&left, F_LABEL, rect(tx, mid + 1.0 * s, r.right - PAD * s, mid + line), lead, grey(0.6, a))?;
+                    }
+                    x += width + GAP * s;
                 }
-                let cy = RING_Y * s - if n <= 3 { 0.0 } else { 3.0 * s } + down;
-                self.draw_ring((mid, cy), d, d * 0.15, bar.used / 100.0, ring_colour(bar.used), a)?;
-                text(&format!("{}%", bar.used.round()), F_TITLE, rect(mid - d / 2.0, cy - d / 2.0, mid + d / 2.0, cy + d / 2.0), center, grey(1.0, a))?;
-                let below = cy + d / 2.0 + 3.0 * s;
-                text(window, F_LABEL, rect(x, below, x + slot, below + LABEL_H * s), center, grey(0.9, a))?;
-                if bar.resets_at > 0 {
-                    text(&usage::in_words(bar.resets_at, now), F_LABEL, rect(x, below + LABEL_H * s, x + slot, below + 2.0 * LABEL_H * s), center, grey(0.5, a))?;
+                return Ok(());
+            }
+
+            // A card per group: its name, then a bar per window with the percent at the right.
+            let list = groups(bars);
+            let width = (((cr - cl) - GAP * s * (list.len() as f32 - 1.0)) / list.len() as f32).min(CARD_MAX_W * s);
+            let mut x = cl + ((cr - cl) - width * list.len() as f32 - GAP * s * (list.len() as f32 - 1.0)) / 2.0;
+            for (name, rows) in &list {
+                let r = card(x, width)?;
+                let inner = (r.left + PAD * s, r.right - PAD * s);
+                text(name, F_TITLE, rect(inner.0, r.top + 6.0 * s, inner.1, r.top + 26.0 * s), lead, grey(1.0, a))?;
+                for (k, bar) in rows.iter().enumerate() {
+                    let y = r.top + (30.0 + k as f32 * 29.0) * s;
+                    let (_, window) = split_label(&bar.label);
+                    text(window, F_LABEL, rect(inner.0, y, inner.1, y + 15.0 * s), lead, grey(0.7, a))?;
+                    text(&format!("{}%", bar.used.round()), F_LABEL, rect(inner.0, y, inner.1, y + 15.0 * s), trail, grey(1.0, a))?;
+                    let track = rect(inner.0, y + 18.0 * s, inner.1, y + 22.0 * s);
+                    rt.FillRoundedRectangle(&rounded(track, 2.0 * s), &self.brush(grey(0.26, a))?);
+                    let to = track.left + (track.right - track.left) * (bar.used / 100.0).clamp(0.0, 1.0).max(0.03);
+                    rt.FillRoundedRectangle(&rounded(rect(track.left, track.top, to, track.bottom), 2.0 * s), &self.brush(solid(ring_colour(bar.used), a))?);
                 }
-                x += slot;
+                x += width + GAP * s;
             }
         }
         Ok(())
@@ -92,6 +152,15 @@ mod tests {
         assert_eq!(ring_colour(10.0), GREEN);
         assert_eq!(ring_colour(70.0), ORANGE);
         assert_eq!(ring_colour(95.0), RED);
+    }
+
+    #[test]
+    fn limits_group_by_their_name_in_order() {
+        let bar = |label: &str| Bar { label: label.into(), weekly: false, used: 1.0, resets_at: 0 };
+        let bars = [bar("Gemini · Tuần"), bar("Gemini · 5 giờ"), bar("Claude · GPT · Tuần"), bar("Argon · Tuần")];
+        let list = groups(&bars);
+        assert_eq!(list.iter().map(|(g, r)| (g.as_str(), r.len())).collect::<Vec<_>>(), vec![("Gemini", 2), ("Claude·GPT", 1), ("Argon", 1)]);
+        assert_eq!(groups(&[bar("5 giờ"), bar("Tuần")]).len(), 1, "no group names: one group");
     }
 
     #[test]

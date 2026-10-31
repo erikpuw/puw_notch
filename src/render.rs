@@ -285,8 +285,7 @@ const CARD_TOP: f32 = 34.0;
 const CARD_BOTTOM: f32 = 158.0;
 const CARD_W: f32 = 172.0;
 const CARD_GAP: f32 = 8.0;
-/// The Limits page's app tabs.
-const USAGE_TAB_GAP: f32 = 6.0;
+/// The Limits page's app tabs: one segmented control.
 const USAGE_TAB_H: f32 = 22.0;
 const SET_ROW: f32 = 18.0;
 const SET_Y: f32 = 62.0;
@@ -383,9 +382,9 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             }
         }
         Page::Usage => {
-            let tab_w = (w - 2.0 * SIDE - 2.0 * USAGE_TAB_GAP) / 3.0;
+            let tab_w = (w - 2.0 * SIDE) / 3.0;
             for i in 0..3 {
-                out.push((Button::UsageTab(i), r(SIDE + i as f32 * (tab_w + USAGE_TAB_GAP), CARD_TOP, tab_w, USAGE_TAB_H)));
+                out.push((Button::UsageTab(i), r(SIDE + i as f32 * tab_w, CARD_TOP, tab_w, USAGE_TAB_H)));
             }
         }
         Page::Health => {
