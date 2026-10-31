@@ -3282,7 +3282,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "timing: prints ms per frame (average and worst) for the pill, the mini line and each page at 200 % scale"]
+    #[ignore = "timing: prints ms per frame (average and worst) with music playing: pill, mini line, lyrics view and each page at 200 % scale"]
     fn frame_time() {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -3290,17 +3290,21 @@ mod tests {
             let scale = 2.0;
             let (w, h) = ((crate::notch::MAX_W * scale) as i32, (crate::notch::MAX_H * scale) as i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Frame time"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            // Playing, with a lyric line every 0.4 s so the lyrics keep moving while timed.
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
-                can_toggle: true, can_next: true, can_previous: true, can_seek: true, art_key: 1,
+                can_toggle: true, can_next: true, can_previous: true, can_seek: true, art_key: 1, at: Some(Instant::now()),
+                lyrics: Arc::new((0..600).map(|k| (k * 400, format!("Dòng lời mẫu số {k} chạy theo bài đang phát"))).collect()),
                 art: Some(Arc::new(std::fs::read(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/screenshots/page-music.png")).unwrap())), ..Default::default() };
             let (wx, health) = (weather::State::default(), Health::default());
             let mut renderer = Renderer::new().unwrap();
-            let cases = [("pill", Mode::Collapsed, Page::Music), ("mini", Mode::Mini, Page::Music)].into_iter()
-                .chain(PAGES.map(|p| ("page", Mode::Expanded, p)));
-            for (name, mode, page) in cases {
-                let view = |phase: f32| View { mode, size: target(mode, true), time: "23:16", date: "T5, 29/10",
+            let cases = [("pill", Mode::Collapsed, Page::Music, false), ("mini", Mode::Mini, Page::Music, false), ("lyrics", Mode::Expanded, Page::Music, true)].into_iter()
+                .chain(PAGES.map(|p| ("page", Mode::Expanded, p, false)));
+            for (name, mode, page, lyrics) in cases {
+                let mut size = target(mode, true);
+                if lyrics { size[0] += LYRICS_EXTRA_W; }
+                let view = |phase: f32| View { mode, size, time: "23:16", date: "T5, 29/10",
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
-                    phase, banner_age: 0.0, lyrics: false, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C,
+                    phase, banner_age: 0.0, lyrics, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
                 // Settle first: the cover loads and the Music page's glow fades in.
@@ -3308,15 +3312,16 @@ mod tests {
                     renderer.present(hwnd, 0, 0, w, h, scale, &view(i as f32 / 60.0)).unwrap();
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
-                let (n, mut sum, mut worst) = (600, 0.0f64, 0.0f64);
+                let (n, mut sum, mut worst, mut over) = (600, 0.0f64, 0.0f64, 0);
                 for i in 0..n {
                     let t0 = Instant::now();
                     renderer.present(hwnd, 0, 0, w, h, scale, &view(2.0 + i as f32 / 60.0)).unwrap();
                     let ms = t0.elapsed().as_secs_f64() * 1000.0;
                     sum += ms;
                     worst = worst.max(ms);
+                    over += usize::from(ms > 1000.0 / 60.0);
                 }
-                println!("{name:4} {page:?}: {:.2} ms/frame, worst {worst:.2} ms", sum / n as f64);
+                println!("{name:6} {page:?}: {:.2} ms/frame, worst {worst:.2} ms, {over}/{n} over 16.7 ms", sum / n as f64);
             }
             DestroyWindow(hwnd).unwrap();
         }
