@@ -1111,6 +1111,13 @@ impl App {
                     self.hit(x, y)
                 } else { None };
                 if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
+                // The x of a notification banner lights up under the mouse.
+                let hot = self.notch.mode == Mode::Alert && self.banner_target().is_some() && {
+                    let (x, y) = ((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32 - self.top_px());
+                    let b = render::banner_close(self.win.2 as f32 / 2.0, self.scale, self.notch.size()[0], self.style == notch::Style::Pill);
+                    x >= b.left && x <= b.right && y >= b.top && y <= b.bottom
+                };
+                if hot != self.renderer.close_hot { self.renderer.close_hot = hot; self.redraw(); }
             }
             WM_SETCURSOR if self.banner_target().is_some() || self.approval.is_some() => {
                 unsafe { let _ = SetCursor(LoadCursorW(None, IDC_HAND).ok()); }
@@ -1127,6 +1134,7 @@ impl App {
                     return Some(LRESULT(0));
                 }
                 self.hovered_button = None;
+                if std::mem::take(&mut self.renderer.close_hot) { self.redraw(); }
                 self.tracking = false;
                 self.hover_in = false;
                 unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
@@ -1198,7 +1206,7 @@ impl App {
                     }
                     return Some(LRESULT(0));
                 }
-                let close = render::banner_close(self.win.2 as f32 / 2.0, self.scale, self.notch.size()[0]);
+                let close = render::banner_close(self.win.2 as f32 / 2.0, self.scale, self.notch.size()[0], self.style == notch::Style::Pill);
                 match self.banner_target() {
                     // Its x: back to the pill now, nothing opens.
                     Some(_) if x >= close.left && x <= close.right && y >= close.top && y <= close.bottom => {

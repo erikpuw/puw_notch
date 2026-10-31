@@ -424,8 +424,10 @@ pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, pa
 
 /// The x in a notification banner's top-right corner (window px) for a banner `width` px wide
 /// (logical) centred on `cx`: the glyph is 8 px, the rect around it is what a click must hit.
-pub fn banner_close(cx: f32, scale: f32, width: f32) -> D2D_RECT_F {
-    let (x, y) = (cx + (width / 2.0 - 12.0) * scale, 12.0 * scale);
+/// The pill's top corners are round, so its x sits further in than the ears' square ones.
+pub fn banner_close(cx: f32, scale: f32, width: f32, pill: bool) -> D2D_RECT_F {
+    let (inset, down) = if pill { (20.0, 18.0) } else { (12.0, 12.0) };
+    let (x, y) = (cx + (width / 2.0 - inset) * scale, down * scale);
     let half = 10.0 * scale;
     rect(x - half, y - half, x + half, y + half)
 }
@@ -818,6 +820,8 @@ pub struct Renderer {
     /// What the Limits page shows and the app it is on (set by the window when either changes).
     pub usage: crate::usage::Snapshot,
     pub usage_tab: usize,
+    /// The mouse is over the x of a notification banner (a soft disc shows behind it).
+    pub close_hot: bool,
     /// Ears (v1) or floating pill (v2).
     pub style: notch::Style,
     /// Copy each frame back to `grabbed` (preview tests only).
@@ -962,7 +966,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, style: notch::Style::Ears,
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
@@ -1873,9 +1877,12 @@ impl Renderer {
                     // A notification banner (one a click opens) gets an x to close it early. Status
                     // banners have none: resting on them opens the panel within a moment.
                     if t.image.is_some() || t.open.is_some() {
-                        let b = banner_close(cx, s, v.size[0]);
+                        let b = banner_close(cx, s, v.size[0], self.style == notch::Style::Pill);
                         let (x, y, k) = ((b.left + b.right) / 2.0, (b.top + b.bottom) / 2.0, 4.0 * s);
-                        let ink = self.brush(grey(0.55, a))?;
+                        if self.close_hot {
+                            rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: 10.0 * s, radiusY: 10.0 * s }, &self.brush(grey(0.22, a))?);
+                        }
+                        let ink = self.brush(grey(if self.close_hot { 0.95 } else { 0.55 }, a))?;
                         rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
                         rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
                     }
@@ -3235,10 +3242,10 @@ mod tests {
     #[test]
     fn banner_close_sits_in_the_top_right_corner() {
         let (cx, w) = (410.0, notch::alert_size(1)[0]);
-        for scale in [1.0, 2.0] {
-            let b = banner_close(cx * scale, scale, w);
+        for (scale, pill) in [(1.0, false), (2.0, false), (1.0, true), (2.0, true)] {
+            let b = banner_close(cx * scale, scale, w, pill);
             assert!(b.right <= (cx + w / 2.0) * scale && b.left > cx * scale, "inside the banner's right half");
-            assert!(b.top >= 0.0 && b.bottom <= 24.0 * scale, "in the top row, above the title");
+            assert!(b.top >= 0.0 && b.bottom <= 28.0 * scale, "in the top row, above the title");
             assert!(b.right - b.left >= 20.0 * scale - 0.01, "easy to hit");
         }
     }
