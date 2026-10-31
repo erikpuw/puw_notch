@@ -278,19 +278,32 @@ fn children(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// The newest rate-limit event of the logs written to last: a log keeps growing after the day it
+/// was started (a resumed session), and an account switch shows only in the newest event, so
+/// the files are taken by when they were written and the events compared by their own time.
 fn read_codex() -> Option<Vec<Bar>> {
     let root = PathBuf::from(std::env::var_os("USERPROFILE")?).join(".codex").join("sessions");
-    children(&root).into_iter().flat_map(|y| children(&y)).flat_map(|m| children(&m)).flat_map(|d| children(&d)).take(CODEX_FILES).find_map(|f| last_limits(&f))
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = children(&root).into_iter().flat_map(|y| children(&y)).flat_map(|m| children(&m)).flat_map(|d| children(&d))
+        .filter_map(|f| Some((std::fs::metadata(&f).ok()?.modified().ok()?, f)))
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.into_iter().take(CODEX_FILES).filter_map(|(_, f)| last_limits(&f)).max_by_key(|(at, _)| *at).map(|(_, bars)| bars)
 }
 
-/// The newest rate-limit event in the end of a Codex log (events with null windows are skipped).
-fn last_limits(path: &Path) -> Option<Vec<Bar>> {
+/// The `timestamp` of a Codex log line, Unix seconds.
+fn codex_time(line: &str) -> Option<i64> {
+    iso_to_epoch(&JsonObject::Parse(&key(line)).ok()?.GetNamedString(&key("timestamp")).ok()?.to_string())
+}
+
+/// The newest rate-limit event in the end of a Codex log (events with null windows are skipped),
+/// with its time.
+fn last_limits(path: &Path) -> Option<(i64, Vec<Bar>)> {
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     file.seek(SeekFrom::Start(len.saturating_sub(CODEX_TAIL))).ok()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
-    String::from_utf8_lossy(&bytes).lines().rev().filter(|l| l.contains("\"used_percent\"")).find_map(|l| some(parse_codex_line(l)))
+    String::from_utf8_lossy(&bytes).lines().rev().filter(|l| l.contains("\"used_percent\"")).find_map(|l| Some((codex_time(l).unwrap_or(0), some(parse_codex_line(l))?)))
 }
 
 /// A process handle that closes itself.
@@ -571,6 +584,10 @@ mod tests {
         assert_eq!(bars.len(), 1);
         assert!(bars[0].weekly && bars[0].used == 99.0 && bars[0].resets_at == 1_793_911_204);
         assert!(parse_codex_line(r#"{"payload":{"rate_limits":{"primary":null,"secondary":null}}}"#).is_empty());
+        assert_eq!(codex_time(r#"{"timestamp":"2026-11-06T20:12:50.123Z","payload":{}}"#), Some(1_793_995_970));
+        // A free account: one window of 30 days.
+        let free = parse_codex_line(r#"{"payload":{"rate_limits":{"primary":{"used_percent":0.0,"window_minutes":43200,"resets_at":1796059769},"secondary":null,"plan_type":"free"}}}"#);
+        assert_eq!((free[0].label.as_str(), free[0].weekly), ("30 ngày", true));
 
         let claude = r#"{"model":{},"rate_limits":{"five_hour":{"used_percentage":19,"resets_at":1793000000},"seven_day":{"used_percentage":3.5,"resets_at":1793500000}}}"#;
         let bars = parse_claude(claude);
