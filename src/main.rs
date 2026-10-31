@@ -1376,6 +1376,7 @@ fn run() -> windows::core::Result<()> {
             Some(instance),
             None,
         )?;
+        screen::leave_out_of_capture(hwnd);
 
         let settings = system::load_settings();
         i18n::set_english(settings.english);

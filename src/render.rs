@@ -3282,43 +3282,42 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "timing: prints ms per frame for the open Music page (aurora on) at 200 % scale"]
-    fn music_page_frame_time() {
+    #[ignore = "timing: prints ms per frame (average and worst) for the pill, the mini line and each page at 200 % scale"]
+    fn frame_time() {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let scale = 2.0;
             let (w, h) = ((crate::notch::MAX_W * scale) as i32, (crate::notch::MAX_H * scale) as i32);
-            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Music frame time"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Frame time"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true, art_key: 1,
                 art: Some(Arc::new(std::fs::read(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/screenshots/page-music.png")).unwrap())), ..Default::default() };
-            let mut renderer = Renderer::new().unwrap();
             let (wx, health) = (weather::State::default(), Health::default());
-            let view = |phase: f32| View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16", date: "T5, 29/10",
-                battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
-                phase, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 0.0, unit: weather::Unit::C,
-                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
-            // Let the glow fade in first, so every timed frame draws the aurora.
-            for i in 0..120 {
-                renderer.present(hwnd, 0, 0, w, h, scale, &view(i as f32 / 60.0)).unwrap();
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            assert!(renderer.aurora_rts.borrow().is_some(), "the aurora is drawn");
-            // A/B in turns: "fresh" drops the kept aurora targets before each frame, as before the cache.
-            let n = 300;
-            let mut ms = [0.0f64; 2];
-            for round in 0..6 {
-                let fresh = round % 2 == 0;
-                let t0 = Instant::now();
-                for i in 0..n {
-                    if fresh { *renderer.aurora_rts.get_mut() = None; }
-                    renderer.present(hwnd, 0, 0, w, h, scale, &view(2.0 + i as f32 / 60.0)).unwrap();
+            let mut renderer = Renderer::new().unwrap();
+            let cases = [("pill", Mode::Collapsed, Page::Music), ("mini", Mode::Mini, Page::Music)].into_iter()
+                .chain(PAGES.map(|p| ("page", Mode::Expanded, p)));
+            for (name, mode, page) in cases {
+                let view = |phase: f32| View { mode, size: target(mode, true), time: "23:16", date: "T5, 29/10",
+                    battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
+                    phase, banner_age: 0.0, lyrics: false, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C,
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
+                // Settle first: the cover loads and the Music page's glow fades in.
+                for i in 0..120 {
+                    renderer.present(hwnd, 0, 0, w, h, scale, &view(i as f32 / 60.0)).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(5));
                 }
-                ms[fresh as usize] += t0.elapsed().as_secs_f64() * 1000.0 / (3 * n) as f64;
+                let (n, mut sum, mut worst) = (600, 0.0f64, 0.0f64);
+                for i in 0..n {
+                    let t0 = Instant::now();
+                    renderer.present(hwnd, 0, 0, w, h, scale, &view(2.0 + i as f32 / 60.0)).unwrap();
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    sum += ms;
+                    worst = worst.max(ms);
+                }
+                println!("{name:4} {page:?}: {:.2} ms/frame, worst {worst:.2} ms", sum / n as f64);
             }
-            println!("music page: kept {:.3} ms/frame, fresh each frame {:.3} ms/frame", ms[0], ms[1]);
             DestroyWindow(hwnd).unwrap();
         }
     }

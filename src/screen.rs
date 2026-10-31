@@ -1,5 +1,7 @@
 //! What is under / around the notch: fullscreen apps and busy content beside the pill.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -136,28 +138,30 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         let y = r.top.max(top);
         let h = top + sh - y;
         let under = clip_span(center_x - half, center_x + half, r.left, r.right).filter(|_| h > 3);
-        Check::Busy(is_busy(under.and_then(|(from, to)| grab_edges(own, from, y, to - from, h))))
+        if !LEFT_OUT.load(Ordering::Relaxed) {
+            return Check::Busy(false);
+        }
+        Check::Busy(is_busy(under.map(|(from, to)| grab_edges(from, y, to - from, h))))
     }
 }
 
-/// Screen capture of the area under the pill. The notch window is dropped from the capture for the
-/// moment (display affinity), else it would hide exactly what is being looked for. None when it
-/// cannot be dropped (Windows 10 before 2004, some remote / driver setups): the capture would hold
-/// the pill's own clock and battery, read as busy, and keep the notch a thin line for good.
-unsafe fn grab_edges(own: HWND, x: i32, y: i32, w: i32, h: i32) -> Option<usize> {
-    if let Err(e) = SetWindowDisplayAffinity(own, WDA_EXCLUDEFROMCAPTURE) {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| crate::system::log(&format!("cannot leave the notch out of screen capture ({e}); not sampling under the pill")));
-        return None;
+/// The notch is left out of screen capture for good, so a capture of the screen sees what is under
+/// the pill. Set once: switching it per sample made the compositor redraw the screen twice and
+/// waited a frame on the UI thread. The price: the notch is not in screenshots or screen shares.
+static LEFT_OUT: AtomicBool = AtomicBool::new(false);
+
+/// Called once for the notch window. Fails on Windows 10 before 2004 and some remote / driver
+/// setups: a capture would then hold the pill's own clock and read as busy for good, so nothing
+/// under the pill is sampled there.
+pub fn leave_out_of_capture(own: HWND) {
+    match unsafe { SetWindowDisplayAffinity(own, WDA_EXCLUDEFROMCAPTURE) } {
+        Ok(()) => LEFT_OUT.store(true, Ordering::Relaxed),
+        Err(e) => crate::system::log(&format!("cannot leave the notch out of screen capture ({e}); not sampling under the pill")),
     }
-    // The compositor drops the window from what it hands to capture on its next frame.
-    let _ = windows::Win32::Graphics::Dwm::DwmFlush();
-    let edges = grab_edges_raw(x, y, w, h);
-    let _ = SetWindowDisplayAffinity(own, WDA_NONE);
-    Some(edges)
 }
 
-unsafe fn grab_edges_raw(x: i32, y: i32, w: i32, h: i32) -> usize {
+/// Edge pixels in a screen capture of the area under the pill.
+unsafe fn grab_edges(x: i32, y: i32, w: i32, h: i32) -> usize {
     let screen = GetDC(None);
     let mem = CreateCompatibleDC(Some(screen));
     let mut bmi = BITMAPINFO::default();
@@ -184,7 +188,7 @@ unsafe fn grab_edges_raw(x: i32, y: i32, w: i32, h: i32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{body_half, clip_span, edge_pixels, grab_edges, grab_edges_raw, is_busy};
+    use super::{body_half, clip_span, edge_pixels, grab_edges, is_busy, leave_out_of_capture};
 
     #[test]
     fn busy_when_content_sits_under_the_pill() {
@@ -229,20 +233,17 @@ mod tests {
     #[ignore = "timing: prints how long one sample of the screen under the pill blocks the UI thread"]
     fn sample_under_pill_time() {
         use windows::core::w;
-        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_EX_NOREDIRECTIONBITMAP, WS_POPUP};
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE};
         unsafe {
-            let own = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Sample timing"), WS_POPUP, 0, 0, 10, 10, None, None, None, None).unwrap();
-            let (n, (w, h)) = (20, (188, 74));
-            let mut t = [std::time::Duration::ZERO; 2];
+            // A visible topmost window over the sampled area, left out of capture like the notch.
+            let (n, (x, w, h)) = (20, (800, 188, 74));
+            let own = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST, w!("STATIC"), w!("Sample timing"), WS_POPUP | WS_VISIBLE, x, 0, w, h, None, None, None, None).unwrap();
+            leave_out_of_capture(own);
+            let t0 = std::time::Instant::now();
             for _ in 0..n {
-                let t0 = std::time::Instant::now();
-                grab_edges_raw(800, 0, w, h);
-                t[0] += t0.elapsed();
-                let t0 = std::time::Instant::now();
-                grab_edges(own, 800, 0, w, h);
-                t[1] += t0.elapsed();
+                grab_edges(x, 0, w, h);
             }
-            println!("screen sample: BitBlt alone {:.2} ms, with affinity + DwmFlush {:.2} ms", t[0].as_secs_f64() * 1000.0 / n as f64, t[1].as_secs_f64() * 1000.0 / n as f64);
+            println!("screen sample: {:.2} ms", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
             DestroyWindow(own).unwrap();
         }
     }
