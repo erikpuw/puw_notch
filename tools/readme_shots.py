@@ -1,6 +1,7 @@
 """Turn the BMPs that `cargo test readme_shots -- --ignored` writes to target/readme into the
 README's PNGs in assets/screenshots: premultiplied BGRA to straight RGBA, cropped around the
-notch (it is drawn at the top centre of a 900 px wide window).
+notch (it is drawn at the top centre of a 900 px wide window) and laid over assets/backdrop.jpg,
+the picture a desktop would have behind it.
 
     python tools/readme_shots.py
 """
@@ -13,6 +14,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "target", "readme")
 DST = os.path.join(ROOT, "assets", "screenshots")
 CENTRE = 450
+BACKDROP = os.path.join(ROOT, "assets", "backdrop.jpg")
 
 # name -> (width, height) of the crop; None height = the picture's own bottom edge plus a margin.
 SIZES = {
@@ -34,6 +36,14 @@ def load(path):
     return Image.frombuffer("RGBa", (w, h), data[54:54 + w * h * 4], "raw", "BGRa", 0, 1).convert("RGBA")
 
 
+def backdrop(width, height):
+    """The backdrop scaled to `width` and cut to `height` from its top."""
+    pic = Image.open(BACKDROP).convert("RGBA")
+    scale = max(width / pic.width, height / pic.height)
+    pic = pic.resize((round(pic.width * scale), round(pic.height * scale)), Image.LANCZOS)
+    return pic.crop((0, 0, width, height))
+
+
 def main(names):
     for name in names:
         path = os.path.join(SRC, name + ".bmp")
@@ -45,7 +55,10 @@ def main(names):
         if height is None:
             height = im.getchannel("A").getbbox()[3] + 18
         left = max(0, CENTRE - width // 2)
-        im.crop((left, 0, left + width, height)).save(os.path.join(DST, name + ".png"), optimize=True)
+        shot = im.crop((left, 0, left + width, height))
+        picture = backdrop(width, height)
+        picture.alpha_composite(shot)
+        picture.convert("RGB").save(os.path.join(DST, name + ".png"), optimize=True)
         print("wrote", name, (width, height))
 
 
