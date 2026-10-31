@@ -243,22 +243,23 @@ const ROW_Y: f32 = 84.0;
 /// A task row is also its tick, edit and delete buttons: 26 px high, above macOS' 20 px minimum.
 const ROW_H: f32 = 26.0;
 pub const LIST_ROWS: usize = 3;
-/// Weather page, from the content's left: the temperature and the sky in words beside the icon,
-/// the two unit chips (°C, °F) under the words (left, top, width of each, height), the column of
-/// right-hand block's left edge: feels like / humidity / wind, the outlook line under them and, when
-/// open, the 24-hour strip all start there (after the chips, leaving the sky's words room for
-/// "Giông sấm") and run to the content's right.
-const TEMP_X: f32 = 64.0;
-const UNIT_X: f32 = TEMP_X;
-const UNIT_Y: f32 = 134.0;
+/// Weather page, logical px from the content's left / the panel's top. City line: the 24h and x
+/// buttons at its right end. Left block: the icon with the temperature beside it and the sky's
+/// words under that, the unit chips under the icon. Right block (from `STATS_X` to the content's
+/// right): a 3 x 2 grid of figures, or the 24-hour strip in its place.
+const CITY_Y: f32 = 62.0;
+const ICON_Y: f32 = 90.0;
+const WX_ICON: f32 = 44.0;
+const TEMP_X: f32 = 52.0;
+const UNIT_X: f32 = 0.0;
+const UNIT_Y: f32 = 142.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 18.0;
-const DETAIL_X: f32 = UNIT_X + 2.0 * UNIT_W + 20.0;
-/// The 24h button before the x on the city line.
+const STATS_X: f32 = 134.0;
+/// The grid's two rows (label on top); the 24h strip starts at the first.
+const STATS_Y: [f32; 2] = [90.0, 128.0];
 const HOURS_BTN_W: f32 = 38.0;
-/// Width of the text at the right of the city line ("Open-Meteo · 14:30"), and so where the
-/// button that switches the weather off sits: just before it.
-const CREDIT_W: f32 = 126.0;
+
 /// Notifications page: rows of two lines.
 const NOTE_Y: f32 = 36.0;
 const NOTE_H: f32 = 38.0;
@@ -354,8 +355,8 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             // The x that switches the weather off, and the °C | °F choice beside the temperature,
             // once there is one (`rows` = 1).
             if rows > 0 {
-                out.push((Button::CityOff, r(cl + cw - CREDIT_W - 28.0, 66.0, 24.0, 24.0)));
-                out.push((Button::Hours, r(cl + cw - CREDIT_W - 32.0 - HOURS_BTN_W, 68.0, HOURS_BTN_W, 20.0)));
+                out.push((Button::CityOff, r(cl + cw - 24.0, CITY_Y, 24.0, 24.0)));
+                out.push((Button::Hours, r(cl + cw - 30.0 - HOURS_BTN_W, CITY_Y + 2.0, HOURS_BTN_W, 20.0)));
                 for (k, unit) in [weather::Unit::C, weather::Unit::F].into_iter().enumerate() {
                     out.push((Button::Unit(unit), r(cl + UNIT_X + k as f32 * UNIT_W, UNIT_Y, UNIT_W, UNIT_H)));
                 }
@@ -2409,13 +2410,15 @@ impl Renderer {
                                     // Conditions older than STALE_MIN are dimmed and say so in words.
                                     let stale = wx.is_stale(lv.now);
                                     let fade = if stale { 0.55 } else { 1.0 };
-                                    // City on the left; on the right where the data comes from (Open-Meteo asks
-                                    // for the credit, CC BY 4.0) and when it was fetched, "old" when stale; the
-                                    // x before it switches the weather off.
-                                    text(&place.name, F_TITLE, rect(cl, 68.0 * s, cr - (CREDIT_W + 36.0 + HOURS_BTN_W) * s, 88.0 * s), lead, grey(1.0, a))?;
+                                    // City line: the name, then where the data comes from (Open-Meteo asks for the
+                                    // credit, CC BY 4.0) and when it was fetched, "old" when stale; 24h and x at its end.
+                                    let (cy0, cy1) = ((CITY_Y + 2.0) * s, (CITY_Y + 22.0) * s);
+                                    let buttons_l = cr - (30.0 + HOURS_BTN_W + 8.0) * s;
+                                    let name_w = width(&place.name, F_TITLE).min(buttons_l - cl - 110.0 * s);
+                                    text(&place.name, F_TITLE, rect(cl, cy0, cl + name_w + 2.0 * s, cy1), lead, grey(1.0, a))?;
                                     let fetched = wx.updated.map_or(String::new(), |u| format!(" · {}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100));
                                     let credit = if stale { solid(ORANGE, a) } else { grey(0.5, a) };
-                                    text(&format!("Open-Meteo{fetched}"), F_LABEL, rect(cr - CREDIT_W * s, 68.0 * s, cr, 88.0 * s), trail, credit)?;
+                                    text(&format!("Open-Meteo{fetched}"), F_LABEL, rect(cl + name_w + 10.0 * s, cy0 + 1.0 * s, buttons_l, cy1 + 1.0 * s), lead, credit)?;
                                     if let Some(ob) = rect_of(Button::CityOff) {
                                         let hot = hovered == Some(Button::CityOff);
                                         hover_disc(Button::CityOff)?;
@@ -2428,17 +2431,19 @@ impl Renderer {
                                         rt.FillRoundedRectangle(&rounded(hb, 10.0 * s), &self.brush(grey(1.0, a * lit))?);
                                         text("24h", F_LABEL, hb, center, grey(if open { 1.0 } else { 0.75 }, a))?;
                                     }
-                                    // The icon, then the temperature and the sky in words, the unit chips under them.
-                                    draw_wx_icon(ic, geoms, cl + 4.0 * s, 90.0 * s, 52.0 * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
-                                    // The big temperature, shrunk to fit before the column beside when it is long
+                                    // Left block: the icon, the temperature beside it, the sky's words under it, the
+                                    // unit chips under the icon.
+                                    draw_wx_icon(ic, geoms, cl, ICON_Y * s, WX_ICON * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
+                                    // The big temperature, shrunk to fit before the right block when it is long
                                     // ("−128°"), turning about its left end.
                                     let temp = format!("{}°", v.unit.number(n.temp));
-                                    let (tx, ty) = (cl + TEMP_X * s, 104.0 * s);
-                                    let k = (DETAIL_X - TEMP_X - 8.0) * s / width(&temp, F_BIG);
+                                    let (tx, ty) = (cl + TEMP_X * s, (ICON_Y + 14.0) * s);
+                                    let k = (STATS_X - TEMP_X - 8.0) * s / width(&temp, F_BIG);
                                     let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                                     rt.SetTransform(&(translate(-tx, -ty) * scaling(k.min(1.0)) * translate(tx, ty) * base));
-                                    text(&temp, F_BIG, rect(tx, 88.0 * s, tx + width(&temp, F_BIG) + 6.0 * s, 120.0 * s), lead, grey(1.0, a * fade))?;
+                                    text(&temp, F_BIG, rect(tx, (ICON_Y - 2.0) * s, tx + width(&temp, F_BIG) + 6.0 * s, (ICON_Y + 30.0) * s), lead, grey(1.0, a * fade))?;
                                     rt.SetTransform(&base);
+                                    text(weather::describe(n.sky), F_BODY, rect(tx, (ICON_Y + 28.0) * s, cl + (STATS_X - 6.0) * s, (ICON_Y + 46.0) * s), lead, grey(0.7, a))?;
                                     // The unit to show it in: one capsule holding both, the chosen one lit, the
                                     // other lighting on hover.
                                     if let (Some(first), Some(last)) = (rect_of(Button::Unit(weather::Unit::C)), rect_of(Button::Unit(weather::Unit::F))) {
@@ -2452,47 +2457,40 @@ impl Renderer {
                                         }
                                         text(unit.symbol(), F_LABEL, chip, center, grey(if on { 1.0 } else { 0.55 }, a))?;
                                     }
-                                    text(weather::describe(n.sky), F_BODY, rect(cl + TEMP_X * s, 116.0 * s, cl + (DETAIL_X - 4.0) * s, 132.0 * s), lead, grey(0.7, a))?;
-                                    let (dl, dr) = (cl + DETAIL_X * s, cr);
+                                    // Right block: the figures, or the next 24 hours in their place.
+                                    let bl = cl + STATS_X * s;
                                     if open {
-                                        // The 24h button swaps the details for the next 24 hours, every third hour:
-                                        // time, icon, temperature, and the chance of rain when there is one.
-                                        let sw = (cr - dl) / hour_lines.len() as f32;
+                                        // Every third hour: time, icon, temperature, the chance of rain when there is one.
+                                        let sw = (cr - bl) / hour_lines.len() as f32;
                                         for (i, (h, ic, geoms)) in hour_lines.iter().enumerate() {
-                                            let x = dl + i as f32 * sw;
-                                            text(&format!("{}h", h.hour), F_LABEL, rect(x, 86.0 * s, x + sw, 102.0 * s), center, grey(0.55, a * fade))?;
-                                            draw_wx_icon(ic, geoms, x + sw / 2.0 - 10.0 * s, 103.0 * s, 20.0 * s, Some(weather::tints(h.sky, h.day)), a * fade, 9.0)?;
-                                            text(&format!("{}°", v.unit.number(h.temp)), F_LABEL, rect(x, 124.0 * s, x + sw, 140.0 * s), center, grey(1.0, a * fade))?;
+                                            let x = bl + i as f32 * sw;
+                                            text(&format!("{}h", h.hour), F_LABEL, rect(x, STATS_Y[0] * s, x + sw, (STATS_Y[0] + 14.0) * s), center, grey(0.55, a * fade))?;
+                                            draw_wx_icon(ic, geoms, x + sw / 2.0 - 10.0 * s, (STATS_Y[0] + 17.0) * s, 20.0 * s, Some(weather::tints(h.sky, h.day)), a * fade, 9.0)?;
+                                            text(&format!("{}°", v.unit.number(h.temp)), F_LABEL, rect(x, (STATS_Y[0] + 39.0) * s, x + sw, (STATS_Y[0] + 55.0) * s), center, grey(1.0, a * fade))?;
                                             if h.rain >= 20 {
-                                                text(&format!("{}%", h.rain), F_LABEL, rect(x, 138.0 * s, x + sw, 154.0 * s), center, solid(BLUE, a * fade))?;
+                                                text(&format!("{}%", h.rain), F_LABEL, rect(x, (STATS_Y[0] + 55.0) * s, x + sw, (STATS_Y[0] + 71.0) * s), center, solid(BLUE, a * fade))?;
                                             }
                                         }
                                     } else {
-                                        // Feels like, humidity, wind, then from the next 24 hours when rain comes and the
-                                        // high; wind that will turn strong rides on the wind row ("11 → 34 km/h 17h").
+                                        // 3 x 2: now (feels like, humidity, wind), then from the next 24 hours when rain
+                                        // comes, the day's high and wind that turns strong. Small grey label, figure under.
                                         let o = weather::outlook(&wx.hours);
-                                        let wind = match o.wind {
-                                            Some(h) if h.wind > n.wind => format!("{:.0} → {:.0} km/h {}h", n.wind, h.wind, h.hour),
-                                            _ => format!("{:.0} km/h", n.wind),
-                                        };
-                                        let mut rows = vec![
-                                            (tr("Cảm giác", "Feels like"), format!("{}{}", v.unit.number(n.feels), v.unit.symbol()), grey(0.95, a)),
-                                            (tr("Độ ẩm", "Humidity"), format!("{:.0}%", n.humidity), grey(0.95, a)),
-                                            (tr("Gió", "Wind"), wind, grey(0.95, a)),
+                                        let none = || tr("Không", "None").to_string();
+                                        let plain = grey(1.0, a * fade);
+                                        let cells = [
+                                            (tr("Cảm giác", "Feels like"), format!("{}{}", v.unit.number(n.feels), v.unit.symbol()), plain),
+                                            (tr("Độ ẩm", "Humidity"), format!("{:.0}%", n.humidity), plain),
+                                            (tr("Gió", "Wind"), format!("{:.0} km/h", n.wind), plain),
+                                            (tr("Mưa", "Rain"), o.rain.map_or_else(none, |h| format!("{}h · {}%", h.hour, h.rain)), if o.rain.is_some() { solid(BLUE, a * fade) } else { plain }),
+                                            (tr("Nắng nhất", "High"), o.high.map_or_else(none, |h| format!("{}° · {}h", v.unit.number(h.temp), h.hour)), plain),
+                                            (tr("Gió mạnh", "Strong wind"), o.wind.map_or_else(none, |h| format!("{:.0} km/h", h.wind)), plain),
                                         ];
-                                        if !wx.hours.is_empty() {
-                                            rows.push(match o.rain {
-                                                Some(h) => (tr("Mưa", "Rain"), format!("{}h · {}%", h.hour, h.rain), solid(BLUE, a * fade)),
-                                                None => (tr("Mưa", "Rain"), tr("Không có", "None").to_string(), grey(0.95, a * fade)),
-                                            });
-                                            if let Some(h) = o.high {
-                                                rows.push((tr("Nắng nhất", "High"), format!("{}° · {}h", v.unit.number(h.temp), h.hour), grey(0.95, a * fade)));
-                                            }
-                                        }
-                                        for (k, (label, value, ink)) in rows.iter().enumerate() {
-                                            let y = (84.0 + k as f32 * 16.0) * s;
-                                            text(label, F_LABEL, rect(dl, y, dr - 70.0 * s, y + 18.0 * s), lead, grey(0.55, a))?;
-                                            text(value, F_LABEL, rect(dl, y, dr, y + 18.0 * s), trail, *ink)?;
+                                        let col = (cr - bl) / 3.0;
+                                        let shown = if wx.hours.is_empty() { 3 } else { 6 };
+                                        for (k, (label, value, ink)) in cells.iter().enumerate().take(shown) {
+                                            let (x, y) = (bl + (k % 3) as f32 * col, STATS_Y[k / 3] * s);
+                                            text(label, F_LABEL, rect(x, y, x + col - 4.0 * s, y + 15.0 * s), lead, grey(0.55, a))?;
+                                            text(value, F_BODY, rect(x, y + 15.0 * s, x + col - 4.0 * s, y + 33.0 * s), lead, *ink)?;
                                         }
                                     }
                                 }
