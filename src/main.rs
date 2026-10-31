@@ -1246,7 +1246,7 @@ fn app_icon(small: bool) -> HICON {
 }
 
 fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
-    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None }
+    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None }
 }
 
 fn on_off(on: bool) -> &'static str {
@@ -1277,18 +1277,14 @@ fn connection_toast(e: Event) -> Toast {
         }
         Event::Net(Net::Limited { name, .. }) => status_toast(tr("Mạng", "Network"), tr("Không có internet", "No internet").to_string(), &name, None, render::ICON_NO_INTERNET),
         Event::Net(Net::Offline) => status_toast(tr("Mạng", "Network"), tr("Mất kết nối mạng", "Disconnected").to_string(), "", None, render::ICON_NO_INTERNET),
-        // With a battery the banner shows a level bar instead of a body line: the state goes above
-        // the name, the percent after it.
+        // The battery stands large at the banner's right end.
         Event::Device { name, kind, up, battery } => {
             let state = if up { tr("Đã kết nối", "Connected") } else { tr("Đã ngắt kết nối", "Disconnected") };
-            match battery {
-                Some(p) => status_toast(&format!("Bluetooth · {state}"), format!("{name} · {p}%"), "", Some(p as f32 / 100.0), render::device_icon(kind)),
-                None => status_toast("Bluetooth", name, state, None, render::device_icon(kind)),
-            }
+            Toast { badge: battery.map(|p| format!("{p}%")), ..status_toast("Bluetooth", name, state, None, render::device_icon(kind)) }
         }
         Event::DeviceBattery { name, kind, percent } => {
             let state = if percent <= connectivity::LOW_BATTERY { tr("Pin yếu, nên sạc", "Low battery, charge soon") } else { tr("Pin", "Battery") };
-            status_toast(&format!("Bluetooth · {state}"), format!("{name} · {percent}%"), "", Some(percent as f32 / 100.0), render::device_icon(kind))
+            Toast { badge: Some(format!("{percent}%")), ..status_toast("Bluetooth", name, state, None, render::device_icon(kind)) }
         }
     }
 }

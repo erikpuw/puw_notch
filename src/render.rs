@@ -451,6 +451,8 @@ const BANNER_IMAGE_GAP: f32 = 10.0;
 const BANNER_IMAGE_PX: (f32, f32) = (2.0 * BANNER_IMAGE_W, 2.0 * BANNER_IMAGE_H);
 /// A line of lyrics: wraps onto more lines instead of being cut short.
 const F_LYRIC: usize = 10;
+/// A banner's badge: the large plain number at its right end (a Bluetooth device's battery).
+const F_BADGE: usize = 11;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
 /// of the thin divider after the player's controls, its right margin and its width. The margin
 /// stays wider than the pages' clip (PAGE_CLIP), with room for a last letter's ink past the box.
@@ -1117,6 +1119,7 @@ impl Renderer {
                     }
                     f
                 },
+                make(ui, 30.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -1922,6 +1925,11 @@ impl Renderer {
                             // Still loading (or gone): a quiet placeholder of the same size.
                             None => rt.FillRoundedRectangle(&rounded(rect(bx, by, bx + bw, by + bh), 5.0 * s), &self.brush(grey(0.2, a))?),
                         }
+                    }
+                    // A badge (a Bluetooth device's battery) stands large at the right end; text stops before it.
+                    if let Some(b) = &t.badge {
+                        text(b, F_BADGE, rect(tr - 80.0 * s, 0.0, tr, nh + 4.0 * s), trail, grey(1.0, a))?;
+                        tr -= 86.0 * s;
                     }
                     // A notification banner (one a click opens) gets an x to close it early. Status
                     // banners have none: resting on them opens the panel within a moment.
@@ -3250,9 +3258,9 @@ mod tests {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (500i32, 110i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Banner preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
-            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()) };
-            let device = Toast { app: "Bluetooth · Đã kết nối".into(), title: "UGREEN HiTune Max5c · 80%".into(), body: String::new(), level: Some(0.8),
-                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None };
+            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()), badge: None };
+            let device = Toast { app: "Bluetooth".into(), title: "UGREEN HiTune Max5c".into(), body: "Đã kết nối".into(), level: None,
+                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None, badge: Some("80%".into()) };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
@@ -3579,7 +3587,7 @@ mod tests {
             note("Outlook", t("Lịch họp tuần", "Weekly planning"), t("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610290910),
             note("Spotify", t("Danh sách mới cho bạn", "New playlist for you"), t("Nhạc tập trung buổi sáng", "Morning focus"), 202610290805)];
         let toast = Toast { app: "Zalo".into(), title: t("Anh Minh", "Alex"), body: t("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop."),
-            level: None, icon: None, image: None, open: None };
+            level: None, icon: None, image: None, open: None, badge: None };
         let wx = State { place: Some(Place { name: t("Đà Nẵng", "Da Nang"), lat: 16.0, lon: 108.0 }),
             now: Some(Now { temp: 29.0, feels: 32.0, humidity: 78.0, wind: 9.0, sky: Sky::PartlyCloudy, day: true }), updated: Some(202610290930), ..State::default() };
         let health = Health::default();
