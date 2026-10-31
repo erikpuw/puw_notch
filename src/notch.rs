@@ -43,6 +43,11 @@ pub const BANNER_TEXT_TOP: f32 = 43.0;
 
 /// Banner size for `lines` lines of notification text (0 = status banner: volume, brightness...).
 /// Wider than the status banner and as tall as its text, capped at `BANNER_MAX_LINES`.
+/// Banner of a question with buttons: `lines` (1 to 3) lines of its text, then a row of buttons.
+pub fn alert_size_choice(lines: u8) -> [f32; 3] {
+    [520.0, BANNER_TEXT_TOP + lines.clamp(1, 3) as f32 * BANNER_LINE_H + 38.0, 24.0]
+}
+
 pub fn alert_size(lines: u8) -> [f32; 3] {
     if lines == 0 {
         return target(Mode::Alert, false);
@@ -157,6 +162,8 @@ pub struct Notch {
     pub live: bool,
     /// Lines of text in the current notification banner (0 = status banner), see `alert_size`.
     alert_lines: u8,
+    /// The banner is a question with buttons (wider, see `alert_size_choice`).
+    alert_choice: bool,
     /// The lyrics show beside the player: the open panel is LYRICS_EXTRA_W wider.
     wide: bool,
     obstructed: bool,
@@ -167,7 +174,7 @@ pub struct Notch {
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, wide: false, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_choice: false, wide: false, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
         for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
@@ -247,13 +254,21 @@ impl Notch {
         }
         self.mode = Mode::Alert;
         self.alert_lines = lines;
+        self.alert_choice = false;
         true
+    }
+
+    /// Banner of a question with buttons and `lines` lines of text. Returns true if shown.
+    pub fn on_alert_choice(&mut self, lines: u8) -> bool {
+        let shown = self.on_alert(lines);
+        self.alert_choice = shown;
+        shown
     }
 
     /// Size the springs head for right now.
     fn goal(&self) -> [f32; 3] {
         if self.mode == Mode::Alert {
-            return alert_size(self.alert_lines);
+            return if self.alert_choice { alert_size_choice(self.alert_lines) } else { alert_size(self.alert_lines) };
         }
         let mut t = target(self.mode, self.live);
         if self.wide && self.mode == Mode::Expanded {

@@ -1896,6 +1896,8 @@ impl Renderer {
                             rt.FillRoundedRectangle(&bar(tr), &self.brush(grey(0.25, a))?);
                             rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &self.brush(grey(1.0, a))?);
                         }
+                        // A question with buttons: wraps over up to 3 lines, the buttons below.
+                        None if !t.choices.is_empty() => text(&t.body, F_BODY_WRAP, rect(tl, notch::BANNER_TEXT_TOP * s, tr, (nh - 36.0 * s).max(notch::BANNER_TEXT_TOP * s + notch::BANNER_LINE_H * s)), lead, grey(0.75, a))?,
                         // Status banner (icon): one line under the title.
                         None if t.icon.is_some() => text(&t.body, F_BODY, rect(tl, 42.0 * s, tr, 58.0 * s), lead, grey(0.75, a))?,
                         // Notification: wraps over the banner's height (sized to its lines, at most
@@ -3257,9 +3259,9 @@ mod tests {
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
-            let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "rtk git status".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choices: vec!["Đồng ý".into(), "Không".into()] };
-            for (toast, lines) in [(&note, 1), (&device, 0), (&charging, 0), (&approve, 2)] {
-            let view = View { mode: Mode::Alert, size: notch::alert_size(lines), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
+            let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "Cho phép chạy list_projects của codebase-memory-mcp để liệt kê các project đã được index trong đồ thị mã nguồn (chỉ đọc, không thay đổi gì)?".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choices: vec!["Đồng ý".into(), "Không đồng ý".into(), "Trong app".into()] };
+            for (toast, lines) in [(&note, 1), (&device, 0), (&charging, 0), (&approve, 3)] {
+            let view = View { mode: Mode::Alert, size: if toast.choices.is_empty() { notch::alert_size(lines) } else { notch::alert_size_choice(lines) }, time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hours: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },

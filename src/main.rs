@@ -586,13 +586,14 @@ impl App {
             return false;
         }
         let lines = if !t.choices.is_empty() {
-            2
+            self.renderer.banner_lines(&t.body, self.scale, false).clamp(1, 3) as u8
         } else if t.icon.is_none() && !t.body.is_empty() {
             self.renderer.banner_lines(&t.body, self.scale, t.image.is_some()).min(notch::BANNER_MAX_LINES) as u8
         } else {
             0
         };
-        if self.hidden || !self.notch.on_alert(lines) {
+        let shown = if t.choices.is_empty() { self.notch.on_alert(lines) } else { self.notch.on_alert_choice(lines) };
+        if self.hidden || !shown {
             return false;
         }
         self.banner = Some(t);
