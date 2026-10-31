@@ -72,6 +72,37 @@ pub fn ear(h: f32) -> f32 {
     (h * EAR_RATIO).min(EAR_MAX)
 }
 
+/// Look of the notch: `Ears` (v1) hangs from the screen edge with concave flares; `Pill` (v2)
+/// is a capsule floating `PILL_GAP` below the edge.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Style {
+    #[default]
+    Ears,
+    Pill,
+}
+
+/// Gap between the screen's top edge and the floating pill, logical px.
+const PILL_GAP: f32 = 6.0;
+
+impl Style {
+    /// Logical px between the screen's top edge and the top of the drawn notch.
+    pub fn gap(self) -> f32 {
+        if self == Style::Pill { PILL_GAP } else { 0.0 }
+    }
+
+    pub fn tag(self) -> &'static str {
+        if self == Style::Pill { "pill" } else { "ears" }
+    }
+
+    pub fn from_tag(tag: &str) -> Option<Style> {
+        match tag {
+            "ears" => Some(Style::Ears),
+            "pill" => Some(Style::Pill),
+            _ => None,
+        }
+    }
+}
+
 /// Area that reacts to the mouse, logical px: (half width from the centre, height from the top).
 /// Only the pill body: the ears are drawn (so Windows reports the mouse over them) but entering
 /// and the dwell check both test this, so the rim neither opens the panel nor bounces the pill.
@@ -355,6 +386,17 @@ mod tests {
             }
         }
         panic!("spring did not settle");
+    }
+
+    #[test]
+    fn style_tags_round_trip_and_only_the_pill_floats() {
+        for style in [Style::Ears, Style::Pill] {
+            assert_eq!(Style::from_tag(style.tag()), Some(style));
+        }
+        assert_eq!(Style::from_tag("x"), None);
+        assert_eq!(Style::default(), Style::Ears, "the original look unless chosen");
+        assert_eq!(Style::Ears.gap(), 0.0);
+        assert!(Style::Pill.gap() > 0.0);
     }
 
     #[test]

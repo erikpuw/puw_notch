@@ -179,6 +179,8 @@ pub struct Settings {
     pub robot: bool,
     /// Volume keys handled by the app so only the notch shows (Windows' OSD stays away).
     pub volume_keys: bool,
+    /// Ears (v1) or floating pill (v2).
+    pub style: crate::notch::Style,
     /// The weather's city, looked up once (None: weather off).
     pub place: Option<Place>,
     /// °C or °F, once chosen (None: follow the region setting).
@@ -189,7 +191,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false, place: None, unit: None, notes_cleared: 0 }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, place: None, unit: None, notes_cleared: 0 }
     }
 }
 
@@ -202,7 +204,9 @@ fn parse_settings(text: &str) -> Settings {
             "robot=0" => s.robot = false,
             "volkeys=1" => s.volume_keys = true,
             other => {
-                if let Some(place) = other.strip_prefix("city=") {
+                if let Some(style) = other.strip_prefix("style=") {
+                    s.style = crate::notch::Style::from_tag(style).unwrap_or_default();
+                } else if let Some(place) = other.strip_prefix("city=") {
                     s.place = crate::weather::parse_place(place);
                 } else if let Some(unit) = other.strip_prefix("unit=") {
                     s.unit = crate::weather::Unit::from_tag(unit);
@@ -227,7 +231,7 @@ pub fn save_settings(s: Settings) {
         let city = s.place.as_ref().map_or(String::new(), |p| format!("city={}\n", crate::weather::place_line(p)));
         let unit = s.unit.map_or(String::new(), |u| format!("unit={}\n", u.tag()));
         let cleared = if s.notes_cleared > 0 { format!("notes_cleared={}\n", s.notes_cleared) } else { String::new() };
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\n{city}{unit}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\nstyle={}\n{city}{unit}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8, s.style.tag()));
     }
 }
 
@@ -302,7 +306,9 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, place: None, unit: None, notes_cleared: 0 });
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, place: None, unit: None, notes_cleared: 0 });
+        assert_eq!(parse_settings("style=pill\n").style, crate::notch::Style::Pill);
+        assert_eq!(parse_settings("style=x\n").style, crate::notch::Style::Ears, "unknown: the original look");
         assert_eq!(parse_settings("notes_cleared=42\n").notes_cleared, 42);
         assert_eq!(parse_settings("notes_cleared=x\n").notes_cleared, 0);
         assert_eq!(parse_settings("unit=f\n").unit, Some(crate::weather::Unit::F));

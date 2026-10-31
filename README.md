@@ -26,7 +26,7 @@
 - **Robot khi để yên**: 30 giây không đụng máy thì mặt LED thay đồng hồ, đổi biểu cảm; 5 phút thì ngủ; quay lại thì cười chào rồi trả về đồng hồ. Bật / tắt ở tray.
 - **Tải theo phần đang hiện**: pill nhận bài mới, cập nhật ảnh bìa và chạy sóng nhạc giả lập khi đang phát. Mini chỉ giữ cache, không đọc metadata nhạc chi tiết hay bắt đầu tải ảnh bìa; bung lại pill thì cập nhật bài và bìa hiện tại. Đóng page thì giữ cache, ngừng tải lời bài hát và icon của page; mở lại thì dùng cache và sync trang đang xem. Lời chỉ tải khi mở trang Nhạc, icon thông báo chỉ tải khi mở trang Thông báo. Ẩn toàn màn hình thì ngừng đọc metadata nhạc chi tiết và không bắt đầu tải ảnh bìa hay lời. Chờ icon không giữ vòng vẽ chạy. Giờ, pin, thời tiết, phát hiện nội dung bị che, thông báo và nhắc việc vẫn cập nhật; yêu cầu tải đã chạy có thể hoàn tất vào cache.
 - **Ẩn bảng âm lượng của Windows** (tray, mặc định tắt): app tự xử lý phím âm lượng nên chỉ notch hiện. Phím độ sáng và mic của laptop thường đi qua firmware nên chưa chặn được.
-- **Tray**: Notch tối giản, Robot, Ẩn bảng âm lượng, Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát.
+- **Tray**: Notch tối giản, Kiểu notch (Tai thỏ / Viên thuốc nổi cách mép trên), Robot, Ẩn bảng âm lượng, Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát.
 
 Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY 4.0), icon thời tiết và pin [Lucide](https://lucide.dev) (ISC), icon banner [Tabler Icons](https://tabler.io/icons) (MIT).
 ## Ảnh chụp

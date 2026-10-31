@@ -783,6 +783,8 @@ pub struct Renderer {
     /// Where the window was last put and its region, to touch them only when they change.
     placed: (i32, i32, i32, i32),
     region: (i32, i32, i32, i32),
+    /// Ears (v1) or floating pill (v2).
+    pub style: notch::Style,
     /// Copy each frame back to `grabbed` (preview tests only).
     #[cfg(test)]
     grab: bool,
@@ -925,7 +927,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0),
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), style: notch::Style::Ears,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
@@ -1242,6 +1244,9 @@ impl Renderer {
     /// iPhone-style notch: flat top on the screen edge, concave "ears" flaring into it,
     /// straight sides, round bottom corners.
     fn notch_shape(&self, l: f32, r: f32, h: f32, radius: f32, ear: f32) -> Result<ID2D1PathGeometry> {
+        if self.style == notch::Style::Pill {
+            return self.pill_shape(l, r, h, radius);
+        }
         let p = |x: f32, y: f32| Vector2 { X: x, Y: y };
         let rad = radius.min(h - ear).min((r - l) / 2.0).max(0.0);
         let arc = |to: Vector2, size: f32, dir: D2D1_SWEEP_DIRECTION| D2D1_ARC_SEGMENT {
@@ -1262,6 +1267,36 @@ impl Renderer {
             sink.AddArc(&arc(p(r, h - rad), rad, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE));
             sink.AddLine(p(r, ear));
             sink.AddArc(&arc(p(r + ear, 0.0), ear, D2D1_SWEEP_DIRECTION_CLOCKWISE));
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink.Close()?;
+            Ok(geo)
+        }
+    }
+
+    /// The floating pill: all four corners round, a capsule while it is short; `radius` (the
+    /// notch's own, a little under half the pill's height) caps the rounding once it opens.
+    fn pill_shape(&self, l: f32, r: f32, h: f32, radius: f32) -> Result<ID2D1PathGeometry> {
+        let p = |x: f32, y: f32| Vector2 { X: x, Y: y };
+        let rad = (h / 2.0).min(radius * 1.1).min((r - l) / 2.0).max(0.0);
+        let arc = |to: Vector2| D2D1_ARC_SEGMENT {
+            point: to,
+            size: D2D_SIZE_F { width: rad, height: rad },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        };
+        unsafe {
+            let geo = self.factory.CreatePathGeometry()?;
+            let sink = geo.Open()?;
+            sink.BeginFigure(p(l + rad, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(p(r - rad, 0.0));
+            sink.AddArc(&arc(p(r, rad)));
+            sink.AddLine(p(r, h - rad));
+            sink.AddArc(&arc(p(r - rad, h)));
+            sink.AddLine(p(l + rad, h));
+            sink.AddArc(&arc(p(l, h - rad)));
+            sink.AddLine(p(l, rad));
+            sink.AddArc(&arc(p(l + rad, 0.0)));
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);
             sink.Close()?;
             Ok(geo)
@@ -1624,7 +1659,10 @@ impl Renderer {
             rt.BeginDraw();
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
-            let ear = notch::ear(v.size[1]) * s;
+            // A floating pill is drawn lower in the window, on whole pixels so covers stay sharp.
+            let gy = (self.style.gap() * s).round();
+            rt.SetTransform(&Matrix3x2::translation(0.0, gy));
+            let ear = if self.style == notch::Style::Pill { 0.0 } else { notch::ear(v.size[1]) * s };
             let shape = self.notch_shape(l, r, nh, nr, ear)?;
             // How far the pill has grown into the panel (0: pill, 1: open).
             let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
@@ -1899,7 +1937,7 @@ impl Renderer {
                         }
                         Ok(())
                     };
-                    rt.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: dx, M32: 0.0 });
+                    rt.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: dx, M32: gy });
 
                     // Add / edit box shared by the list pages.
                     let draw_input = |placeholder: &str| -> Result<()> {
@@ -2471,7 +2509,7 @@ impl Renderer {
                             }
                         }
                     }
-                    rt.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: 0.0 });
+                    rt.SetTransform(&Matrix3x2::translation(0.0, gy));
                     Ok(())
                 };
 
@@ -2553,7 +2591,7 @@ impl Renderer {
             shown.ok()?;
             // The mouse belongs to the drawn shape: the pill or panel, its ears, and the shadow under it.
             let reach = if open > 0.0 { (SHADOW_STEPS as f32 * SHADOW_STEP + SHADOW_DY) * s } else { 0.0 };
-            let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((nh + reach).ceil() as i32).min(h));
+            let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((gy + nh + reach).ceil() as i32).min(h));
             self.place(hwnd, (x, y, w, h), region);
             // Poll the media clock between lines; the spring requests vsync until it settles,
             // including after pausing in the middle of a transition.

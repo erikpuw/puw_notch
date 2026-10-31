@@ -75,6 +75,8 @@ const MENU_LANG_EN: usize = 14;
 const MENU_ROBOT: usize = 15;
 const MENU_ABOUT: usize = 16;
 const MENU_VOLUME_KEYS: usize = 17;
+const MENU_STYLE_EARS: usize = 18;
+const MENU_STYLE_PILL: usize = 19;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
 struct SeekDrag {
@@ -136,6 +138,8 @@ struct App {
     /// Idle robot eyes, the tray switch for them and when they last moved.
     robot: robot::Robot,
     robot_on: bool,
+    /// Ears (v1) or floating pill (v2), see `notch::Style`.
+    style: notch::Style,
     robot_at: Instant,
     /// When the current track was paused (None while playing or with no player).
     paused_since: Option<Instant>,
@@ -312,7 +316,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
+        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -336,7 +340,7 @@ impl App {
         let mut p = POINT::default();
         let cursor = unsafe { GetCursorPos(&mut p) }.is_ok().then(|| {
             let cx = (self.win.0 + self.win.2 / 2) as f32;
-            let cy = self.win.1 as f32 + self.notch.size()[1] * self.scale / 2.0;
+            let cy = self.win.1 as f32 + self.top_px() + self.notch.size()[1] * self.scale / 2.0;
             ((p.x as f32 - cx) / self.scale, (p.y as f32 - cy) / self.scale)
         });
         let mood = match self.battery {
@@ -408,6 +412,12 @@ impl App {
         }
     }
 
+    /// Device px between the screen's top edge and the top of the drawn notch (a floating pill
+    /// sits lower in the window): mouse y is measured from the notch, not from the window.
+    fn top_px(&self) -> f32 {
+        (self.style.gap() * self.scale).round()
+    }
+
     /// Is the cursor over the area that reacts to the mouse right now (`notch::hover_area`)?
     fn cursor_inside(&self) -> bool {
         let mut p = POINT::default();
@@ -418,7 +428,7 @@ impl App {
         let (half, h) = (half * self.scale, h * self.scale);
         let cx = (self.win.0 + self.win.2 / 2) as f32;
         let (x, y) = (p.x as f32, (p.y - self.win.1) as f32);
-        (x - cx).abs() <= half && y >= 0.0 && y <= h
+        (x - cx).abs() <= half && y >= 0.0 && y <= h + self.top_px()
     }
 
     /// Keep the speaker callback on the default device and re-read the mic. A mic mute change
@@ -909,6 +919,11 @@ impl App {
             let text = |s: &str| windows::core::HSTRING::from(s);
             let english = i18n::english();
             let _ = AppendMenuW(menu, MF_STRING | check(self.notch.minimal), MENU_MINIMAL, &text(tr("Notch tối giản", "Minimal notch")));
+            if let Ok(styles) = CreatePopupMenu() {
+                let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Ears), MENU_STYLE_EARS, &text(tr("Tai thỏ", "Ears")));
+                let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Pill), MENU_STYLE_PILL, &text(tr("Viên thuốc", "Pill")));
+                let _ = AppendMenuW(menu, MF_POPUP, styles.0 as usize, &text(tr("Kiểu notch", "Notch style")));
+            }
             let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
             let _ = AppendMenuW(menu, MF_STRING | check(status::taking_volume_keys()), MENU_VOLUME_KEYS, &text(tr("Ẩn bảng âm lượng của Windows", "Hide Windows volume popup")));
             let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, &text(tr("Khởi động cùng Windows", "Start with Windows")));
@@ -929,6 +944,12 @@ impl App {
                 MENU_MINIMAL => {
                     let on = !self.notch.minimal;
                     self.notch.set_minimal(on);
+                    system::save_settings(self.settings());
+                    self.kick();
+                }
+                MENU_STYLE_EARS | MENU_STYLE_PILL => {
+                    self.style = if cmd == MENU_STYLE_PILL { notch::Style::Pill } else { notch::Style::Ears };
+                    self.renderer.style = self.style;
                     system::save_settings(self.settings());
                     self.kick();
                 }
@@ -1022,7 +1043,7 @@ impl App {
                 }
                 let hover = if self.notch.mode == Mode::Expanded {
                     let x = (lp.0 & 0xffff) as i16 as f32;
-                    let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+                    let y = ((lp.0 >> 16) & 0xffff) as i16 as f32 - self.top_px();
                     self.hit(x, y)
                 } else { None };
                 if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
@@ -1065,7 +1086,7 @@ impl App {
             }
             WM_LBUTTONDOWN => {
                 let x = (lp.0 & 0xffff) as i16 as f32;
-                let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+                let y = ((lp.0 >> 16) & 0xffff) as i16 as f32 - self.top_px();
                 if self.notch.mode == Mode::Expanded && self.hit(x, y) == Some(Button::Seek) {
                     self.seek_drag = self.track.as_ref().and_then(SeekDrag::new);
                     if self.seek_drag.is_some() {
@@ -1083,7 +1104,7 @@ impl App {
             }
             WM_LBUTTONUP => {
                 let x = (lp.0 & 0xffff) as i16 as f32;
-                let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+                let y = ((lp.0 >> 16) & 0xffff) as i16 as f32 - self.top_px();
                 if self.seek_drag.is_some() {
                     self.update_seek(x);
                     let drag = self.seek_drag.take().unwrap();
@@ -1424,7 +1445,7 @@ fn run() -> windows::core::Result<()> {
         let mut app = App {
             hwnd,
             notch: Notch::new(settings.minimal),
-            renderer: Renderer::new()?,
+            renderer: { let mut r = Renderer::new()?; r.style = settings.style; r },
             scale: 1.0,
             monitor: RECT::default(),
             win: (0, 0, 1, 1),
@@ -1451,6 +1472,7 @@ fn run() -> windows::core::Result<()> {
             seek_drag: None,
             robot: robot::Robot::default(),
             robot_on: settings.robot,
+            style: settings.style,
             robot_at: Instant::now(),
             paused_since: None,
             started: Instant::now(),
