@@ -35,6 +35,7 @@ use crate::notify::{Note, Toast};
 use crate::system::Battery;
 
 mod aurora;
+mod battery;
 mod usage_page;
 
 pub const WM_ICONS: u32 = WM_APP + 10;
@@ -1562,12 +1563,6 @@ impl Renderer {
             }).collect()
         } else { Vec::new() };
         // The pill's battery icon (Lucide) with its paths as geometry.
-        let battery_line = (|| {
-            let b = v.battery?;
-            let ic = icons::battery(b.percent, b.charging);
-            let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
-            Some((b, ic, geoms))
-        })();
         // A sun for the Weather page while there is no city or conditions yet (muted, like Tasks' ring).
         let weather_empty = (|| {
             let ic = icons::weather(weather::Sky::Clear, true);
@@ -1749,13 +1744,12 @@ impl Renderer {
                 let pill_a = small_a;
                 let small_a = small_a * (1.0 - robot_a);
                 text(v.time, F_SMALL, rect(l, 0.0, r, nh), center, grey(1.0, small_a))?;
-                if let Some((b, ic, geoms)) = &battery_line {
-                    // A battery icon on the 24 px grid, 20 px square: left of the time; with music the
-                    // cover takes that spot, so it sits before the bars.
-                    let d = 20.0 * s;
+                if let Some(b) = &v.battery {
+                    // A battery ring left of the time; with music the cover takes that spot, so it
+                    // sits before the bars.
+                    let d = 18.0 * s;
                     let bx = if pill_music.is_some() { r - 61.0 * s } else { l + 13.0 * s };
-                    let by = (nh - d) / 2.0;
-                    draw_wx_icon(ic, geoms, bx, by, d, Some(battery_tint(b)), small_a, 9.0)?;
+                    self.draw_battery_ring((bx + 10.0 * s, nh / 2.0), d, b, small_a)?;
                 }
                 // Weather: icon and temperature in the room the clock leaves, to its right on the plain
                 // pill (balancing the battery), after the cover on the music pill. Left out
@@ -1945,13 +1939,13 @@ impl Renderer {
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
-                // The same battery icon as the pill's, then its percentage.
-                if let Some((b, ic, geoms)) = &battery_line {
+                // The same battery ring as the pill's, then its percentage.
+                if let Some(b) = &v.battery {
                     let pct = format!("{}%", b.percent);
                     let tx = hr - width(&pct, F_LABEL);
                     text(&pct, F_LABEL, rect(tx, ht, hr, hb), trail, grey(0.85, a))?;
                     let d = 18.0 * s;
-                    draw_wx_icon(ic, geoms, tx - 3.0 * s - d, (ht + hb - d) / 2.0, d, Some(battery_tint(b)), a, 9.0)?;
+                    self.draw_battery_ring((tx - 3.0 * s - d / 2.0, (ht + hb) / 2.0), d, b, a)?;
                 }
                 // Date · time in the middle of the header.
                 text(&format!("{} · {}", v.date, v.time), F_LABEL, rect(cx - 80.0 * s, ht, cx + 80.0 * s, hb), center, grey(0.85, a))?;
