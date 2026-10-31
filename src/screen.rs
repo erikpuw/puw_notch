@@ -184,7 +184,7 @@ unsafe fn grab_edges_raw(x: i32, y: i32, w: i32, h: i32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{body_half, clip_span, edge_pixels, is_busy};
+    use super::{body_half, clip_span, edge_pixels, grab_edges, grab_edges_raw, is_busy};
 
     #[test]
     fn busy_when_content_sits_under_the_pill() {
@@ -223,5 +223,27 @@ mod tests {
         assert_eq!(edge_pixels(&flat, w), 0);
         let stripes: Vec<u8> = (0..w * 2).flat_map(|i| if i % 2 == 0 { [0, 0, 0, 255] } else { [200, 200, 200, 255] }).collect();
         assert_eq!(edge_pixels(&stripes, w), 2 * (w - 1));
+    }
+
+    #[test]
+    #[ignore = "timing: prints how long one sample of the screen under the pill blocks the UI thread"]
+    fn sample_under_pill_time() {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_EX_NOREDIRECTIONBITMAP, WS_POPUP};
+        unsafe {
+            let own = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Sample timing"), WS_POPUP, 0, 0, 10, 10, None, None, None, None).unwrap();
+            let (n, (w, h)) = (20, (188, 74));
+            let mut t = [std::time::Duration::ZERO; 2];
+            for _ in 0..n {
+                let t0 = std::time::Instant::now();
+                grab_edges_raw(800, 0, w, h);
+                t[0] += t0.elapsed();
+                let t0 = std::time::Instant::now();
+                grab_edges(own, 800, 0, w, h);
+                t[1] += t0.elapsed();
+            }
+            println!("screen sample: BitBlt alone {:.2} ms, with affinity + DwmFlush {:.2} ms", t[0].as_secs_f64() * 1000.0 / n as f64, t[1].as_secs_f64() * 1000.0 / n as f64);
+            DestroyWindow(own).unwrap();
+        }
     }
 }

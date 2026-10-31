@@ -818,6 +818,9 @@ pub struct Renderer {
     cover: Option<CoverCache>,
     /// The cover's blurred shadow, made once per scale: (scale, bitmap).
     cover_shadow: Option<(f32, ID2D1Bitmap)>,
+    /// The aurora's two blur targets (small, mid) for one small-target size, kept across frames:
+    /// a new GPU texture pair every frame stalls integrated GPUs.
+    aurora_rts: RefCell<Option<((u32, u32), ID2D1BitmapRenderTarget, ID2D1BitmapRenderTarget)>>,
     /// The Music page's glow: (colour, strength 0..1, time of the last frame), see glow_step.
     glow: ((f32, f32, f32), f32, Instant),
     /// How far the pill's equaliser is "up" (0 flat .. 1 dancing): eases both ways on play / pause.
@@ -949,7 +952,7 @@ impl Renderer {
             }, None)?;
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0),
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
-                fonts: None, cover: None, cover_shadow: None, glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
+                fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
     }
 
@@ -960,6 +963,7 @@ impl Renderer {
         self.surface = None;
         self.cover = None;
         self.cover_shadow = None;
+        *self.aurora_rts.get_mut() = None;
         self.app_icons.clear();
         Ok(())
     }
@@ -1732,7 +1736,17 @@ impl Renderer {
                 let made = (|| -> Result<(ID2D1Bitmap, D2D_SIZE_F, ID2D1LinearGradientBrush, ID2D1PathGeometry)> {
                 // Drawn at 1/AURORA_SHRINK size, then stretched with linear filtering: the stretch
                 // is the blur, for a few small fills instead of a blur effect.
-                let small = rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: (w as f32 / AURORA_SHRINK).ceil(), height: (nh / AURORA_SHRINK).ceil() + 1.0 }), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
+                let small_size = D2D_SIZE_F { width: (w as f32 / AURORA_SHRINK).ceil(), height: (nh / AURORA_SHRINK).ceil() + 1.0 };
+                let half = AURORA_SHRINK / 2.0;
+                let key = (small_size.width as u32, small_size.height as u32);
+                if self.aurora_rts.borrow().as_ref().is_none_or(|(k, _, _)| *k != key) {
+                    let small = rt.CreateCompatibleRenderTarget(Some(&small_size), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
+                    let sz = small.GetBitmap()?.GetSize();
+                    let mid = rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: sz.width * half, height: sz.height * half }), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
+                    *self.aurora_rts.borrow_mut() = Some((key, small, mid));
+                }
+                let rts = self.aurora_rts.borrow();
+                let (_, small, mid) = rts.as_ref().unwrap();
                 small.BeginDraw();
                 small.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
                 small.SetTransform(&Matrix3x2 { M11: 1.0 / AURORA_SHRINK, M12: 0.0, M21: 0.0, M22: 1.0 / AURORA_SHRINK, M31: 0.0, M32: 0.0 });
@@ -1745,8 +1759,6 @@ impl Renderer {
                 small.EndDraw(None, None)?;
                 // Stretched in two linear steps (8x would show its blocks): to half size, then full.
                 let sz = small.GetBitmap()?.GetSize();
-                let half = AURORA_SHRINK / 2.0;
-                let mid = rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: sz.width * half, height: sz.height * half }), None, None, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE)?;
                 mid.BeginDraw();
                 mid.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
                 mid.DrawBitmap(&small.GetBitmap()?, Some(&rect(0.0, 0.0, sz.width * half, sz.height * half)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
@@ -3265,6 +3277,48 @@ mod tests {
             bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
             bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
             std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/aurora-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "timing: prints ms per frame for the open Music page (aurora on) at 200 % scale"]
+    fn music_page_frame_time() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let scale = 2.0;
+            let (w, h) = ((crate::notch::MAX_W * scale) as i32, (crate::notch::MAX_H * scale) as i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Music frame time"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
+                can_toggle: true, can_next: true, can_previous: true, can_seek: true, art_key: 1,
+                art: Some(Arc::new(std::fs::read(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/screenshots/page-music.png")).unwrap())), ..Default::default() };
+            let mut renderer = Renderer::new().unwrap();
+            let (wx, health) = (weather::State::default(), Health::default());
+            let view = |phase: f32| View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16", date: "T5, 29/10",
+                battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
+                phase, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 0.0, unit: weather::Unit::C,
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
+            // Let the glow fade in first, so every timed frame draws the aurora.
+            for i in 0..120 {
+                renderer.present(hwnd, 0, 0, w, h, scale, &view(i as f32 / 60.0)).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(renderer.aurora_rts.borrow().is_some(), "the aurora is drawn");
+            // A/B in turns: "fresh" drops the kept aurora targets before each frame, as before the cache.
+            let n = 300;
+            let mut ms = [0.0f64; 2];
+            for round in 0..6 {
+                let fresh = round % 2 == 0;
+                let t0 = Instant::now();
+                for i in 0..n {
+                    if fresh { *renderer.aurora_rts.get_mut() = None; }
+                    renderer.present(hwnd, 0, 0, w, h, scale, &view(2.0 + i as f32 / 60.0)).unwrap();
+                }
+                ms[fresh as usize] += t0.elapsed().as_secs_f64() * 1000.0 / (3 * n) as f64;
+            }
+            println!("music page: kept {:.3} ms/frame, fresh each frame {:.3} ms/frame", ms[0], ms[1]);
             DestroyWindow(hwnd).unwrap();
         }
     }
