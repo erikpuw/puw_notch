@@ -1,6 +1,6 @@
 ﻿[package]
 name = "puw_notch"
-version = "1.0.24"
+version = "1.0.25"
 edition = "2021"
 description = "PUW Notch: a living notch for Windows"
 
@@ -60,6 +60,8 @@ features = [
     "Win32_Graphics_Imaging_D2D",
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Devices_Properties",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Wdk_System_Threading",
 ]
 
 [profile.release]
