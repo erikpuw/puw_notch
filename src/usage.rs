@@ -336,15 +336,33 @@ fn antigravity_port() -> Option<u16> {
     line.split("port at ").nth(1)?.split_whitespace().next()?.parse().ok()
 }
 
-fn read_antigravity() -> Option<Vec<Bar>> {
-    let process = find_process("language_server.exe", "antigravity")?;
-    let command = command_line(&process)?;
-    let token = command.split_whitespace().skip_while(|a| *a != "--csrf_token").nth(1)?;
-    some(parse_antigravity(&post_local(antigravity_port()?, "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary", token)?))
+/// Where Antigravity's language server listens on this PC and the token it asks for (read from
+/// its own command line, so it exists only while the app runs).
+pub struct LocalServer {
+    port: u16,
+    token: String,
 }
 
-/// POST `{}` to a server on this PC, answer body on 200.
-fn post_local(port: u16, path: &str, token: &str) -> Option<String> {
+impl LocalServer {
+    /// Call `method` of its service with a JSON `body`: the answer's body on success.
+    pub fn call(&self, method: &str, body: &str) -> Option<String> {
+        post_local(self.port, &format!("/exa.language_server_pb.LanguageServerService/{method}"), &self.token, body)
+    }
+}
+
+pub fn antigravity_server() -> Option<LocalServer> {
+    let process = find_process("language_server.exe", "antigravity")?;
+    let command = command_line(&process)?;
+    let token = command.split_whitespace().skip_while(|a| *a != "--csrf_token").nth(1)?.to_string();
+    Some(LocalServer { port: antigravity_port()?, token })
+}
+
+fn read_antigravity() -> Option<Vec<Bar>> {
+    some(parse_antigravity(&antigravity_server()?.call("RetrieveUserQuotaSummary", "{}")?))
+}
+
+/// POST a JSON `body` to a server on this PC, answer body on 200.
+fn post_local(port: u16, path: &str, token: &str, body: &str) -> Option<String> {
     /// A WinINet handle, closed when it goes out of scope.
     struct Handle(*mut c_void);
     impl Drop for Handle {
@@ -374,7 +392,6 @@ fn post_local(port: u16, path: &str, token: &str) -> Option<String> {
         }
         let request = Handle(request);
         let headers: Vec<u16> = format!("Content-Type: application/json\r\nConnect-Protocol-Version: 1\r\nX-Codeium-Csrf-Token: {token}\r\n").encode_utf16().collect();
-        let body = b"{}";
         HttpSendRequestW(request.0, Some(&headers), Some(body.as_ptr() as *const c_void), body.len() as u32).ok()?;
         let (mut status, mut size) = (0u32, 4u32);
         HttpQueryInfoW(request.0, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, Some(&mut status as *mut u32 as *mut c_void), &mut size, None).ok()?;

@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod antigravity;
 mod approve;
 mod audio;
 mod connectivity;
@@ -1574,7 +1575,7 @@ fn run() -> windows::core::Result<()> {
             mic_muted: None,
             music: music::Music::start(hwnd),
             usage: usage::Monitor::start(hwnd),
-            approve: approve::Server::start(hwnd),
+            approve: { let server = approve::Server::start(hwnd); antigravity::watch(server.queue(), hwnd); server },
             approval: None,
             usage_watch: usage::Watch::default(),
             usage_alerts: Vec::new(),

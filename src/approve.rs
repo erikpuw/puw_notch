@@ -5,7 +5,7 @@
 //! without a click, and an unanswered request falls back to `ask` after TIMEOUT.
 
 use std::collections::VecDeque;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use windows::core::w;
@@ -90,21 +90,31 @@ impl Server {
         Server { queue }
     }
 
+    /// The queue, for other sources of requests (see antigravity.rs).
+    pub fn queue(&self) -> Arc<Mutex<VecDeque<Pending>>> {
+        self.queue.clone()
+    }
+
     pub fn next(&self) -> Option<Pending> {
         self.queue.lock().ok()?.pop_front()
     }
+}
+
+/// Put a request in the queue and tell the window; its answer arrives on the receiver.
+pub fn enqueue(queue: &Mutex<VecDeque<Pending>>, target: isize, app: String, title: String, detail: String, options: Vec<String>) -> Receiver<Answer> {
+    let (reply, rx) = channel();
+    if let Ok(mut q) = queue.lock() {
+        q.push_back(Pending { app, title, detail, options, reply });
+    }
+    unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_APPROVE, WPARAM(0), LPARAM(0)); }
+    rx
 }
 
 /// One client: read its request, wait for the answer, reply, hang up.
 fn serve(pipe: HANDLE, queue: &Mutex<VecDeque<Pending>>, target: isize) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     let answer = read_request(pipe).map_or(Answer::Ask, |(app, title, detail, options)| {
-        let (reply, rx) = channel();
-        if let Ok(mut q) = queue.lock() {
-            q.push_back(Pending { app, title, detail, options, reply });
-        }
-        unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_APPROVE, WPARAM(0), LPARAM(0)); }
-        rx.recv_timeout(TIMEOUT + Duration::from_secs(2)).unwrap_or(Answer::Ask)
+        enqueue(queue, target, app, title, detail, options).recv_timeout(TIMEOUT + Duration::from_secs(2)).unwrap_or(Answer::Ask)
     });
     unsafe {
         let mut written = 0u32;
