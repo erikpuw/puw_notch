@@ -17,6 +17,7 @@ mod screen;
 mod status;
 mod system;
 mod todo;
+mod usage;
 mod usb;
 mod weather;
 
@@ -133,6 +134,13 @@ struct App {
     audio: Option<audio::Audio>,
     mic_muted: Option<bool>,
     music: music::Music,
+    /// The Limits page's readings, what was already announced, alerts waiting for a free moment,
+    /// and the app tab (followed by itself until the user picks one).
+    usage: usage::Monitor,
+    usage_watch: usage::Watch,
+    usage_alerts: Vec<usage::Alert>,
+    usage_tab: usize,
+    usage_tab_chosen: bool,
     track: Option<music::Track>,
     seek_drag: Option<SeekDrag>,
     /// Idle robot eyes, the tray switch for them and when they last moved.
@@ -540,6 +548,7 @@ impl App {
         }
 
         self.remind();
+        self.usage_banner();
 
         // New ones get a banner; the Notifications page lists what Windows still keeps.
         let new = self.notifications.as_mut().map(|r| r.poll()).unwrap_or_default();
@@ -581,6 +590,17 @@ impl App {
         unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
         self.kick();
         true
+    }
+
+    /// The oldest waiting limit alert, as a banner when one can show now (else it waits for the next tick).
+    fn usage_banner(&mut self) {
+        let Some(alert) = self.usage_alerts.first() else { return };
+        let now = usage::now_secs();
+        let (title, body) = alert.text(now);
+        let toast = status_toast(tr("Giới hạn", "Limits"), title, &body, Some(alert.bar.used / 100.0), render::ICON_WARN);
+        if self.show_banner(toast, ALERT_MS) {
+            self.usage_alerts.remove(0);
+        }
     }
 
     /// Task reminders (early and on time) whose moment has come, then water / stand-up. One that
@@ -677,6 +697,11 @@ impl App {
             Button::Seek => return, // Committed only by the captured press/drag/release gesture.
             Button::Lyrics => {
                 self.lyrics_open = !self.lyrics_open;
+                self.kick();
+            }
+            Button::UsageTab(i) => {
+                (self.usage_tab, self.usage_tab_chosen) = (i, true);
+                self.renderer.usage_tab = i;
                 self.kick();
             }
             Button::Hours => {
@@ -1193,6 +1218,20 @@ impl App {
                     self.show_banner(connection_toast(e), ALERT_MS);
                 }
             }
+            // From the limits worker: a reading changed.
+            usage::WM_USAGE => {
+                let snap = self.usage.snapshot();
+                if !self.usage_tab_chosen {
+                    self.usage_tab = usage::APPS.iter().position(|a| snap.get(*a).is_some()).unwrap_or(0);
+                    self.renderer.usage_tab = self.usage_tab;
+                }
+                let day = (usage::now_secs() + system::utc_offset_min() * 60).div_euclid(86_400);
+                self.usage_alerts.extend(self.usage_watch.check(&snap, day));
+                self.renderer.usage = snap;
+                self.usage_banner();
+                self.kick();
+                return Some(LRESULT(0));
+            }
             // From the weather thread: a city was found (or not) or new conditions came.
             WM_WEATHER => {
                 let before = self.wx.place.clone();
@@ -1468,6 +1507,11 @@ fn run() -> windows::core::Result<()> {
             audio: audio::Audio::new(),
             mic_muted: None,
             music: music::Music::start(hwnd),
+            usage: usage::Monitor::start(hwnd),
+            usage_watch: usage::Watch::default(),
+            usage_alerts: Vec::new(),
+            usage_tab: 0,
+            usage_tab_chosen: false,
             track: None,
             seek_drag: None,
             robot: robot::Robot::default(),

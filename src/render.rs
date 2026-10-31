@@ -35,6 +35,7 @@ use crate::notify::{Note, Toast};
 use crate::system::Battery;
 
 mod aurora;
+mod usage_page;
 
 pub const WM_ICONS: u32 = WM_APP + 10;
 
@@ -101,9 +102,11 @@ pub enum Page {
     Health,
     /// The city (typed here) and its current weather.
     Weather,
+    /// Plan limits of the AI apps open on this PC.
+    Usage,
 }
 
-pub const PAGES: [Page; 5] = [Page::Music, Page::Todo, Page::Notify, Page::Health, Page::Weather];
+pub const PAGES: [Page; 6] = [Page::Music, Page::Todo, Page::Notify, Page::Health, Page::Weather, Page::Usage];
 
 impl Page {
     /// Header of the page: icon, name, accent colour.
@@ -114,6 +117,7 @@ impl Page {
             Page::Notify => (ICON_BELL, tr("Thông báo", "Notifications"), BLUE),
             Page::Health => ("\u{E95E}", tr("Sức khỏe", "Health"), (1.0, 0.42, 0.5)),
             Page::Weather => ("", tr("Thời tiết", "Weather"), (1.0, 0.78, 0.25)),
+            Page::Usage => ("\u{E9D9}", tr("Giới hạn", "Limits"), (0.45, 0.85, 0.95)),
         }
     }
 }
@@ -178,6 +182,8 @@ pub enum Button {
     NoteOpen(usize),
     /// Show the temperature in this unit (Weather page).
     Unit(weather::Unit),
+    /// Show this app (index into `usage::APPS`) on the Limits page.
+    UsageTab(usize),
     /// Switch the weather off (the x beside the city).
     CityOff,
     /// The x at the end of the add / city box, wiping what is typed.
@@ -278,6 +284,9 @@ const CARD_TOP: f32 = 34.0;
 const CARD_BOTTOM: f32 = 158.0;
 const CARD_W: f32 = 172.0;
 const CARD_GAP: f32 = 8.0;
+/// The Limits page's app tabs.
+const USAGE_TAB_GAP: f32 = 6.0;
+const USAGE_TAB_H: f32 = 22.0;
 const SET_ROW: f32 = 18.0;
 const SET_Y: f32 = 62.0;
 
@@ -370,6 +379,12 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             }
             if rows > 0 {
                 out.push((Button::NotesClear, r(cl + cw - CLEAR_W, CLEAR_Y, CLEAR_W, CLEAR_H)));
+            }
+        }
+        Page::Usage => {
+            let tab_w = (w - 2.0 * SIDE - 2.0 * USAGE_TAB_GAP) / 3.0;
+            for i in 0..3 {
+                out.push((Button::UsageTab(i), r(SIDE + i as f32 * (tab_w + USAGE_TAB_GAP), CARD_TOP, tab_w, USAGE_TAB_H)));
             }
         }
         Page::Health => {
@@ -517,6 +532,7 @@ const ICON_PLAY: &str = "\u{E768}";
 const ICON_PAUSE: &str = "\u{E769}";
 const ICON_NEXT: &str = "\u{E893}";
 const ICON_NOTE: &str = "\u{E8D6}";
+pub const ICON_WARN: &str = "\u{E7BA}";
 pub const ICON_BELL: &str = "\u{EA8F}";
 const ICON_LEFT: &str = "\u{E76B}";
 const ICON_RIGHT: &str = "\u{E76C}";
@@ -783,6 +799,9 @@ pub struct Renderer {
     /// Where the window was last put and its region, to touch them only when they change.
     placed: (i32, i32, i32, i32),
     region: (i32, i32, i32, i32),
+    /// What the Limits page shows and the app it is on (set by the window when either changes).
+    pub usage: crate::usage::Snapshot,
+    pub usage_tab: usize,
     /// Ears (v1) or floating pill (v2).
     pub style: notch::Style,
     /// Copy each frame back to `grabbed` (preview tests only).
@@ -927,7 +946,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), style: notch::Style::Ears,
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, style: notch::Style::Ears,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
@@ -2284,6 +2303,7 @@ impl Renderer {
                                 text(label, F_LABEL, pb, center, grey(if hot { 1.0 } else { 0.85 }, a))?;
                             }
                         }
+                        Page::Usage => self.draw_usage(&text, &btns, (cl, cr), s, a, hovered)?,
                         Page::Weather => {
                             draw_input(tr("Nhập thành phố (vd: Hà Nội, Đà Nẵng)", "Type a city (e.g. Hanoi, Da Nang)"))?;
                             let wx = v.weather;
