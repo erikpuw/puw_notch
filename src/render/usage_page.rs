@@ -14,6 +14,8 @@ const PAD: f32 = 12.0;
 /// Widest a card gets, so one or two limits do not stretch over the whole page.
 const CARD_MAX_W: f32 = 172.0;
 const RED: (f32, f32, f32) = (1.0, 0.35, 0.35);
+/// A reading older than this (seconds) is shown with its age.
+const STALE_SECS: i64 = 10 * 60;
 
 /// Green while there is room, orange getting close, red nearly out.
 fn ring_colour(used: f32) -> (f32, f32, f32) {
@@ -114,11 +116,18 @@ impl Renderer {
                     let tx = ring_x + d / 2.0 + 10.0 * s;
                     let (_, window) = split_label(&bar.label);
                     let line = 17.0 * s;
-                    let (y0, y1) = if bar.resets_at > 0 { (mid - line, mid) } else { (mid - line / 2.0, mid + line / 2.0) };
+                    // A reading the app made a while ago says so: what it shows now may be further on.
+                    let stale = self.usage.updated(APPS[tab]).filter(|&at| now - at > STALE_SECS);
+                    let up = if stale.is_some() { 8.0 * s } else { 0.0 };
+                    let (y0, y1) = if bar.resets_at > 0 { (mid - line - up, mid - up) } else { (mid - line / 2.0 - up, mid + line / 2.0 - up) };
                     text(window, F_TITLE, rect(tx, y0, r.right - PAD * s, y1), lead, grey(1.0, a))?;
                     if bar.resets_at > 0 {
                         let left = format!("{} {}", crate::i18n::tr("Còn", "In"), usage::in_words(bar.resets_at, now));
-                        text(&left, F_LABEL, rect(tx, mid + 1.0 * s, r.right - PAD * s, mid + line), lead, grey(0.6, a))?;
+                        text(&left, F_LABEL, rect(tx, mid + 1.0 * s - up, r.right - PAD * s, mid + line - up), lead, grey(0.6, a))?;
+                    }
+                    if let Some(at) = stale {
+                        let ago = format!("{} {}", crate::i18n::tr("Số cũ", "Old"), usage::in_words(now, at));
+                        text(&ago, F_LABEL, rect(tx, mid + line - up + 1.0 * s, r.right - PAD * s, mid + 2.0 * line - up), lead, grey(0.42, a))?;
                     }
                     x += width + GAP * s;
                 }
@@ -190,7 +199,8 @@ mod tests {
             let bar = |label: &str, weekly, used, hours: i64| Bar { label: label.into(), weekly, used, resets_at: now + hours * 3600 };
             let mut snap = Snapshot::default();
             snap.apps[0] = Some(vec![bar("5 giờ", false, 6.0, 3), bar("Tuần", true, 4.0, 150)]);
-            snap.apps[1] = Some(vec![bar("Tuần", true, 99.0, 120)]);
+            snap.apps[1] = Some(vec![bar("30 ngày", true, 0.0, 720)]);
+            snap.updated[1] = Some(now - 3 * 3600);
             snap.apps[2] = Some(vec![bar("Gemini · Tuần", true, 0.4, 150), bar("Gemini · 5 giờ", false, 0.0, 4), bar("Claude · GPT · Tuần", true, 64.0, 160),
                 bar("Claude · GPT · 5 giờ", false, 30.0, 4), bar("Argon · Tuần", true, 89.0, 150)]);
             let mut renderer = Renderer::new().unwrap();

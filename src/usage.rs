@@ -84,11 +84,18 @@ pub struct Snapshot {
     pub apps: [Option<Vec<Bar>>; 3],
     /// The plan of the account in use, when the app says ("free", "plus"...): each account has its own.
     pub plans: [Option<String>; 3],
+    /// When the reading was made by the app, Unix seconds, for the apps that only write it now
+    /// and then (Codex writes it with each turn of its own agent, so it can lag what the app shows).
+    pub updated: [Option<i64>; 3],
 }
 
 impl Snapshot {
     pub fn plan(&self, app: App) -> Option<&str> {
         self.plans[app as usize].as_deref()
+    }
+
+    pub fn updated(&self, app: App) -> Option<i64> {
+        self.updated[app as usize]
     }
 
     pub fn get(&self, app: App) -> Option<&[Bar]> {
@@ -293,13 +300,13 @@ fn children(dir: &Path) -> Vec<PathBuf> {
 /// The newest rate-limit event of the logs written to last: a log keeps growing after the day it
 /// was started (a resumed session), and an account switch shows only in the newest event, so
 /// the files are taken by when they were written and the events compared by their own time.
-fn read_codex() -> Option<(Vec<Bar>, Option<String>)> {
+fn read_codex() -> Option<(Vec<Bar>, Option<String>, i64)> {
     let root = PathBuf::from(std::env::var_os("USERPROFILE")?).join(".codex").join("sessions");
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = children(&root).into_iter().flat_map(|y| children(&y)).flat_map(|m| children(&m)).flat_map(|d| children(&d))
         .filter_map(|f| Some((std::fs::metadata(&f).ok()?.modified().ok()?, f)))
         .collect();
     files.sort_by(|a, b| b.0.cmp(&a.0));
-    files.into_iter().take(CODEX_FILES).filter_map(|(_, f)| last_limits(&f)).max_by_key(|(at, _, _)| *at).map(|(_, bars, plan)| (bars, plan))
+    files.into_iter().take(CODEX_FILES).filter_map(|(_, f)| last_limits(&f)).max_by_key(|(at, _, _)| *at).map(|(at, bars, plan)| (bars, plan, at))
 }
 
 /// The `timestamp` of a Codex log line, Unix seconds.
@@ -458,7 +465,11 @@ fn post_local(port: u16, path: &str, token: &str, body: &str) -> Option<String> 
 fn read_all() -> Snapshot {
     let now = now_secs();
     let codex = read_codex();
-    Snapshot { apps: [read_claude(), codex.as_ref().map(|(bars, _)| rolled(bars.clone(), now)), read_antigravity()], plans: [None, codex.and_then(|(_, plan)| plan), None] }
+    Snapshot {
+        apps: [read_claude(), codex.as_ref().map(|(bars, _, _)| rolled(bars.clone(), now)), read_antigravity()],
+        plans: [None, codex.as_ref().and_then(|(_, plan, _)| plan.clone()), None],
+        updated: [None, codex.map(|(_, _, at)| at), None],
+    }
 }
 
 /// The worker that keeps a `Snapshot` fresh and tells the window when it changes.
