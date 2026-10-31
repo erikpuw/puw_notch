@@ -306,7 +306,11 @@ fn read_codex() -> Option<(Vec<Bar>, Option<String>, i64)> {
         .filter_map(|f| Some((std::fs::metadata(&f).ok()?.modified().ok()?, f)))
         .collect();
     files.sort_by(|a, b| b.0.cmp(&a.0));
-    files.into_iter().take(CODEX_FILES).filter_map(|(_, f)| last_limits(&f)).max_by_key(|(at, _, _)| *at).map(|(at, bars, plan)| (bars, plan, at))
+    let (at, bars, plan) = files.into_iter().take(CODEX_FILES).filter_map(|(_, f)| last_limits(&f)).max_by_key(|(at, _, _)| *at)?;
+    // Signing in as someone else rewrites auth.json (only its time is looked at, never its
+    // contents): a reading from before that belongs to the account before it.
+    let signed_in = std::fs::metadata(root.parent()?.join("auth.json")).ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    (signed_in <= at + 5).then_some((bars, plan, at))
 }
 
 /// The `timestamp` of a Codex log line, Unix seconds.
