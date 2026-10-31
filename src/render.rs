@@ -2410,15 +2410,9 @@ impl Renderer {
                                     // Conditions older than STALE_MIN are dimmed and say so in words.
                                     let stale = wx.is_stale(lv.now);
                                     let fade = if stale { 0.55 } else { 1.0 };
-                                    // City line: the name, then where the data comes from (Open-Meteo asks for the
-                                    // credit, CC BY 4.0) and when it was fetched, "old" when stale; 24h and x at its end.
-                                    let (cy0, cy1) = ((CITY_Y + 2.0) * s, (CITY_Y + 22.0) * s);
+                                    // City line: the name; 24h and x at its end.
                                     let buttons_l = cr - (30.0 + HOURS_BTN_W + 8.0) * s;
-                                    let name_w = width(&place.name, F_TITLE).min(buttons_l - cl - 110.0 * s);
-                                    text(&place.name, F_TITLE, rect(cl, cy0, cl + name_w + 2.0 * s, cy1), lead, grey(1.0, a))?;
-                                    let fetched = wx.updated.map_or(String::new(), |u| format!(" · {}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100));
-                                    let credit = if stale { solid(ORANGE, a) } else { grey(0.5, a) };
-                                    text(&format!("Open-Meteo{fetched}"), F_LABEL, rect(cl + name_w + 10.0 * s, cy0 + 1.0 * s, buttons_l, cy1 + 1.0 * s), lead, credit)?;
+                                    text(&place.name, F_TITLE, rect(cl, (CITY_Y + 2.0) * s, buttons_l, (CITY_Y + 22.0) * s), lead, grey(1.0, a))?;
                                     if let Some(ob) = rect_of(Button::CityOff) {
                                         let hot = hovered == Some(Button::CityOff);
                                         hover_disc(Button::CityOff)?;
@@ -2684,6 +2678,15 @@ impl Renderer {
                     let dw = if on { wide } else { dot };
                     rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &self.brush(if on { grey(1.0, a) } else { grey(0.45, a) })?);
                     dx += dw + gap;
+                }
+                // The Weather page's source (Open-Meteo asks for the credit, CC BY 4.0) and when it was
+                // fetched, "old" when stale: quiet in the bottom-right corner, level with the dots, clear
+                // of the page's own content.
+                if let (Page::Weather, None, Some(_), Some(u)) = (v.page, v.leaving, v.weather.now, v.weather.updated) {
+                    let stale = v.weather.is_stale(v.list.now);
+                    let when = format!("{}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100);
+                    let ink = if stale { solid(ORANGE, a) } else { grey(0.4, a) };
+                    text(&format!("Open-Meteo · {when}"), F_LABEL, rect(cx + 36.0 * s, (DOTS_Y - 5.0) * s, r - SIDE * s, (DOTS_Y + 10.0) * s), trail, ink)?;
                 }
             }
             if let Err(e) = rt.EndDraw(None, None) {
