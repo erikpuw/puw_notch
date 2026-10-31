@@ -272,16 +272,20 @@ fn read_claude_app() -> Option<(i64, Vec<Bar>)> {
     children(&data).into_iter().find_map(|d| parse_claude_history(&std::fs::read_to_string(d.join("plan-usage-history.json")).ok()?))
 }
 
-/// Whichever of the two readings is newer wins; the desktop app's, which has no reset times,
-/// borrows those of the status line while they are still ahead.
+/// The two readings together. Use only goes up inside a window, so when both have the window
+/// the larger one is the later: a status line is rewritten whenever its terminal refreshes, but
+/// its numbers are those of the terminal's last answer from Claude and can be hours old, so its
+/// file time says nothing. The desktop app's reading has no reset times and borrows the status
+/// line's while they are still ahead.
 fn newest_claude(status_line: Option<(i64, Vec<Bar>)>, app: Option<(i64, Vec<Bar>)>, now: i64) -> Option<Vec<Bar>> {
     let app = app.filter(|(at, _)| now - at <= CLAUDE_SAMPLE_MAX_AGE);
     match (status_line, app) {
         (Some((_, bars)), None) => Some(rolled(bars, now)),
-        (Some((written, bars)), Some((at, _))) if at <= written => Some(rolled(bars, now)),
         (status_line, Some((_, mut bars))) => {
             for bar in &mut bars {
-                bar.resets_at = status_line.iter().flat_map(|(_, b)| b).find(|o| o.label == bar.label && o.resets_at > now).map_or(0, |o| o.resets_at);
+                if let Some(o) = status_line.iter().flat_map(|(_, b)| b).find(|o| o.label == bar.label && o.resets_at > now) {
+                    (bar.resets_at, bar.used) = (o.resets_at, bar.used.max(o.used));
+                }
             }
             Some(bars)
         }
@@ -668,14 +672,17 @@ mod tests {
     }
 
     #[test]
-    fn the_newer_claude_reading_wins_and_borrows_reset_times() {
+    fn the_larger_claude_reading_wins_and_borrows_reset_times() {
         let bar = |label: &str, used, resets_at| Bar { label: label.into(), weekly: label == "Tuần", used, resets_at };
         let hook = Some((100, vec![bar("5 giờ", 10.0, 5000), bar("Tuần", 4.0, 9000)]));
         let app = Some((200, vec![bar("5 giờ", 30.0, 0), bar("Tuần", 8.0, 0)]));
         let both = newest_claude(hook.clone(), app.clone(), 300).unwrap();
         assert_eq!((both[0].used, both[0].resets_at, both[1].used, both[1].resets_at), (30.0, 5000, 8.0, 9000));
-        let late_hook = Some((250, hook.clone().unwrap().1));
-        assert_eq!(newest_claude(late_hook, app.clone(), 300).unwrap()[0].used, 10.0, "the status line is newer");
+        let ahead = Some((250, vec![bar("5 giờ", 50.0, 5000), bar("Tuần", 4.0, 9000)]));
+        assert_eq!(newest_claude(ahead, app.clone(), 300).unwrap()[0].used, 50.0, "a terminal that used more is later in the window");
+        // A status line written just now with old numbers does not pull the reading back.
+        let stale = Some((299, hook.clone().unwrap().1));
+        assert_eq!(newest_claude(stale, app.clone(), 300).unwrap()[0].used, 30.0);
         assert_eq!(newest_claude(None, app.clone(), 300).unwrap()[0].resets_at, 0);
         assert!(newest_claude(None, app, 200 + CLAUDE_SAMPLE_MAX_AGE + 1).is_none(), "an old sample is not shown");
         assert!(newest_claude(None, None, 300).is_none());
