@@ -1,18 +1,35 @@
-//! The battery as a ring (like a phone's lock-screen gauge): a track, an arc of the charge from
-//! the top clockwise, a bolt in the middle while charging. Its colour is `battery_tint`'s:
-//! green charging, yellow in battery saver, red at 20 % or less, white otherwise.
+//! The battery as a ring, the way iOS shows it: a thick track, an arc of the charge from the top
+//! clockwise with round ends, and the device in the middle (a laptop; a bolt while charging).
+//! Green normally and while charging, yellow in battery saver, red at 20 % or less.
 
 use super::*;
+
+const GREEN_RING: (f32, f32, f32) = (0.2, 0.84, 0.29);
+
+fn ring_colour(b: &Battery) -> (f32, f32, f32) {
+    if b.charging {
+        GREEN_RING
+    } else if b.saver {
+        (1.0, 0.8, 0.0)
+    } else if b.percent <= 20 {
+        (1.0, 0.27, 0.23)
+    } else {
+        GREEN_RING
+    }
+}
 
 impl Renderer {
     /// A ring of diameter `d` (px) centred on `(x, y)`, filled to `b.percent`, at opacity `a`.
     pub(super) fn draw_battery_ring(&self, (x, y): (f32, f32), d: f32, b: &Battery, a: f32) -> Result<()> {
         let rt = &self.rt;
-        let (accent, _) = battery_tint(b);
-        let width = d * 0.13;
+        let accent = ring_colour(b);
+        let width = d * 0.16;
         let radius = (d - width) / 2.0;
         let ring = D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: radius, radiusY: radius };
         let arc_colour = color(accent.0, accent.1, accent.2, a);
+        // Everything in the middle is drawn on a grid where the ring is 22 across.
+        let k = d / 22.0;
+        let at = |px: f32, py: f32| Vector2 { X: x + px * k, Y: y + py * k };
         unsafe {
             rt.DrawEllipse(&ring, &self.brush(grey(0.3, a))?, width, None);
             let fraction = (b.percent.min(100) as f32 / 100.0).max(0.03);
@@ -35,17 +52,20 @@ impl Renderer {
                 sink.Close()?;
                 rt.DrawGeometry(&geo, &self.brush(arc_colour)?, width, &self.round);
             }
+            let white = self.brush(grey(0.95, a))?;
             if b.charging {
-                // A bolt, 10 px tall at a ring 18 px across.
-                let k = d / 18.0;
-                let at = |px: f32, py: f32| Vector2 { X: x + px * k, Y: y + py * k };
                 let geo = self.factory.CreatePathGeometry()?;
                 let sink = geo.Open()?;
-                sink.BeginFigure(at(1.2, -5.0), D2D1_FIGURE_BEGIN_FILLED);
-                sink.AddLines(&[at(-3.0, 1.0), at(-0.2, 1.0), at(-1.2, 5.0), at(3.0, -1.0), at(0.2, -1.0)]);
+                sink.BeginFigure(at(1.3, -5.5), D2D1_FIGURE_BEGIN_FILLED);
+                sink.AddLines(&[at(-3.2, 1.0), at(-0.3, 1.0), at(-1.3, 5.5), at(3.2, -1.0), at(0.3, -1.0)]);
                 sink.EndFigure(D2D1_FIGURE_END_CLOSED);
                 sink.Close()?;
-                rt.FillGeometry(&geo, &self.brush(arc_colour)?, None);
+                rt.FillGeometry(&geo, &white, None);
+            } else {
+                // A laptop: the screen and the base.
+                let (p, q) = (at(-3.8, -3.6), at(3.8, 1.4));
+                rt.DrawRoundedRectangle(&rounded(rect(p.X, p.Y, q.X, q.Y), 0.9 * k), &white, 1.2 * k, None);
+                rt.DrawLine(at(-5.4, 3.7), at(5.4, 3.7), &white, 1.4 * k, &self.round);
             }
         }
         Ok(())

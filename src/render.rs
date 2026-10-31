@@ -861,19 +861,6 @@ pub struct Renderer {
 
 /// Colours of the battery icon, (bolt or first path, the rest): a green bolt on a white case while
 /// charging, all yellow in battery saver (like iPhone's low power mode), all red at 20 % or less.
-fn battery_tint(b: &Battery) -> ((f32, f32, f32), (f32, f32, f32)) {
-    let white = (1.0, 1.0, 1.0);
-    if b.charging {
-        ((0.2, 0.84, 0.29), white)
-    } else if b.saver {
-        ((1.0, 0.8, 0.0), (1.0, 0.8, 0.0))
-    } else if b.percent <= 20 {
-        ((1.0, 0.27, 0.23), (1.0, 0.27, 0.23))
-    } else {
-        (white, white)
-    }
-}
-
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
 }
@@ -1747,7 +1734,7 @@ impl Renderer {
                 if let Some(b) = &v.battery {
                     // A battery ring left of the time; with music the cover takes that spot, so it
                     // sits before the bars.
-                    let d = 18.0 * s;
+                    let d = 22.0 * s;
                     let bx = if pill_music.is_some() { r - 61.0 * s } else { l + 13.0 * s };
                     self.draw_battery_ring((bx + 10.0 * s, nh / 2.0), d, b, small_a)?;
                 }
@@ -1944,7 +1931,7 @@ impl Renderer {
                     let pct = format!("{}%", b.percent);
                     let tx = hr - width(&pct, F_LABEL);
                     text(&pct, F_LABEL, rect(tx, ht, hr, hb), trail, grey(0.85, a))?;
-                    let d = 18.0 * s;
+                    let d = 20.0 * s;
                     self.draw_battery_ring((tx - 3.0 * s - d / 2.0, (ht + hb) / 2.0), d, b, a)?;
                 }
                 // Date · time in the middle of the header.
