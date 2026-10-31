@@ -1292,15 +1292,16 @@ fn connection_toast(e: Event) -> Toast {
 /// Banner text for a battery change.
 fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
     use system::PowerEvent::*;
-    let level = Some(b.percent as f32 / 100.0);
+    // Title and a line under it on the left, the percent large at the right.
+    let battery = |title: &str, body: &str, icon| Toast { badge: Some(format!("{}%", b.percent)), ..status_toast(tr("Pin", "Battery"), title.to_string(), body, None, icon) };
     match e {
-        Plugged => status_toast(tr("Pin", "Battery"), format!("{} {}%", tr("Đang sạc", "Charging"), b.percent), "", level, render::ICON_PLUG),
-        Unplugged => status_toast(tr("Pin", "Battery"), format!("{} · {}%", tr("Đã rút sạc", "Unplugged"), b.percent), "", level, render::ICON_UNPLUG),
+        Plugged => battery(tr("Đang sạc", "Charging"), tr("Đã cắm sạc", "Charger connected"), render::ICON_PLUG),
+        Unplugged => battery(tr("Đã rút sạc", "Unplugged"), tr("Đang dùng pin", "On battery"), render::ICON_UNPLUG),
         SaverOn => status_toast(tr("Tiết kiệm pin", "Battery saver"), on_off(true).to_string(), "", None, render::ICON_SAVER),
         SaverOff => status_toast(tr("Tiết kiệm pin", "Battery saver"), on_off(false).to_string(), "", None, render::ICON_SAVER),
-        Low(p) => status_toast(tr("Pin yếu", "Low battery"), format!("{p}% · {}", tr("nên cắm sạc", "plug in soon")), "", level, render::ICON_BATTERY_LOW),
-        Critical(p) => status_toast(tr("Pin rất yếu", "Battery critical"), format!("{p}% · {}", tr("cắm sạc ngay", "plug in now")), "", level, render::ICON_BATTERY_LOW),
-        Full => status_toast(tr("Pin", "Battery"), tr("Đã sạc đầy", "Fully charged").to_string(), "", level, render::ICON_BATTERY),
+        Low => battery(tr("Pin yếu", "Low battery"), tr("Nên cắm sạc", "Plug in soon"), render::ICON_BATTERY_LOW),
+        Critical => battery(tr("Pin rất yếu", "Battery critical"), tr("Cắm sạc ngay", "Plug in now"), render::ICON_BATTERY_LOW),
+        Full => battery(tr("Đã sạc đầy", "Fully charged"), tr("Có thể rút sạc", "You can unplug"), render::ICON_BATTERY),
     }
 }
 

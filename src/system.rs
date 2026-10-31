@@ -54,8 +54,8 @@ pub enum PowerEvent {
     Unplugged,
     SaverOn,
     SaverOff,
-    Low(u8),
-    Critical(u8),
+    Low,
+    Critical,
     Full,
 }
 
@@ -73,9 +73,9 @@ pub fn power_events(old: Battery, new: Battery) -> Vec<PowerEvent> {
     }
     if !new.charging {
         if old.percent > CRITICAL && new.percent <= CRITICAL {
-            out.push(PowerEvent::Critical(new.percent));
+            out.push(PowerEvent::Critical);
         } else if old.percent > LOW && new.percent <= LOW {
-            out.push(PowerEvent::Low(new.percent));
+            out.push(PowerEvent::Low);
         }
     }
     if new.charging && new.percent == 100 && old.percent < 100 {
@@ -321,9 +321,9 @@ mod tests {
         assert_eq!(power_events(b(50, false, false), b(50, true, false)), vec![PowerEvent::Plugged]);
         assert_eq!(power_events(b(50, true, false), b(50, false, false)), vec![PowerEvent::Unplugged]);
         assert_eq!(power_events(b(50, false, false), b(50, false, true)), vec![PowerEvent::SaverOn]);
-        assert_eq!(power_events(b(21, false, false), b(20, false, false)), vec![PowerEvent::Low(20)]);
+        assert_eq!(power_events(b(21, false, false), b(20, false, false)), vec![PowerEvent::Low]);
         assert!(power_events(b(20, false, false), b(19, false, false)).is_empty(), "only when crossing");
-        assert_eq!(power_events(b(11, false, false), b(10, false, false)), vec![PowerEvent::Critical(10)]);
+        assert_eq!(power_events(b(11, false, false), b(10, false, false)), vec![PowerEvent::Critical]);
         assert!(power_events(b(21, true, false), b(20, true, false)).is_empty(), "charging: not low");
         assert_eq!(power_events(b(99, true, false), b(100, true, false)), vec![PowerEvent::Full]);
     }

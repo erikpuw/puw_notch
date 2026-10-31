@@ -3251,7 +3251,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "writes target/banner-preview.bmp: a notification banner (with its x) above a Bluetooth battery banner"]
+    #[ignore = "writes target/banner-preview.bmp: a notification banner (with its x), a Bluetooth battery banner and a charging banner"]
     fn banner_preview() {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -3261,10 +3261,12 @@ mod tests {
             let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()), badge: None };
             let device = Toast { app: "Bluetooth".into(), title: "UGREEN HiTune Max5c".into(), body: "Đã kết nối".into(), level: None,
                 icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None, badge: Some("80%".into()) };
+            let charging = Toast { app: "Pin".into(), title: "Đang sạc".into(), body: "Đã cắm sạc".into(), level: None,
+                icon: Some(ICON_PLUG), image: None, open: None, badge: Some("70%".into()) };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
-            for (toast, lines) in [(&note, 1), (&device, 0)] {
+            for (toast, lines) in [(&note, 1), (&device, 0), (&charging, 0)] {
             let view = View { mode: Mode::Alert, size: notch::alert_size(lines), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
@@ -3273,7 +3275,7 @@ mod tests {
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
             sheet.extend_from_slice(&renderer.grabbed[..]);
             }
-            let (pixels, h) = (&sheet[..], h * 2);
+            let (pixels, h) = (&sheet[..], h * 3);
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
             bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
             bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
