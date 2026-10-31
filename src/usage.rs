@@ -130,14 +130,26 @@ fn iso_to_epoch(s: &str) -> Option<i64> {
     Some((era * 146_097 + doe - 719_468) * 86_400 + hh * 3600 + mm * 60 + ss)
 }
 
+/// The label of a limit window of `minutes` (the server sets it by plan: 5 hours and a week on
+/// the paid plans, about 30 days on a free one) and whether it is the long one (a week or more),
+/// the one the alerts watch.
 fn window_label(minutes: f64) -> (String, bool) {
-    if minutes >= 7.0 * 24.0 * 60.0 - 60.0 {
-        (tr("Tuần", "Week").to_string(), true)
-    } else if (minutes - 300.0).abs() < 30.0 {
-        (tr("5 giờ", "5 h").to_string(), false)
+    let m = minutes.round() as i64;
+    let long = m >= 7 * 24 * 60 - 60;
+    let label = if (m - 300).abs() < 30 {
+        tr("5 giờ", "5 h").to_string()
+    } else if (m - 7 * 24 * 60).abs() < 60 {
+        tr("Tuần", "Week").to_string()
+    } else if (m - 30 * 24 * 60).abs() < 24 * 60 {
+        tr("30 ngày", "30 days").to_string()
+    } else if m >= 24 * 60 && m % (24 * 60) == 0 {
+        format!("{} {}", m / (24 * 60), tr("ngày", "days"))
+    } else if m >= 60 && m % 60 == 0 {
+        format!("{} {}", m / 60, tr("giờ", "h"))
     } else {
-        (format!("{} {}", minutes as i64, tr("phút", "min")), false)
-    }
+        format!("{} {}", m, tr("phút", "min"))
+    };
+    (label, long)
 }
 
 /// Claude Code's status-line JSON: `rate_limits.five_hour` and `.seven_day` with `used_percentage` and `resets_at`.
@@ -486,8 +498,8 @@ impl Alert {
         let title = format!("{} · {}%", self.app.name(), self.bar.used.round());
         let resets = format!("{} {}", tr("Làm mới sau", "Resets in"), in_words(self.bar.resets_at, now));
         let body = match self.reason {
-            Reason::Day(by) => format!("{} {}% {}", tr("Hôm nay đã dùng", "Used today:"), by.round(), tr("hạn mức tuần", "of the weekly limit")),
-            Reason::Warn | Reason::High => format!("{} · {}", tr("Sắp hết hạn mức tuần", "Weekly limit almost used"), resets),
+            Reason::Day(by) => format!("{} {}% {} ({})", tr("Hôm nay đã dùng", "Used today:"), by.round(), tr("hạn mức", "of the limit"), self.bar.label),
+            Reason::Warn | Reason::High => format!("{} ({}) · {}", tr("Sắp hết hạn mức", "Limit almost used"), self.bar.label, resets),
         };
         (title, body)
     }
@@ -600,6 +612,13 @@ mod tests {
         assert_eq!(newest_claude(None, app.clone(), 300).unwrap()[0].resets_at, 0);
         assert!(newest_claude(None, app, 200 + CLAUDE_SAMPLE_MAX_AGE + 1).is_none(), "an old sample is not shown");
         assert!(newest_claude(None, None, 300).is_none());
+    }
+
+    #[test]
+    fn windows_are_named_by_their_length() {
+        for (minutes, label, long) in [(300.0, "5 giờ", false), (10080.0, "Tuần", true), (43200.0, "30 ngày", true), (2880.0, "2 ngày", false), (120.0, "2 giờ", false), (45.0, "45 phút", false)] {
+            assert_eq!(window_label(minutes), (label.to_string(), long), "{minutes} min");
+        }
     }
 
     #[test]
