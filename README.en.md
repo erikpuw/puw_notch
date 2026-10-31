@@ -15,22 +15,37 @@
 
 ## Features
 
-- **Notch**: clock, battery icon (three steps, a green bolt while charging, yellow in battery saver), music waves. Hover to open the panel. Shrinks when it would cover tabs or text underneath (to read what is under the pill, the notch stays out of recordings and screen shares; after Print Screen or Win+Shift+S it shows in screenshots for 30 s), hides during fullscreen games and videos.
-- **6 pages** (switch with ‹ ›):
-  - **Music**: cover art, synced lyrics (LRCLIB), ⏮ ⏯ ⏭; click or drag the progress bar to seek, with a time preview while dragging and one command on release. Seeking uses Windows media controls when supported, the native iTunes adapter, or foobar2000's Default UI seekbar. Unsupported players and live sources without a duration keep seeking disabled; changing tracks cancels a drag. A lyrics button widens the panel to show scrolling lyrics; background and aurora line follow the cover's colours.
-  - **Tasks**: one list for tasks and appointments. Type "Buy milk", "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Tick / edit / delete; overdue shows red with "Late". ⚙ picks an early reminder of 0–60 min, plus one on time.
-  - **Notifications**: the ~30 latest Windows notifications with app icons; click a row to open the app that sent it; smooth scrolling, and "Clear all" hides what is there (Windows keeps it).
-  - **Health**: water and stand-up reminders with adjustable times and amounts.
-  - **Weather**: type a city once (accents optional), the pill shows an icon and temperature; the page has a large icon, a grid of six: feels-like, humidity and wind now, then when rain comes, the high and strong wind in the next 24 hours; the **24h** button swaps the details for a forecast every 3 hours (icon, temperature, chance of rain). °C | °F follows Windows' region, click to switch. Refreshed every 30 minutes on a worker thread, "old" after 90 minutes; the × switches it off.
-  - **Limits**: 5-hour and weekly limits of Claude, Codex and Antigravity, a tab per app, shown the way each app does it (Codex and Antigravity show what is left, counting down from 100 %; Claude shows what is used). Read on this PC only, nothing is sent: Codex from its session logs (`~/.codex`), Antigravity from the app's own local server while it is open, Claude Code through `statusLine` (script `~/.claude/puw-notch-statusline.ps1` writes `%APPDATA%\PuwNotch\claude-limits.json`; runs only in the terminal) and from `plan-usage-history.json` that the Claude desktop app itself writes (every ~15 min while it runs, no reset times). An app with no numbers yet says to open it. A banner warns when the weekly limit passes 80%, 95%, or more than 25% of the week goes in one day.
-- **Banners**: Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth (with the battery of headphones, mice... when the device reports it, and a low-battery banner at 20 %), network, battery, battery saver, USB plugged in / pulled out. A notification banner has an × in its corner to close it early, back to the pill. Take a screenshot (Win+Shift+S) and the banner shows a thumbnail; click it to open the shot.
-- **Approve on the notch**: when Claude Code asks for permission (run a command, edit a file...), a banner shows the tool and what it is about to do with **Allow** / **Deny** buttons; a short multiple-choice question (one question, 2 to 3 options) shows its options as buttons. The `PermissionRequest` hook (`~/.claude/puw-notch-approve.ps1`) sends the request over a local pipe `\\.\pipe\puw-notch-approve`, nothing leaves the PC. No click in 50 s, notch not running, or a question with choices: Claude asks as usual. Antigravity works the same way: the notch asks that app's own local server (only while it is open) and answers its multiple-choice questions and tool permissions. No auto-approve.
-- **Idle robot**: after 30 s without input an LED face replaces the clock and changes expression; after 5 min it sleeps; when you are back it grins, then hands the pill back to the clock. Toggle in the tray.
-- **Load only for visible content**: the pill detects track changes, refreshes its cover, and keeps its simulated equaliser moving during playback. The mini line keeps the cache without detailed music metadata reads or new cover loads; returning to the pill refreshes the current track and cover. Closing a page preserves its cache and stops new page lyrics and icon loads. Lyrics load only on the open Music page; notification icons load only on the open Notifications page. The fullscreen notch shrinks smoothly into the top edge before hiding, and grows back when fullscreen ends. While hidden, detailed music metadata reads and new artwork or lyrics loads pause. Opening the panel uses the cache and syncs the selected page. Waiting for icons does not keep animation running. Clock, battery, weather, obstruction detection, notifications and reminders keep updating; a request already in flight may finish into the cache.
-- **Hide Windows volume popup** (tray, off by default): the app handles the volume keys itself, so only the notch shows. Laptop brightness and mic keys usually go through firmware and are not blocked.
-- **Tray**: Minimal notch, Notch style (Ears / floating Pill), Idle robot, Hide volume popup, Start with Windows, Language (Tiếng Việt / English), About, Quit.
+| | |
+|---|---|
+| **Notch** | Clock, battery ring (green while charging, yellow in battery saver, red at 20 %), music waves. Hover to open the panel. Two looks, chosen in the tray: ears or a floating pill. |
+| **Stays clear** | Shrinks when it would cover text underneath, hides during fullscreen games and videos. Stays out of recordings and screen shares; Print Screen or Win+Shift+S bring it into screenshots for 30 s. |
+| **Banners** | Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth (with the device's battery), network, battery, battery saver, USB. An × closes one early; a screenshot banner shows a thumbnail, click to open. |
+| **Approve on the notch** | Questions from Claude Code and Antigravity (permission to use a tool, multiple-choice questions) show as banners; click **Allow** / **Deny** or pick an answer. No auto-approve. Setup [below](#setting-up-claude-code-optional). |
+| **Robot** | After 30 s without input an LED face replaces the clock, after 5 min it sleeps. Toggle in the tray. |
+| **Light** | Loads only what is visible: lyrics while the Music page is open, icons while Notifications is open; paused while hidden for fullscreen. |
+| **Tray** | Minimal notch, Notch style, Idle robot, Hide Windows volume popup (off by default), Start with Windows, Language (Tiếng Việt / English), About, Quit. |
+
+**6 pages** (switch with ‹ ›):
+
+| Page | What it does |
+|---|---|
+| **Music** | Cover, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, drag the bar to seek (Windows media controls, iTunes, foobar2000). The lyrics button widens the panel; background and aurora follow the cover. |
+| **Tasks** | Tasks and appointments in one list. Type "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Overdue shows red "Late"; ⚙ picks a reminder 0–60 min ahead. |
+| **Notifications** | The ~30 latest Windows notifications with app icons; click to open the app; "Clear all" hides what is there (Windows keeps it). |
+| **Health** | Water and stand-up reminders with adjustable times and amounts. |
+| **Weather** | Type a city once: large icon, feels-like, humidity, wind, a 24-hour forecast (**24h** button), °C | °F. Open-Meteo data, refreshed every 30 min. |
+| **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity (a free plan: 30 days), a tab per app. Codex and Antigravity show what is left, Claude what is used. A banner warns at 80 %, 95 %, or 25 % of the limit in one day. |
+
+The Limits page reads this PC only, nothing is sent:
+
+| App | Read from |
+|---|---|
+| **Claude** | `plan-usage-history.json` that the desktop app writes itself (every ~15 min, no reset times); Claude Code in a terminal through `statusLine` |
+| **Codex** | Session logs in `~/.codex`, updated after each agent turn; a reading over 10 min old says "Old"; after switching accounts it waits for the first turn |
+| **Antigravity** | The app's own local server, only while it is open |
 
 Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather and battery icons [Lucide](https://lucide.dev) (ISC), banner icons [Tabler Icons](https://tabler.io/icons) (MIT).
+
 ## Screenshots
 
 | | |
@@ -42,6 +57,24 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 ![Music with lyrics](assets/screenshots/page-music-lyrics.png)<br>**Music** with lyrics: the panel widens, the line being sung lit in the middle, the aurora line swaying along the bottom
 
 ![Weather](assets/screenshots/page-weather.png)<br>**Weather**: large icon, temperature, °C | °F buttons, feels-like, humidity, wind
+
+**Limits** of Claude, Codex and Antigravity (Claude shows what is used; Codex and Antigravity show what is left, counting down like their own apps). The Codex tab names the plan of the account in use; a free plan counts 30 days:
+
+| Claude | Codex (free plan, 30 days) | Antigravity |
+|---|---|---|
+| ![](assets/screenshots/page-usage-claude.png) | ![](assets/screenshots/page-usage-codex.png) | ![](assets/screenshots/page-usage-antigravity.png) |
+
+**Approve on the notch**: questions from Claude and Antigravity show as banners, a click answers:
+
+| Claude (a multiple-choice question) | Antigravity (permission to use a tool) |
+|---|---|
+| ![](assets/screenshots/banner-approve-claude.png) | ![](assets/screenshots/banner-approve-antigravity.png) |
+
+**Pill style** (tray, Notch style): floats below the top edge of the screen with all four corners round; the ears remain the default.
+
+| Resting | Playing music | Open page |
+|---|---|---|
+| ![](assets/screenshots/style-pill-idle.png) | ![](assets/screenshots/style-pill-music.png) | ![](assets/screenshots/style-pill-page.png) |
 
 The collapsed pill:
 
@@ -73,6 +106,23 @@ target/release/puw_notch.exe
 `build.rs` embeds the icon and version info (VERSIONINFO: name, company, version taken from `Cargo.toml`) in the exe, shown under Properties → Details. Tests: `cargo test`. Settings live in `%APPDATA%\PuwNotch\`. Starts, exits, failures, self-hiding and the GPU drawing the notch are logged to `%APPDATA%\PuwNotch\notch.log` (64 KB at most, started over when the version changes), to tell why a start with Windows did not come up.
 
 Notifications are read from the Windows notification centre, so **Windows notifications must be on**. To see them only on the notch, with no banner in the screen corner, turn on Windows **Do not disturb** (Settings → System → Notifications). Windows still keeps the notifications in the notification centre, so the notch reads and shows them as usual. Windows does not let another app switch off per-app banners while running, so this is yours to turn on.
+
+## Setting up Claude Code (optional)
+
+Approving on the notch and the limits of Claude Code in a terminal need two small scripts from `tools/`. Copy them to `~/.claude/` and add this to `~/.claude/settings.json` (replace `<name>` with your Windows user name):
+
+```json
+"statusLine": { "type": "command", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/<name>/.claude/puw-notch-statusline.ps1" },
+"hooks": {
+  "PermissionRequest": [
+    { "matcher": "*", "hooks": [ { "type": "command", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/<name>/.claude/puw-notch-approve.ps1", "timeout": 60 } ] }
+  ]
+}
+```
+
+- `puw-notch-approve.ps1` (hook): sends the permission request to the notch over a local pipe. If the notch is not running, nobody clicks within 50 seconds, or you press **In the app**, Claude asks as usual. There is no auto-approve.
+- `puw-notch-statusline.ps1` (statusLine): only needed for Claude Code in a terminal; for the Claude desktop app the notch reads the app's own file.
+- Antigravity and Codex need no setup: the notch reads Antigravity's local server (while it is open) and `~/.codex`.
 
 ## Support
 

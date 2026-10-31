@@ -3429,6 +3429,71 @@ mod tests {
                 bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(pixels);
                 std::fs::write(dir.join(format!("{name}.bmp")), bytes).unwrap();
             }
+            // The newer pictures: the floating pill, the Limits page and the approval banners.
+            {
+                use crate::usage::{Bar, Snapshot};
+                let now = crate::usage::now_secs();
+                let bar = |label: &str, weekly, used, hours: i64| Bar { label: label.into(), weekly, used, resets_at: now + hours * 3600 };
+                let mut snap = Snapshot::default();
+                snap.apps[0] = Some(vec![bar("5 giờ", false, 37.0, 3), bar("Tuần", true, 8.0, 150)]);
+                snap.apps[1] = Some(vec![bar("30 ngày", true, 14.0, 718)]);
+                snap.plans[1] = Some("free".into());
+                snap.updated[1] = Some(now);
+                snap.apps[2] = Some(vec![bar("Gemini · Tuần", true, 0.4, 150), bar("Gemini · 5 giờ", false, 0.0, 4), bar("Claude · GPT · Tuần", true, 36.0, 160),
+                    bar("Claude · GPT · 5 giờ", false, 30.0, 4), bar("Argon · Tuần", true, 89.0, 150)]);
+                let toast = |app: &str, title: &str, body: &str, choices: &[&str]| Toast { app: app.into(), title: title.into(), body: body.into(), level: None, icon: Some(ICON_WARN),
+                    image: None, open: None, badge: None, choices: choices.iter().map(|c| c.to_string()).collect() };
+                let claude_ask = toast("Claude", "Duyệt lệnh", "Cho phép chạy công cụ get_architecture của codebase-memory-mcp cho project này (chỉ đọc)?", &["Đồng ý", "Không đồng ý", "Trong app"]);
+                let antigravity_ask = toast("Antigravity", "Cho phép mcp", "codebase-memory-mcp/get_architecture", &["Đồng ý", "Không"]);
+                // The Tasks and Notifications pages with made-up entries.
+                let item = |text: &str, done: bool, at: Option<u64>| crate::todo::Item { text: text.into(), done: done.then_some(20261029), at, told_soon: false, told_now: false };
+                let stamp = crate::todo::stamp;
+                let tasks = vec![
+                    item("Nộp báo cáo tuần", false, Some(stamp(20261028, 9, 0))), item("Uống thuốc", false, Some(stamp(20261029, 2, 15))),
+                    item("Họp nhóm dự án", false, Some(stamp(20261029, 21, 0))), item("Mua sữa và trứng", false, None),
+                    item("Khám răng", false, Some(stamp(20261030, 9, 0))), item("Gọi cho khách hàng", true, None),
+                ];
+                let note = |app: &str, title: &str, body: &str, at: u64| Note { id: format!("none.{app}"), app: app.into(), title: title.into(), body: body.into(), at, open: None };
+                let notes = vec![note("ScreenSketch", "Screenshot copied to clipboard", "Automatically saved to screenshots folder.", 202610291557),
+                    note("Zalo", "Anh Minh", "Tối nay 8h họp nhóm nhé", 202610291402), note("DolbySettings", "Headphones (UGREEN HiTune Max5c)", "", 202610290207),
+                    note("Outlook", "Lịch họp tuần", "Phòng 3, 9:00 thứ Hai", 202610281730)];
+                // (file, style, mode, music, page, Limits tab, banner)
+                let extra: [(&str, notch::Style, Mode, Option<&Track>, Page, usize, Option<&Toast>); 10] = [
+                    ("page-tasks", notch::Style::Ears, Mode::Expanded, None, Page::Todo, 0, None),
+                    ("page-notifications", notch::Style::Ears, Mode::Expanded, None, Page::Notify, 0, None),
+                    ("style-pill-idle", notch::Style::Pill, Mode::Collapsed, None, Page::Music, 0, None),
+                    ("style-pill-music", notch::Style::Pill, Mode::Collapsed, Some(&playing), Page::Music, 0, None),
+                    ("style-pill-page", notch::Style::Pill, Mode::Expanded, Some(&playing), Page::Music, 0, None),
+                    ("page-usage-claude", notch::Style::Ears, Mode::Expanded, None, Page::Usage, 0, None),
+                    ("page-usage-codex", notch::Style::Ears, Mode::Expanded, None, Page::Usage, 1, None),
+                    ("page-usage-antigravity", notch::Style::Ears, Mode::Expanded, None, Page::Usage, 2, None),
+                    ("banner-approve-claude", notch::Style::Pill, Mode::Alert, None, Page::Music, 0, Some(&claude_ask)),
+                    ("banner-approve-antigravity", notch::Style::Pill, Mode::Alert, None, Page::Music, 0, Some(&antigravity_ask)),
+                ];
+                for (name, style, mode, music, page, tab, banner) in extra {
+                    let live = music.is_some();
+                    let size = match banner { Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None => target(mode, live) };
+                    let view = View { mode, size, time: "20:50", date: "T2, 26/10", battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hours: false, hovered: None, page,
+                        leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C,
+                        list: ListView { counts: if page == Page::Todo { (3, 1) } else { (0, 0) }, remind_before: 15, now: crate::todo::stamp(20261029, 2, 5), draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                        health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
+                    let mut renderer = Renderer::new().unwrap();
+                    renderer.grab = true;
+                    (renderer.style, renderer.usage, renderer.usage_tab) = (style, snap.clone(), tab);
+                    for _ in 0..90 {
+                        renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                        std::thread::sleep(std::time::Duration::from_millis(16));
+                    }
+                    let pixels = &renderer.grabbed[..];
+                    let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+                    bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+                    bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+                    bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-h).to_le_bytes());
+                    bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+                    bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(pixels);
+                    std::fs::write(dir.join(format!("{name}.bmp")), bytes).unwrap();
+                }
+            }
             DestroyWindow(hwnd).unwrap();
         }
     }
