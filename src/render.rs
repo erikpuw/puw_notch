@@ -2104,9 +2104,10 @@ impl Renderer {
                                     let title = if t.title.is_empty() { tr("Đang phát", "Playing") } else { &t.title };
                                     text(&t.artist, F_BODY, rect(tl, top, cr, top + 18.0 * s), lead, soft_text(tint, level, 0.65, a))?;
                                     text(title, F_TITLE, rect(tl, top + 18.0 * s, cr, top + 40.0 * s), lead, grey(1.0, a))?;
-                                    let lyric = t.lyric_now().unwrap_or_else(|| hovered.map_or(
+                                    // The line being sung, unless the lyrics panel beside already shows it.
+                                    let lyric = t.lyric_now().filter(|_| !v.lyrics).unwrap_or_else(|| hovered.map_or(
                                         if t.duration_ms == 0 { tr("Trình phát chưa cung cấp thời gian", "The player gives no timeline") }
-                                        else if t.lyrics.is_empty() { "" } else { "♪" }, Button::label));
+                                        else if t.lyrics.is_empty() || v.lyrics { "" } else { "♪" }, Button::label));
                                     text(t.command_error.unwrap_or(lyric), F_BODY, rect(tl, top + 42.0 * s, cr, top + 60.0 * s), lead,
                                         if t.command_error.is_some() { color(1.0, 0.5, 0.4, a) } else { grey(0.95, a) })?;
                                 }
