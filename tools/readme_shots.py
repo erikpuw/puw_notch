@@ -8,7 +8,7 @@ the picture a desktop would have behind it.
 import os
 import sys
 
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "target", "readme")
@@ -41,7 +41,12 @@ def backdrop(width, height):
     pic = Image.open(BACKDROP).convert("RGBA")
     scale = max(width / pic.width, height / pic.height)
     pic = pic.resize((round(pic.width * scale), round(pic.height * scale)), Image.LANCZOS)
-    return pic.crop((0, 0, width, height))
+    # The notch is black, so the picture behind it is made light (brighter, a veil of white) to
+    # let its edge stand out.
+    pic = ImageEnhance.Brightness(pic.convert("RGB")).enhance(1.9)
+    pic = Image.blend(pic, Image.new("RGB", pic.size, (255, 255, 255)), 0.22).convert("RGBA")
+    top = min(round(pic.height * 0.15), pic.height - height)
+    return pic.crop((0, top, width, top + height))
 
 
 def main(names):
