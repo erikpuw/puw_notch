@@ -76,9 +76,15 @@ pub struct Bar {
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Snapshot {
     pub apps: [Option<Vec<Bar>>; 3],
+    /// The plan of the account in use, when the app says ("free", "plus"...): each account has its own.
+    pub plans: [Option<String>; 3],
 }
 
 impl Snapshot {
+    pub fn plan(&self, app: App) -> Option<&str> {
+        self.plans[app as usize].as_deref()
+    }
+
     pub fn get(&self, app: App) -> Option<&[Bar]> {
         self.apps[app as usize].as_deref()
     }
@@ -281,13 +287,13 @@ fn children(dir: &Path) -> Vec<PathBuf> {
 /// The newest rate-limit event of the logs written to last: a log keeps growing after the day it
 /// was started (a resumed session), and an account switch shows only in the newest event, so
 /// the files are taken by when they were written and the events compared by their own time.
-fn read_codex() -> Option<Vec<Bar>> {
+fn read_codex() -> Option<(Vec<Bar>, Option<String>)> {
     let root = PathBuf::from(std::env::var_os("USERPROFILE")?).join(".codex").join("sessions");
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = children(&root).into_iter().flat_map(|y| children(&y)).flat_map(|m| children(&m)).flat_map(|d| children(&d))
         .filter_map(|f| Some((std::fs::metadata(&f).ok()?.modified().ok()?, f)))
         .collect();
     files.sort_by(|a, b| b.0.cmp(&a.0));
-    files.into_iter().take(CODEX_FILES).filter_map(|(_, f)| last_limits(&f)).max_by_key(|(at, _)| *at).map(|(_, bars)| bars)
+    files.into_iter().take(CODEX_FILES).filter_map(|(_, f)| last_limits(&f)).max_by_key(|(at, _, _)| *at).map(|(_, bars, plan)| (bars, plan))
 }
 
 /// The `timestamp` of a Codex log line, Unix seconds.
@@ -295,15 +301,21 @@ fn codex_time(line: &str) -> Option<i64> {
     iso_to_epoch(&JsonObject::Parse(&key(line)).ok()?.GetNamedString(&key("timestamp")).ok()?.to_string())
 }
 
+/// The `plan_type` of a Codex rate-limit event ("free", "plus"...).
+fn codex_plan(line: &str) -> Option<String> {
+    let limits = JsonObject::Parse(&key(line)).ok().and_then(|r| obj(&r, "payload")).and_then(|p| obj(&p, "rate_limits"))?;
+    limits.GetNamedString(&key("plan_type")).ok().map(|s| s.to_string()).filter(|s| !s.is_empty())
+}
+
 /// The newest rate-limit event in the end of a Codex log (events with null windows are skipped),
-/// with its time.
-fn last_limits(path: &Path) -> Option<(i64, Vec<Bar>)> {
+/// with its time and the account's plan.
+fn last_limits(path: &Path) -> Option<(i64, Vec<Bar>, Option<String>)> {
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     file.seek(SeekFrom::Start(len.saturating_sub(CODEX_TAIL))).ok()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
-    String::from_utf8_lossy(&bytes).lines().rev().filter(|l| l.contains("\"used_percent\"")).find_map(|l| Some((codex_time(l).unwrap_or(0), some(parse_codex_line(l))?)))
+    String::from_utf8_lossy(&bytes).lines().rev().filter(|l| l.contains("\"used_percent\"")).find_map(|l| Some((codex_time(l).unwrap_or(0), some(parse_codex_line(l))?, codex_plan(l))))
 }
 
 /// A process handle that closes itself.
@@ -439,7 +451,8 @@ fn post_local(port: u16, path: &str, token: &str, body: &str) -> Option<String> 
 
 fn read_all() -> Snapshot {
     let now = now_secs();
-    Snapshot { apps: [read_claude(), read_codex().map(|b| rolled(b, now)), read_antigravity()] }
+    let codex = read_codex();
+    Snapshot { apps: [read_claude(), codex.as_ref().map(|(bars, _)| rolled(bars.clone(), now)), read_antigravity()], plans: [None, codex.and_then(|(_, plan)| plan), None] }
 }
 
 /// The worker that keeps a `Snapshot` fresh and tells the window when it changes.
@@ -588,6 +601,7 @@ mod tests {
         // A free account: one window of 30 days.
         let free = parse_codex_line(r#"{"payload":{"rate_limits":{"primary":{"used_percent":0.0,"window_minutes":43200,"resets_at":1796059769},"secondary":null,"plan_type":"free"}}}"#);
         assert_eq!((free[0].label.as_str(), free[0].weekly), ("30 ngày", true));
+        assert_eq!(codex_plan(r#"{"payload":{"rate_limits":{"primary":null,"plan_type":"free"}}}"#).as_deref(), Some("free"));
 
         let claude = r#"{"model":{},"rate_limits":{"five_hour":{"used_percentage":19,"resets_at":1793000000},"seven_day":{"used_percentage":3.5,"resets_at":1793500000}}}"#;
         let bars = parse_claude(claude);

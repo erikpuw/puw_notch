@@ -79,7 +79,11 @@ impl Renderer {
                 // An app that has not counted yet is dimmer; the label is centred in its segment.
                 let counted = self.usage.get(*app).is_some();
                 let shade = match (i == tab, counted) { (true, true) => 1.0, (true, false) => 0.7, (false, true) => 0.62, (false, false) => 0.38 };
-                text(app.name(), F_LABEL, b, center, grey(shade, a))?;
+                let name = match self.usage.plan(*app) {
+                    Some(plan) => format!("{} · {}", app.name(), plan),
+                    None => app.name().to_string(),
+                };
+                text(&name, F_LABEL, b, center, grey(shade, a))?;
             }
 
             let top = CARDS_TOP * s;
