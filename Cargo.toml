@@ -9,6 +9,8 @@ description = "PUW Notch: a living notch for Windows"
 windows-numerics = "0.2"
 # Already pulled in by `windows`; the `#[implement]` macro (audio volume callback) expands to it.
 windows-core = "0.61"
+# Already pulled in by `windows`; WinRT collections (IIterable) live here since 0.61.
+windows-collections = "0.2"
 
 [dependencies.windows]
 version = "0.61"

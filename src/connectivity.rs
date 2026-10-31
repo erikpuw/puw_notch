@@ -6,9 +6,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use windows::core::w;
+use windows::core::{w, Interface, GUID, HSTRING};
 use windows::Devices::Bluetooth::{BluetoothConnectionStatus, BluetoothDevice, BluetoothLEDevice};
-use windows::Devices::Enumeration::DeviceInformation;
+use windows::Devices::Enumeration::{DeviceInformation, DeviceInformationKind};
+use windows_collections::IIterable;
+use windows::Foundation::IReference;
 use windows::Devices::Radios::{Radio, RadioKind, RadioState};
 use windows::Networking::Connectivity::{NetworkConnectivityLevel, NetworkInformation};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
@@ -53,8 +55,8 @@ pub struct Snapshot {
     pub radios: BTreeMap<RadioType, bool>,
     pub airplane: bool,
     pub net: Net,
-    /// Connected Bluetooth devices: id -> (name, kind).
-    pub devices: BTreeMap<String, (String, DeviceKind)>,
+    /// Connected Bluetooth devices: id -> (name, kind, battery percent if the device reports one).
+    pub devices: BTreeMap<String, (String, DeviceKind, Option<u8>)>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -62,8 +64,14 @@ pub enum Event {
     Radio(RadioType, bool),
     Airplane(bool),
     Net(Net),
-    Device { name: String, kind: DeviceKind, up: bool },
+    /// Connected (with its battery when known) or disconnected.
+    Device { name: String, kind: DeviceKind, up: bool, battery: Option<u8> },
+    /// A connected device's battery: reported after it connected, or just dropped to `LOW_BATTERY`.
+    DeviceBattery { name: String, kind: DeviceKind, percent: u8 },
 }
+
+/// A Bluetooth device at or under this percent gets a low-battery banner.
+pub const LOW_BATTERY: u8 = 20;
 
 /// What changed between two snapshots, without the knock-on noise: turning airplane mode on
 /// is one event, not also "Wi-Fi off", "offline" and "headphones disconnected".
@@ -88,19 +96,33 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
     if old.net != new.net && !(new.net == Net::Offline && quiet_offline) {
         out.push(Event::Net(new.net.clone()));
     }
-    // Devices, by name (a headset can show up over classic and LE at once).
-    let names = |s: &Snapshot| s.devices.values().map(|(n, k)| (n.clone(), *k)).collect::<BTreeMap<_, _>>();
+    // Devices, by name (a headset can show up over classic and LE at once, one of them with the battery).
+    let names = |s: &Snapshot| {
+        let mut m: BTreeMap<String, (DeviceKind, Option<u8>)> = BTreeMap::new();
+        for (n, k, b) in s.devices.values() {
+            let e = m.entry(n.clone()).or_insert((*k, None));
+            e.1 = e.1.max(*b);
+        }
+        m
+    };
     let (before, after) = (names(old), names(new));
     let quiet_disconnect = new.airplane || radio_off.contains(&RadioType::Bluetooth);
-    for (name, kind) in &after {
-        if !before.contains_key(name) {
-            out.push(Event::Device { name: name.clone(), kind: *kind, up: true });
+    for (name, &(kind, battery)) in &after {
+        match before.get(name) {
+            None => out.push(Event::Device { name: name.clone(), kind, up: true, battery }),
+            Some(&(_, was)) => {
+                let late = was.is_none() && battery.is_some();
+                let dropped_low = was.is_some_and(|w| w > LOW_BATTERY) && battery.is_some_and(|b| b <= LOW_BATTERY);
+                if let (true, Some(percent)) = (late || dropped_low, battery) {
+                    out.push(Event::DeviceBattery { name: name.clone(), kind, percent });
+                }
+            }
         }
     }
     if !quiet_disconnect {
-        for (name, kind) in &before {
+        for (name, &(kind, _)) in &before {
             if !after.contains_key(name) {
-                out.push(Event::Device { name: name.clone(), kind: *kind, up: false });
+                out.push(Event::Device { name: name.clone(), kind, up: false, battery: None });
             }
         }
     }
@@ -220,14 +242,15 @@ fn network() -> Net {
     }
 }
 
-fn devices(kinds: &mut BTreeMap<String, DeviceKind>) -> BTreeMap<String, (String, DeviceKind)> {
+fn devices(kinds: &mut BTreeMap<String, DeviceKind>) -> BTreeMap<String, (String, DeviceKind, Option<u8>)> {
     let mut out = BTreeMap::new();
     let selectors = [
         BluetoothDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected),
         BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected),
     ];
+    let props = IIterable::<HSTRING>::from(vec![HSTRING::from(CONTAINER_KEY)]);
     for sel in selectors.into_iter().flatten() {
-        let Ok(found) = DeviceInformation::FindAllAsyncAqsFilter(&sel).and_then(|op| op.get()) else { continue };
+        let Ok(found) = DeviceInformation::FindAllAsyncAqsFilterAndAdditionalProperties(&sel, &props).and_then(|op| op.get()) else { continue };
         for d in found {
             let (Ok(id), Ok(name)) = (d.Id(), d.Name()) else { continue };
             let (id, name) = (id.to_string(), name.to_string());
@@ -235,11 +258,30 @@ fn devices(kinds: &mut BTreeMap<String, DeviceKind>) -> BTreeMap<String, (String
                 let (major, minor) = class_of(&id);
                 device_kind(major, minor, &name)
             });
-            out.insert(id, (name, kind));
+            let battery = container_of(&d).and_then(battery_of);
+            out.insert(id, (name, kind, battery));
         }
     }
     out
 }
+
+const CONTAINER_KEY: &str = "System.Devices.Aep.ContainerId";
+
+fn container_of(d: &DeviceInformation) -> Option<GUID> {
+    d.Properties().ok()?.Lookup(&HSTRING::from(CONTAINER_KEY)).ok()?.cast::<IReference<GUID>>().ok()?.Value().ok()
+}
+
+/// Battery percent Windows knows for the Bluetooth device in this container (what Settings shows:
+/// hands-free or LE battery reports). None when the device reports none.
+fn battery_of(container: GUID) -> Option<u8> {
+    let aqs = HSTRING::from(format!("System.Devices.ContainerId:=\"{{{container:?}}}\""));
+    let props = IIterable::<HSTRING>::from(vec![HSTRING::from(BATTERY_KEY)]);
+    let found = DeviceInformation::FindAllAsyncWithKindAqsFilterAndAdditionalProperties(&aqs, &props, DeviceInformationKind::Device).and_then(|op| op.get()).ok()?;
+    found.into_iter().find_map(|d| d.Properties().ok()?.Lookup(&HSTRING::from(BATTERY_KEY)).ok()?.cast::<IReference<u8>>().ok()?.Value().ok())
+}
+
+/// DEVPKEY_Bluetooth_Battery: the battery percent as a byte.
+const BATTERY_KEY: &str = "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2";
 
 /// Class of device for a classic Bluetooth id; LE ids and failures give (0, 0).
 fn class_of(id: &str) -> (i32, i32) {
@@ -254,11 +296,15 @@ mod tests {
     use DeviceKind::*;
 
     fn snap(wifi: bool, bt: bool, airplane: bool, net: Net, devices: &[(&str, &str, DeviceKind)]) -> Snapshot {
+        snap_b(wifi, bt, airplane, net, &devices.iter().map(|&(i, n, k)| (i, n, k, None)).collect::<Vec<_>>())
+    }
+
+    fn snap_b(wifi: bool, bt: bool, airplane: bool, net: Net, devices: &[(&str, &str, DeviceKind, Option<u8>)]) -> Snapshot {
         Snapshot {
             radios: [(RadioType::Wifi, wifi), (RadioType::Bluetooth, bt)].into_iter().collect(),
             airplane,
             net,
-            devices: devices.iter().map(|(i, n, k)| (i.to_string(), (n.to_string(), *k))).collect(),
+            devices: devices.iter().map(|(i, n, k, b)| (i.to_string(), (n.to_string(), *k, *b))).collect(),
         }
     }
 
@@ -310,7 +356,7 @@ mod tests {
         let b = snap(true, true, false, home(), &[("hl", "WH-1000", Headphones), ("j", "Loa JBL", Speaker)]);
         assert_eq!(
             changes(&a, &b),
-            vec![Event::Device { name: "Loa JBL".into(), kind: Speaker, up: true }, Event::Device { name: "MX Master".into(), kind: Mouse, up: false }]
+            vec![Event::Device { name: "Loa JBL".into(), kind: Speaker, up: true, battery: None }, Event::Device { name: "MX Master".into(), kind: Mouse, up: false, battery: None }]
         );
         // Bluetooth switched off: one event, devices dropping with it are not listed
         let off = snap(true, false, false, home(), &[]);
@@ -324,6 +370,33 @@ mod tests {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
         let _ = Radio::RequestAccessAsync().and_then(|op| op.get());
         eprintln!("{:#?}", snapshot(&mut BTreeMap::new()));
+    }
+
+    #[test]
+    fn device_battery() {
+        let none = snap_b(true, true, false, home(), &[]);
+        let at = |b: Option<u8>| snap_b(true, true, false, home(), &[("hc", "WH-1000", Headphones, None), ("hl", "WH-1000", Headphones, b)]);
+        let ev = |percent| Event::DeviceBattery { name: "WH-1000".into(), kind: Headphones, percent };
+        // connecting: the battery rides on the connect banner (from whichever id reports it)
+        assert_eq!(changes(&none, &at(Some(80))), vec![Event::Device { name: "WH-1000".into(), kind: Headphones, up: true, battery: Some(80) }]);
+        // reported a poll after connecting: its own banner, once
+        assert_eq!(changes(&at(None), &at(Some(80))), vec![ev(80)]);
+        assert!(changes(&at(Some(80)), &at(Some(79))).is_empty(), "small drops are quiet");
+        assert_eq!(changes(&at(Some(21)), &at(Some(20))), vec![ev(20)], "low");
+        assert!(changes(&at(Some(20)), &at(Some(19))).is_empty(), "low is said once");
+    }
+
+    /// Battery of each connected device: `cargo test battery_live -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn battery_live() {
+        unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
+        let sel = BluetoothDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected).unwrap();
+        let props = IIterable::<HSTRING>::from(vec![HSTRING::from(CONTAINER_KEY)]);
+        for d in DeviceInformation::FindAllAsyncAqsFilterAndAdditionalProperties(&sel, &props).unwrap().get().unwrap() {
+            let container = container_of(&d);
+            eprintln!("{} container {container:?} battery {:?}", d.Name().unwrap(), container.and_then(battery_of));
+        }
     }
 
     #[test]

@@ -1090,7 +1090,17 @@ impl App {
                     self.redraw();
                     return Some(LRESULT(0));
                 }
+                let close = render::banner_close(self.win.2 as f32 / 2.0, self.scale, self.notch.size()[0]);
                 match self.banner_target() {
+                    // Its x: back to the pill now, nothing opens.
+                    Some(_) if x >= close.left && x <= close.right && y >= close.top && y <= close.bottom => {
+                        unsafe {
+                            let _ = KillTimer(Some(self.hwnd), T_ALERT);
+                            let _ = KillTimer(Some(self.hwnd), T_DWELL);
+                        }
+                        self.notch.on_alert_end();
+                        self.kick();
+                    }
                     // A notification banner: clicking it opens its picture, link or app.
                     Some(target) => open_target(target),
                     None => self.click(x, y),
@@ -1267,7 +1277,19 @@ fn connection_toast(e: Event) -> Toast {
         }
         Event::Net(Net::Limited { name, .. }) => status_toast(tr("Mạng", "Network"), tr("Không có internet", "No internet").to_string(), &name, None, render::ICON_NO_INTERNET),
         Event::Net(Net::Offline) => status_toast(tr("Mạng", "Network"), tr("Mất kết nối mạng", "Disconnected").to_string(), "", None, render::ICON_NO_INTERNET),
-        Event::Device { name, kind, up } => status_toast("Bluetooth", name, if up { tr("Đã kết nối", "Connected") } else { tr("Đã ngắt kết nối", "Disconnected") }, None, render::device_icon(kind)),
+        // With a battery the banner shows a level bar instead of a body line: the state goes above
+        // the name, the percent after it.
+        Event::Device { name, kind, up, battery } => {
+            let state = if up { tr("Đã kết nối", "Connected") } else { tr("Đã ngắt kết nối", "Disconnected") };
+            match battery {
+                Some(p) => status_toast(&format!("Bluetooth · {state}"), format!("{name} · {p}%"), "", Some(p as f32 / 100.0), render::device_icon(kind)),
+                None => status_toast("Bluetooth", name, state, None, render::device_icon(kind)),
+            }
+        }
+        Event::DeviceBattery { name, kind, percent } => {
+            let state = if percent <= connectivity::LOW_BATTERY { tr("Pin yếu, nên sạc", "Low battery, charge soon") } else { tr("Pin", "Battery") };
+            status_toast(&format!("Bluetooth · {state}"), format!("{name} · {percent}%"), "", Some(percent as f32 / 100.0), render::device_icon(kind))
+        }
     }
 }
 

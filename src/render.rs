@@ -391,6 +391,14 @@ pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, pa
         && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom).map(|(b, _)| b)
 }
 
+/// The x in a notification banner's top-right corner (window px) for a banner `width` px wide
+/// (logical) centred on `cx`: the glyph is 8 px, the rect around it is what a click must hit.
+pub fn banner_close(cx: f32, scale: f32, width: f32) -> D2D_RECT_F {
+    let (x, y) = (cx + (width / 2.0 - 12.0) * scale, 12.0 * scale);
+    let half = 10.0 * scale;
+    rect(x - half, y - half, x + half, y + half)
+}
+
 /// Opacity of the page leaving and the page arriving at progress `t` (0..1) of a page change.
 /// The old page is gone before the new one shows, so their text never overlaps (ghosting).
 fn page_fades(t: f32) -> (f32, f32) {
@@ -1915,6 +1923,15 @@ impl Renderer {
                             None => rt.FillRoundedRectangle(&rounded(rect(bx, by, bx + bw, by + bh), 5.0 * s), &self.brush(grey(0.2, a))?),
                         }
                     }
+                    // A notification banner (one a click opens) gets an x to close it early. Status
+                    // banners have none: resting on them opens the panel within a moment.
+                    if t.image.is_some() || t.open.is_some() {
+                        let b = banner_close(cx, s, v.size[0]);
+                        let (x, y, k) = ((b.left + b.right) / 2.0, (b.top + b.bottom) / 2.0, 4.0 * s);
+                        let ink = self.brush(grey(0.55, a))?;
+                        rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
+                        rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
+                    }
                     text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
                     text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
                     match t.level {
@@ -3215,23 +3232,40 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "writes target/banner-preview.bmp: a notification banner, for the README picture"]
+    fn banner_close_sits_in_the_top_right_corner() {
+        let (cx, w) = (410.0, notch::alert_size(1)[0]);
+        for scale in [1.0, 2.0] {
+            let b = banner_close(cx * scale, scale, w);
+            assert!(b.right <= (cx + w / 2.0) * scale && b.left > cx * scale, "inside the banner's right half");
+            assert!(b.top >= 0.0 && b.bottom <= 24.0 * scale, "in the top row, above the title");
+            assert!(b.right - b.left >= 20.0 * scale - 0.01, "easy to hit");
+        }
+    }
+
+    #[test]
+    #[ignore = "writes target/banner-preview.bmp: a notification banner (with its x) above a Bluetooth battery banner"]
     fn banner_preview() {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (500i32, 110i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Banner preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
-            let toast = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: None };
-            let view = View { mode: Mode::Alert, size: notch::alert_size(1), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
-                banner: Some(&toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
+            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()) };
+            let device = Toast { app: "Bluetooth · Đã kết nối".into(), title: "UGREEN HiTune Max5c · 80%".into(), body: String::new(), level: Some(0.8),
+                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None };
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            let mut sheet = Vec::new();
+            for (toast, lines) in [(&note, 1), (&device, 0)] {
+            let view = View { mode: Mode::Alert, size: notch::alert_size(lines), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
+                banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
-            let mut renderer = Renderer::new().unwrap();
-            renderer.grab = true;
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
-            let pixels = &renderer.grabbed[..];
+            sheet.extend_from_slice(&renderer.grabbed[..]);
+            }
+            let (pixels, h) = (&sheet[..], h * 2);
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
             bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
             bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());

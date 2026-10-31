@@ -16,6 +16,7 @@ name = "puw_notch"
 version = "1.0.24"
 dependencies = [
  "windows",
+ "windows-collections",
  "windows-core",
  "windows-numerics",
 ]
