@@ -29,16 +29,19 @@ const MAX_REQUEST: usize = 8 * 1024;
 pub enum Answer {
     Allow,
     Deny,
+    /// The option at this index of a question with choices.
+    Choice(usize),
     /// No answer from here: the app shows its own question.
     Ask,
 }
 
 impl Answer {
-    fn line(self) -> &'static [u8] {
+    fn line(self) -> Vec<u8> {
         match self {
-            Answer::Allow => b"allow\n",
-            Answer::Deny => b"deny\n",
-            Answer::Ask => b"ask\n",
+            Answer::Allow => b"allow\n".to_vec(),
+            Answer::Deny => b"deny\n".to_vec(),
+            Answer::Choice(i) => format!("choice:{i}\n").into_bytes(),
+            Answer::Ask => b"ask\n".to_vec(),
         }
     }
 }
@@ -48,6 +51,8 @@ pub struct Pending {
     pub app: String,
     pub title: String,
     pub detail: String,
+    /// Labels of a question with choices (empty: a plain Allow / Deny request).
+    pub options: Vec<String>,
     reply: Sender<Answer>,
 }
 
@@ -93,25 +98,25 @@ impl Server {
 /// One client: read its request, wait for the answer, reply, hang up.
 fn serve(pipe: HANDLE, queue: &Mutex<VecDeque<Pending>>, target: isize) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
-    let answer = read_request(pipe).map_or(Answer::Ask, |(app, title, detail)| {
+    let answer = read_request(pipe).map_or(Answer::Ask, |(app, title, detail, options)| {
         let (reply, rx) = channel();
         if let Ok(mut q) = queue.lock() {
-            q.push_back(Pending { app, title, detail, reply });
+            q.push_back(Pending { app, title, detail, options, reply });
         }
         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_APPROVE, WPARAM(0), LPARAM(0)); }
         rx.recv_timeout(TIMEOUT + Duration::from_secs(2)).unwrap_or(Answer::Ask)
     });
     unsafe {
         let mut written = 0u32;
-        let _ = WriteFile(pipe, Some(answer.line()), Some(&mut written), None);
+        let _ = WriteFile(pipe, Some(&answer.line()), Some(&mut written), None);
         let _ = FlushFileBuffers(pipe);
         let _ = DisconnectNamedPipe(pipe);
         let _ = CloseHandle(pipe);
     }
 }
 
-/// (app, title, detail) from the client's first line.
-fn read_request(pipe: HANDLE) -> Option<(String, String, String)> {
+/// (app, title, detail, options) from the client's first line.
+fn read_request(pipe: HANDLE) -> Option<(String, String, String, Vec<String>)> {
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 1024];
     while !bytes.contains(&b'\n') && bytes.len() < MAX_REQUEST {
@@ -125,11 +130,12 @@ fn read_request(pipe: HANDLE) -> Option<(String, String, String)> {
     parse_request(&String::from_utf8_lossy(&bytes))
 }
 
-pub fn parse_request(text: &str) -> Option<(String, String, String)> {
+pub fn parse_request(text: &str) -> Option<(String, String, String, Vec<String>)> {
     let json = JsonObject::Parse(&text.trim().into()).ok()?;
     let field = |k: &str| json.GetNamedString(&k.into()).map(|s| s.to_string()).unwrap_or_default();
     let (app, title, detail) = (field("app"), field("title"), field("detail"));
-    (!app.is_empty()).then_some((app, title, detail))
+    let options = json.GetNamedArray(&"options".into()).map(|a| (0..a.Size().unwrap_or(0)).filter_map(|i| a.GetStringAt(i).ok()).map(|s| s.to_string()).collect()).unwrap_or_default();
+    (!app.is_empty()).then_some((app, title, detail, options))
 }
 
 #[cfg(test)]
@@ -139,7 +145,10 @@ mod tests {
     #[test]
     fn a_request_is_one_line_of_json() {
         let r = parse_request("{\"app\":\"Claude\",\"title\":\"Bash\",\"detail\":\"rtk git status\"}\n");
-        assert_eq!(r, Some(("Claude".into(), "Bash".into(), "rtk git status".into())));
+        assert_eq!(r, Some(("Claude".into(), "Bash".into(), "rtk git status".into(), Vec::new())));
+        let q = parse_request("{\"app\":\"Claude\",\"title\":\"Q\",\"detail\":\"?\",\"options\":[\"Yes\",\"No\"]}");
+        assert_eq!(q.map(|r| r.3), Some(vec!["Yes".to_string(), "No".to_string()]));
+        assert_eq!(Answer::Choice(2).line(), b"choice:2\n".to_vec());
         assert_eq!(parse_request("not json"), None);
         assert_eq!(parse_request("{\"title\":\"x\"}"), None, "no app, no banner");
     }

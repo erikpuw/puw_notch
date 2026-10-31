@@ -582,10 +582,10 @@ impl App {
     fn show_banner(&mut self, t: Toast, ms: u32) -> bool {
         // Notifications (no status icon) with text grow to fit it, up to BANNER_MAX_LINES lines.
         // One banner at a time speaks for an approval; nothing else replaces it while it waits.
-        if self.approval.is_some() && !t.choice {
+        if self.approval.is_some() && t.choices.is_empty() {
             return false;
         }
-        let lines = if t.choice {
+        let lines = if !t.choices.is_empty() {
             2
         } else if t.icon.is_none() && !t.body.is_empty() {
             self.renderer.banner_lines(&t.body, self.scale, t.image.is_some()).min(notch::BANNER_MAX_LINES) as u8
@@ -609,7 +609,8 @@ impl App {
             return;
         }
         while let Some(p) = self.approve.next() {
-            let toast = Toast { app: p.app.clone(), title: p.title.clone(), body: p.detail.clone(), level: None, icon: Some(render::ICON_WARN), image: None, open: None, badge: None, choice: true };
+            let choices = if p.options.is_empty() { vec![tr("Đồng ý", "Allow").to_string(), tr("Không", "Deny").to_string()] } else { p.options.clone() };
+            let toast = Toast { app: p.app.clone(), title: p.title.clone(), body: p.detail.clone(), level: None, icon: Some(render::ICON_WARN), image: None, open: None, badge: None, choices };
             if self.show_banner(toast, approve::TIMEOUT.as_millis() as u32) {
                 self.approval = Some(p);
                 return;
@@ -1181,13 +1182,18 @@ impl App {
                     self.redraw();
                     return Some(LRESULT(0));
                 }
-                if self.approval.is_some() {
-                    let [size_w, size_h] = [self.notch.size()[0], self.notch.size()[1]];
-                    let [allow, deny] = render::approve_buttons(self.win.2 as f32 / 2.0, self.scale, size_w, size_h);
-                    if x >= allow.left && x <= allow.right && y >= allow.top && y <= allow.bottom {
-                        self.finish_approval(approve::Answer::Allow);
-                    } else if x >= deny.left && x <= deny.right && y >= deny.top && y <= deny.bottom {
-                        self.finish_approval(approve::Answer::Deny);
+                if let Some(p) = &self.approval {
+                    let plain = p.options.is_empty();
+                    let labels = self.banner.as_ref().map(|b| b.choices.clone()).unwrap_or_default();
+                    let size = self.notch.size();
+                    let hit = render::approve_buttons(self.win.2 as f32 / 2.0, self.scale, size[0], size[1], &labels)
+                        .iter().position(|b| x >= b.left && x <= b.right && y >= b.top && y <= b.bottom);
+                    if let Some(i) = hit {
+                        self.finish_approval(match (plain, i) {
+                            (true, 0) => approve::Answer::Allow,
+                            (true, _) => approve::Answer::Deny,
+                            (false, i) => approve::Answer::Choice(i),
+                        });
                     }
                     return Some(LRESULT(0));
                 }
@@ -1365,7 +1371,7 @@ fn app_icon(small: bool) -> HICON {
 }
 
 fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
-    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choice: false }
+    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new() }
 }
 
 fn on_off(on: bool) -> &'static str {

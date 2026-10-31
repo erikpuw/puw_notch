@@ -22,8 +22,8 @@ pub struct Toast {
     pub open: Option<String>,
     /// Short text at the right end of the title row: a Bluetooth device's battery.
     pub badge: Option<String>,
-    /// An approval request: the banner carries Allow / Deny buttons and waits for a click.
-    pub choice: bool,
+    /// An approval request or a question: the banner carries these buttons (labels) and waits for a click.
+    pub choices: Vec<String>,
 }
 
 /// One notification on the panel's Notifications page.
@@ -143,7 +143,7 @@ impl Reader {
                 let (title, body) = parse_payload(&payload);
                 if !title.is_empty() {
                     let open = parse_open(&aumid, &payload);
-                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload), open, badge: None, choice: false });
+                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload), open, badge: None, choices: Vec::new() });
                 }
             }
             (self.sql.finalize)(stmt);
