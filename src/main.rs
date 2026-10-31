@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod approve;
 mod audio;
 mod connectivity;
 mod music;
@@ -137,6 +138,9 @@ struct App {
     /// The Limits page's readings, what was already announced, alerts waiting for a free moment,
     /// and the app tab (followed by itself until the user picks one).
     usage: usage::Monitor,
+    /// Approval requests from other apps (see approve.rs) and the one on the banner now.
+    approve: approve::Server,
+    approval: Option<approve::Pending>,
     usage_watch: usage::Watch,
     usage_alerts: Vec<usage::Alert>,
     usage_tab: usize,
@@ -577,7 +581,13 @@ impl App {
     /// Returns whether it is showing.
     fn show_banner(&mut self, t: Toast, ms: u32) -> bool {
         // Notifications (no status icon) with text grow to fit it, up to BANNER_MAX_LINES lines.
-        let lines = if t.icon.is_none() && !t.body.is_empty() {
+        // One banner at a time speaks for an approval; nothing else replaces it while it waits.
+        if self.approval.is_some() && !t.choice {
+            return false;
+        }
+        let lines = if t.choice {
+            2
+        } else if t.icon.is_none() && !t.body.is_empty() {
             self.renderer.banner_lines(&t.body, self.scale, t.image.is_some()).min(notch::BANNER_MAX_LINES) as u8
         } else {
             0
@@ -590,6 +600,32 @@ impl App {
         unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
         self.kick();
         true
+    }
+
+    /// The next approval request as a banner with Allow / Deny. One that cannot show now (the panel
+    /// is open, a fullscreen game) is told to ask as usual.
+    fn approve_next(&mut self) {
+        if self.approval.is_some() {
+            return;
+        }
+        while let Some(p) = self.approve.next() {
+            let toast = Toast { app: p.app.clone(), title: p.title.clone(), body: p.detail.clone(), level: None, icon: Some(render::ICON_WARN), image: None, open: None, badge: None, choice: true };
+            if self.show_banner(toast, approve::TIMEOUT.as_millis() as u32) {
+                self.approval = Some(p);
+                return;
+            }
+            p.answer(approve::Answer::Ask);
+        }
+    }
+
+    /// The banner's request gets its answer (a click, or Ask when time ran out); the banner goes.
+    fn finish_approval(&mut self, answer: approve::Answer) {
+        let Some(p) = self.approval.take() else { return };
+        p.answer(answer);
+        unsafe { let _ = KillTimer(Some(self.hwnd), T_ALERT); }
+        self.notch.on_alert_end();
+        self.kick();
+        self.approve_next();
     }
 
     /// The oldest waiting limit alert, as a banner when one can show now (else it waits for the next tick).
@@ -1039,6 +1075,7 @@ impl App {
                 T_ALERT => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_ALERT); }
                     self.notch.on_alert_end();
+                    self.finish_approval(approve::Answer::Ask);
                     // Mouse resting on the banner when it ends: treat as a fresh visit.
                     if self.hover_in && self.notch.on_enter() {
                         unsafe { SetTimer(Some(self.hwnd), T_DWELL, DWELL_MS, None) };
@@ -1061,7 +1098,7 @@ impl App {
                     self.hover_in = true;
                     // Resting on a banner opens the panel, except a notification's: that one is
                     // there to be clicked (opens its app or picture).
-                    if self.notch.on_enter() && self.banner_target().is_none() {
+                    if self.notch.on_enter() && self.banner_target().is_none() && self.approval.is_none() {
                         unsafe { SetTimer(Some(self.hwnd), T_DWELL, DWELL_MS, None) };
                     }
                     self.kick();
@@ -1073,7 +1110,7 @@ impl App {
                 } else { None };
                 if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
             }
-            WM_SETCURSOR if self.banner_target().is_some() => {
+            WM_SETCURSOR if self.banner_target().is_some() || self.approval.is_some() => {
                 unsafe { let _ = SetCursor(LoadCursorW(None, IDC_HAND).ok()); }
                 return Some(LRESULT(1));
             }
@@ -1142,6 +1179,16 @@ impl App {
                     unsafe { if GetCapture() == self.hwnd { let _ = ReleaseCapture(); } }
                     self.release_stale_hover();
                     self.redraw();
+                    return Some(LRESULT(0));
+                }
+                if self.approval.is_some() {
+                    let [size_w, size_h] = [self.notch.size()[0], self.notch.size()[1]];
+                    let [allow, deny] = render::approve_buttons(self.win.2 as f32 / 2.0, self.scale, size_w, size_h);
+                    if x >= allow.left && x <= allow.right && y >= allow.top && y <= allow.bottom {
+                        self.finish_approval(approve::Answer::Allow);
+                    } else if x >= deny.left && x <= deny.right && y >= deny.top && y <= deny.bottom {
+                        self.finish_approval(approve::Answer::Deny);
+                    }
                     return Some(LRESULT(0));
                 }
                 let close = render::banner_close(self.win.2 as f32 / 2.0, self.scale, self.notch.size()[0]);
@@ -1219,6 +1266,10 @@ impl App {
                 }
             }
             // From the limits worker: a reading changed.
+            approve::WM_APPROVE => {
+                self.approve_next();
+                return Some(LRESULT(0));
+            }
             usage::WM_USAGE => {
                 let snap = self.usage.snapshot();
                 if !self.usage_tab_chosen {
@@ -1314,7 +1365,7 @@ fn app_icon(small: bool) -> HICON {
 }
 
 fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
-    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None }
+    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choice: false }
 }
 
 fn on_off(on: bool) -> &'static str {
@@ -1508,6 +1559,8 @@ fn run() -> windows::core::Result<()> {
             mic_muted: None,
             music: music::Music::start(hwnd),
             usage: usage::Monitor::start(hwnd),
+            approve: approve::Server::start(hwnd),
+            approval: None,
             usage_watch: usage::Watch::default(),
             usage_alerts: Vec::new(),
             usage_tab: 0,

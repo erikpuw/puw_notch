@@ -430,6 +430,15 @@ pub fn banner_close(cx: f32, scale: f32, width: f32) -> D2D_RECT_F {
     rect(x - half, y - half, x + half, y + half)
 }
 
+/// The Allow and Deny buttons of an approval banner (window px) for a banner `width` x `height`
+/// px (logical) centred on `cx`: along the bottom edge, right-aligned.
+pub fn approve_buttons(cx: f32, scale: f32, width: f32, height: f32) -> [D2D_RECT_F; 2] {
+    let right = cx + (width / 2.0 - 14.0) * scale;
+    let (top, bottom) = ((height - 30.0) * scale, (height - 8.0) * scale);
+    let (deny_w, allow_w, gap) = (64.0 * scale, 96.0 * scale, 8.0 * scale);
+    [rect(right - deny_w - gap - allow_w, top, right - deny_w - gap, bottom), rect(right - deny_w, top, right, bottom)]
+}
+
 /// Opacity of the page leaving and the page arriving at progress `t` (0..1) of a page change.
 /// The old page is gone before the new one shows, so their text never overlaps (ghosting).
 fn page_fades(t: f32) -> (f32, f32) {
@@ -1863,6 +1872,13 @@ impl Renderer {
                         rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
                         rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
                     }
+                    if t.choice {
+                        let [allow, deny] = approve_buttons(cx, s, v.size[0], v.size[1]);
+                        for (b, label, fill, ink) in [(allow, crate::i18n::tr("Đồng ý", "Allow"), color(GREEN.0, GREEN.1, GREEN.2, a), grey(0.0, a)), (deny, crate::i18n::tr("Không", "Deny"), grey(0.22, a), grey(1.0, a))] {
+                            rt.FillRoundedRectangle(&rounded(b, (b.bottom - b.top) / 2.0), &self.brush(fill)?);
+                            text(label, F_LABEL, b, center, ink)?;
+                        }
+                    }
                     text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
                     text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
                     match t.level {
@@ -3219,22 +3235,23 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "writes target/banner-preview.bmp: a notification banner (with its x), a Bluetooth battery banner and a charging banner"]
+    #[ignore = "writes target/banner-preview.bmp: a notification banner (with its x), a Bluetooth battery banner and a charging banner and an approval banner"]
     fn banner_preview() {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (500i32, 110i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Banner preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
-            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()), badge: None };
+            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()), badge: None, choice: false };
             let device = Toast { app: "Bluetooth".into(), title: "UGREEN HiTune Max5c".into(), body: "Đã kết nối".into(), level: None,
-                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None, badge: Some("80%".into()) };
+                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None, badge: Some("80%".into()), choice: false };
             let charging = Toast { app: "Pin".into(), title: "Đang sạc".into(), body: "Đã cắm sạc".into(), level: None,
-                icon: Some(ICON_PLUG), image: None, open: None, badge: Some("70%".into()) };
+                icon: Some(ICON_PLUG), image: None, open: None, badge: Some("70%".into()), choice: false };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
-            for (toast, lines) in [(&note, 1), (&device, 0), (&charging, 0)] {
+            let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "rtk git status".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choice: true };
+            for (toast, lines) in [(&note, 1), (&device, 0), (&charging, 0), (&approve, 2)] {
             let view = View { mode: Mode::Alert, size: notch::alert_size(lines), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hours: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
@@ -3243,7 +3260,7 @@ mod tests {
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
             sheet.extend_from_slice(&renderer.grabbed[..]);
             }
-            let (pixels, h) = (&sheet[..], h * 3);
+            let (pixels, h) = (&sheet[..], h * 4);
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
             bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
             bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
@@ -3563,7 +3580,7 @@ mod tests {
             note("Outlook", t("Lịch họp tuần", "Weekly planning"), t("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610290910),
             note("Spotify", t("Danh sách mới cho bạn", "New playlist for you"), t("Nhạc tập trung buổi sáng", "Morning focus"), 202610290805)];
         let toast = Toast { app: "Zalo".into(), title: t("Anh Minh", "Alex"), body: t("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop."),
-            level: None, icon: None, image: None, open: None, badge: None };
+            level: None, icon: None, image: None, open: None, badge: None, choice: false };
         let wx = State { place: Some(Place { name: t("Đà Nẵng", "Da Nang"), lat: 16.0, lon: 108.0 }),
             now: Some(Now { temp: 29.0, feels: 32.0, humidity: 78.0, wind: 9.0, sky: Sky::PartlyCloudy, day: true }), updated: Some(202610290930), ..State::default() };
         let health = Health::default();

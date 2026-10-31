@@ -62,6 +62,9 @@ features = [
     "Win32_Devices_Properties",
     "Win32_System_Diagnostics_ToolHelp",
     "Wdk_System_Threading",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
 ]
 
 [profile.release]

@@ -1,0 +1,146 @@
+//! Approval requests from other apps, answered on the notch: a hook of Claude Code
+//! (~/.claude/puw-notch-approve.ps1) connects to the pipe `\\.\pipe\puw-notch-approve`, sends one
+//! line of JSON (`app`, `title`, `detail`) and waits for one line back: `allow`, `deny`, or `ask`
+//! (do nothing, the app asks as usual). The pipe only speaks on this PC. Nothing is ever allowed
+//! without a click, and an unanswered request falls back to `ask` after TIMEOUT.
+
+use std::collections::VecDeque;
+use std::sync::mpsc::{channel, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use windows::core::w;
+use windows::Data::Json::JsonObject;
+use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WPARAM};
+use windows::Win32::Storage::FileSystem::{FlushFileBuffers, ReadFile, WriteFile, PIPE_ACCESS_DUPLEX};
+use windows::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT};
+use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
+
+/// Posted when a request waits in the queue.
+pub const WM_APPROVE: u32 = WM_APP + 13;
+
+/// How long a request waits for a click before the app is told to ask as usual (also the banner's time).
+pub const TIMEOUT: Duration = Duration::from_secs(50);
+
+/// Biggest request read (a line of a few hundred bytes).
+const MAX_REQUEST: usize = 8 * 1024;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Answer {
+    Allow,
+    Deny,
+    /// No answer from here: the app shows its own question.
+    Ask,
+}
+
+impl Answer {
+    fn line(self) -> &'static [u8] {
+        match self {
+            Answer::Allow => b"allow\n",
+            Answer::Deny => b"deny\n",
+            Answer::Ask => b"ask\n",
+        }
+    }
+}
+
+/// A request waiting for an answer.
+pub struct Pending {
+    pub app: String,
+    pub title: String,
+    pub detail: String,
+    reply: Sender<Answer>,
+}
+
+impl Pending {
+    pub fn answer(self, answer: Answer) {
+        let _ = self.reply.send(answer);
+    }
+}
+
+pub struct Server {
+    queue: Arc<Mutex<VecDeque<Pending>>>,
+}
+
+impl Server {
+    pub fn start(hwnd: HWND) -> Server {
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
+        let (shared, target) = (queue.clone(), hwnd.0 as isize);
+        std::thread::spawn(move || loop {
+            let pipe = unsafe {
+                CreateNamedPipeW(w!("\\\\.\\pipe\\puw-notch-approve"), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                    PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, None)
+            };
+            if pipe == INVALID_HANDLE_VALUE {
+                std::thread::sleep(Duration::from_secs(5));
+                continue;
+            }
+            let connected = unsafe { ConnectNamedPipe(pipe, None).is_ok() || GetLastError() == ERROR_PIPE_CONNECTED };
+            if !connected {
+                unsafe { let _ = CloseHandle(pipe); }
+                continue;
+            }
+            let (shared, pipe) = (shared.clone(), pipe.0 as isize);
+            std::thread::spawn(move || serve(HANDLE(pipe as _), &shared, target));
+        });
+        Server { queue }
+    }
+
+    pub fn next(&self) -> Option<Pending> {
+        self.queue.lock().ok()?.pop_front()
+    }
+}
+
+/// One client: read its request, wait for the answer, reply, hang up.
+fn serve(pipe: HANDLE, queue: &Mutex<VecDeque<Pending>>, target: isize) {
+    unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
+    let answer = read_request(pipe).map_or(Answer::Ask, |(app, title, detail)| {
+        let (reply, rx) = channel();
+        if let Ok(mut q) = queue.lock() {
+            q.push_back(Pending { app, title, detail, reply });
+        }
+        unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_APPROVE, WPARAM(0), LPARAM(0)); }
+        rx.recv_timeout(TIMEOUT + Duration::from_secs(2)).unwrap_or(Answer::Ask)
+    });
+    unsafe {
+        let mut written = 0u32;
+        let _ = WriteFile(pipe, Some(answer.line()), Some(&mut written), None);
+        let _ = FlushFileBuffers(pipe);
+        let _ = DisconnectNamedPipe(pipe);
+        let _ = CloseHandle(pipe);
+    }
+}
+
+/// (app, title, detail) from the client's first line.
+fn read_request(pipe: HANDLE) -> Option<(String, String, String)> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 1024];
+    while !bytes.contains(&b'\n') && bytes.len() < MAX_REQUEST {
+        let mut read = 0u32;
+        unsafe { ReadFile(pipe, Some(&mut chunk), Some(&mut read), None).ok()? };
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read as usize]);
+    }
+    parse_request(&String::from_utf8_lossy(&bytes))
+}
+
+pub fn parse_request(text: &str) -> Option<(String, String, String)> {
+    let json = JsonObject::Parse(&text.trim().into()).ok()?;
+    let field = |k: &str| json.GetNamedString(&k.into()).map(|s| s.to_string()).unwrap_or_default();
+    let (app, title, detail) = (field("app"), field("title"), field("detail"));
+    (!app.is_empty()).then_some((app, title, detail))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_request_is_one_line_of_json() {
+        let r = parse_request("{\"app\":\"Claude\",\"title\":\"Bash\",\"detail\":\"rtk git status\"}\n");
+        assert_eq!(r, Some(("Claude".into(), "Bash".into(), "rtk git status".into())));
+        assert_eq!(parse_request("not json"), None);
+        assert_eq!(parse_request("{\"title\":\"x\"}"), None, "no app, no banner");
+    }
+}
