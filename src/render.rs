@@ -2686,7 +2686,7 @@ impl Renderer {
                     let stale = v.weather.is_stale(v.list.now);
                     let when = format!("{}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100);
                     let ink = if stale { solid(ORANGE, a) } else { grey(0.4, a) };
-                    text(&format!("Open-Meteo · {when}"), F_LABEL, rect(cx + 36.0 * s, (DOTS_Y - 5.0) * s, r - SIDE * s, (DOTS_Y + 10.0) * s), trail, ink)?;
+                    text(&format!("Open-Meteo · {when}"), F_LABEL, rect(cx + 36.0 * s, (DOTS_Y - 8.0) * s, r - 32.0 * s, (DOTS_Y + 7.0) * s), trail, ink)?;
                 }
             }
             if let Err(e) = rt.EndDraw(None, None) {
