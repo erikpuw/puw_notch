@@ -110,6 +110,42 @@ pub struct Now {
     pub day: bool,
 }
 
+/// One hour of the forecast.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hour {
+    /// Local hour of day, 0..23.
+    pub hour: u8,
+    /// °C.
+    pub temp: f32,
+    /// Chance of rain, %.
+    pub rain: u8,
+    /// km/h.
+    pub wind: f32,
+    pub sky: Sky,
+    pub day: bool,
+}
+
+/// Rain at or above this chance (%) is told as coming.
+const RAIN_LIKELY: u8 = 50;
+/// Wind at or above this (km/h) is told as strong.
+const WIND_STRONG: f32 = 30.0;
+
+/// The next 24 hours in one short line: when rain is likely (or none), the daytime high, strong wind.
+pub fn outlook(hours: &[Hour], unit: Unit) -> String {
+    let mut parts = Vec::new();
+    match hours.iter().find(|h| h.rain >= RAIN_LIKELY) {
+        Some(h) => parts.push(format!("{} {}h {}%", tr("Mưa", "Rain"), h.hour, h.rain)),
+        None => parts.push(tr("Không mưa", "No rain").to_string()),
+    }
+    if let Some(h) = hours.iter().filter(|h| h.day).max_by(|a, b| a.temp.total_cmp(&b.temp)) {
+        parts.push(format!("{} {}°", tr("Nắng", "High"), unit.number(h.temp)));
+    }
+    if let Some(h) = hours.iter().filter(|h| h.wind >= WIND_STRONG).max_by(|a, b| a.wind.total_cmp(&b.wind)) {
+        parts.push(format!("{} {:.0} km/h", tr("Gió", "Wind"), h.wind));
+    }
+    parts.join(" · ")
+}
+
 /// Conditions older than this (minutes) are shown as old: a failed fetch keeps the last ones.
 pub const STALE_MIN: i64 = 90;
 
@@ -117,6 +153,8 @@ pub const STALE_MIN: i64 = 90;
 pub struct State {
     pub place: Option<Place>,
     pub now: Option<Now>,
+    /// The next 24 hours from this one, fetched with `now`.
+    pub hours: Vec<Hour>,
     /// When `now` was fetched, local yyyymmddHHMM.
     pub updated: Option<u64>,
     /// A lookup is running.
@@ -161,7 +199,7 @@ impl Weather {
                         if let Ok(mut s) = shared.lock() {
                             s.looking = false;
                             match found.clone() {
-                                Some(p) => (s.place, s.now, s.updated, s.not_found) = (Some(p), None, None, None),
+                                Some(p) => (s.place, s.now, s.hours, s.updated, s.not_found) = (Some(p), None, Vec::new(), None, None),
                                 None => s.not_found = Some(city),
                             }
                         }
@@ -177,12 +215,12 @@ impl Weather {
                         wait = REFRESH;
                         if let Some(p) = place {
                             match current(&p) {
-                                Some(now) => {
+                                Some((now, hours)) => {
                                     last = Some(Instant::now());
                                     if let Ok(mut s) = shared.lock() {
                                         // The city may have been switched or switched off while this was fetched.
                                         if s.place.as_ref() == Some(&p) {
-                                            (s.now, s.updated) = (Some(now), Some(crate::system::now_stamp()));
+                                            (s.now, s.hours, s.updated) = (Some(now), hours, Some(crate::system::now_stamp()));
                                         }
                                     }
                                     notify();
@@ -405,22 +443,43 @@ fn find_place(typed: &str) -> Option<Place> {
     places.into_iter().nth(pick).map(|(p, _)| p)
 }
 
-fn current(p: &Place) -> Option<Now> {
+/// The conditions now and the next 24 hours, in one request.
+fn current(p: &Place) -> Option<(Now, Vec<Hour>)> {
     let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day&timezone=auto",
+        "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day&hourly=temperature_2m,precipitation_probability,wind_speed_10m,weather_code,is_day&forecast_hours=24&timezone=auto",
         p.lat, p.lon
     );
     let body = JsonObject::Parse(&HSTRING::from(fetch(&url)?)).ok()?;
     let c = body.GetNamedObject(&HSTRING::from("current")).ok()?;
     let num = |k: &str| c.GetNamedNumber(&HSTRING::from(k)).ok();
-    Some(Now {
+    let now = Now {
         temp: num("temperature_2m")? as f32,
         feels: num("apparent_temperature")? as f32,
         humidity: num("relative_humidity_2m")? as f32,
         wind: num("wind_speed_10m")? as f32,
         sky: sky(num("weather_code")? as u32),
         day: num("is_day")? != 0.0,
-    })
+    };
+    Some((now, hourly(&body).unwrap_or_default()))
+}
+
+/// Open-Meteo's `hourly` columns as rows. A missing rain chance (null) counts as 0.
+fn hourly(body: &JsonObject) -> Option<Vec<Hour>> {
+    let h = body.GetNamedObject(&HSTRING::from("hourly")).ok()?;
+    let col = |k: &str| h.GetNamedArray(&HSTRING::from(k)).ok();
+    let (time, temp, rain, wind, code, day) = (col("time")?, col("temperature_2m")?, col("precipitation_probability")?, col("wind_speed_10m")?, col("weather_code")?, col("is_day")?);
+    let n = |a: &windows::Data::Json::JsonArray, i: u32| a.GetNumberAt(i).ok();
+    (0..time.Size().ok()?).map(|i| {
+        let stamp = time.GetStringAt(i).ok()?.to_string();
+        Some(Hour {
+            hour: stamp.get(11..13)?.parse().ok()?,
+            temp: n(&temp, i)? as f32,
+            rain: n(&rain, i).unwrap_or(0.0) as u8,
+            wind: n(&wind, i)? as f32,
+            sky: sky(n(&code, i)? as u32),
+            day: n(&day, i)? != 0.0,
+        })
+    }).collect()
 }
 
 /// The place as one settings line: "lat,lon,name".
@@ -517,6 +576,18 @@ mod tests {
     }
 
     #[test]
+    fn outlook_tells_rain_heat_and_wind() {
+        let h = |hour: u8, temp: f32, rain: u8, wind: f32, day: bool| Hour { hour, temp, rain, wind, sky: Sky::Clear, day };
+        let dry = [h(9, 28.0, 10, 8.0, true), h(13, 33.0, 20, 12.0, true), h(21, 26.0, 0, 5.0, false)];
+        assert_eq!(outlook(&dry, Unit::C), format!("{} · {} 33°", tr("Không mưa", "No rain"), tr("Nắng", "High")));
+        let wet = [h(9, 28.0, 30, 8.0, true), h(15, 30.0, 70, 35.0, true), h(16, 29.0, 90, 40.0, true)];
+        let line = outlook(&wet, Unit::C);
+        assert!(line.contains("15h 70%"), "first likely hour, not the wettest: {line}");
+        assert!(line.ends_with("40 km/h"), "strongest wind: {line}");
+        assert!(!outlook(&[h(2, 20.0, 0, 5.0, false)], Unit::C).contains('°'), "no daytime: no hottest hour");
+    }
+
+    #[test]
     fn every_sky_has_words_and_colours() {
         for sky in [Sky::Clear, Sky::PartlyCloudy, Sky::Cloudy, Sky::Fog, Sky::Rain, Sky::Snow, Sky::Storm] {
             assert!(!describe(sky).is_empty());
@@ -538,9 +609,11 @@ mod tests {
             assert!((8.0..24.0).contains(&p.lat) && (102.0..110.0).contains(&p.lon), "{typed} is in Vietnam: {p:?}");
         }
         assert!(find_place("zzzxqwv").is_none(), "nonsense is not found");
-        let now = current(&find_place("Đà Nẵng").unwrap()).expect("conditions");
+        let (now, hours) = current(&find_place("Đà Nẵng").unwrap()).expect("conditions");
         assert!((-5.0..50.0).contains(&now.temp) && (0.0..=100.0).contains(&now.humidity), "{now:?}");
-        println!("Da Nang now: {now:?}");
+        assert_eq!(hours.len(), 24, "{hours:?}");
+        println!("Da Nang now: {now:?}
+{}", outlook(&hours, Unit::C));
     }
 
 

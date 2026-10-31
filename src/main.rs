@@ -122,6 +122,8 @@ struct App {
     banner_at: Instant,
     /// The lyrics button was pressed in this visit of the open panel.
     lyrics_open: bool,
+    /// The 24-hour forecast shows in place of the details (Weather page).
+    hours_open: bool,
     /// The last USB change shown (device, change, when), to drop a repeat of it.
     usb_last: Option<(String, usb::Change, Instant)>,
     /// Last brightness Windows reported; the first report (sent on registering) is not a change.
@@ -247,6 +249,7 @@ impl App {
             phase: self.started.elapsed().as_secs_f32(),
             banner_age: self.banner_at.elapsed().as_secs_f32(),
             lyrics: self.lyrics_wide(),
+            hours: self.hours_open,
             hovered: self.hovered_button,
             page: self.page,
             leaving: self.page_anim.map(|(from, t0, dir)| (from, (t0.elapsed().as_secs_f32() / PAGE_MORPH_S).min(1.0), dir)),
@@ -348,9 +351,10 @@ impl App {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
-        // The lyrics view belongs to one visit of the open panel.
+        // The lyrics and the 24-hour forecast belong to one visit of the open panel.
         if self.notch.mode != Mode::Expanded {
             self.lyrics_open = false;
+            self.hours_open = false;
         }
         self.notch.set_wide(self.lyrics_wide());
         let mut moving = self.notch.step(dt);
@@ -663,6 +667,10 @@ impl App {
             Button::Seek => return, // Committed only by the captured press/drag/release gesture.
             Button::Lyrics => {
                 self.lyrics_open = !self.lyrics_open;
+                self.kick();
+            }
+            Button::Hours => {
+                self.hours_open = !self.hours_open;
                 self.kick();
             }
             Button::PagePrev | Button::PageNext => {
@@ -1433,6 +1441,7 @@ fn run() -> windows::core::Result<()> {
             banner: None,
             banner_at: Instant::now(),
             lyrics_open: false,
+            hours_open: false,
             usb_last: None,
             last_brightness: None,
             audio: audio::Audio::new(),

@@ -68,6 +68,8 @@ pub struct View<'a> {
     pub banner_age: f32,
     /// The lyrics are open beside the player (Music page, open panel): the panel is wider.
     pub lyrics: bool,
+    /// The 24-hour forecast shows in place of the details (Weather page).
+    pub hours: bool,
     pub hovered: Option<Button>,
     pub page: Page,
     /// Page switch in progress: (page sliding out, progress 0..1, direction +1 next / -1 previous).
@@ -161,6 +163,8 @@ pub enum Button {
     Seek,
     /// Show / hide the lyrics beside the player.
     Lyrics,
+    /// Show / hide the 24-hour forecast beside the weather.
+    Hours,
     PagePrev,
     PageNext,
     ListInput,
@@ -196,6 +200,7 @@ impl Button {
             Self::Previous => tr("Bài trước", "Previous"), Self::PlayPause => tr("Phát / Tạm dừng", "Play / Pause"),
             Self::Next => tr("Bài tiếp theo", "Next"), Self::Seek => tr("Bấm để tua", "Click to seek"),
             Self::Lyrics => tr("Lời bài hát", "Lyrics"),
+            Self::Hours => tr("Dự báo 24 giờ", "24-hour forecast"),
             _ => "",
         }
     }
@@ -238,12 +243,18 @@ const ROW_Y: f32 = 84.0;
 /// A task row is also its tick, edit and delete buttons: 26 px high, above macOS' 20 px minimum.
 const ROW_H: f32 = 26.0;
 pub const LIST_ROWS: usize = 3;
-/// Weather page: the two unit chips (°C, °F) after the temperature: left edge from the content's
-/// left, top, width of each and height.
-const UNIT_X: f32 = 134.0;
-const UNIT_Y: f32 = 97.0;
-const UNIT_W: f32 = 32.0;
-const UNIT_H: f32 = 22.0;
+/// Weather page, from the content's left: the temperature and the sky in words beside the icon,
+/// the two unit chips (°C, °F) under the words (left, top, width of each, height), the column of
+/// feels like / humidity / wind (left, width); the 24-hour strip takes the column's place when open.
+const TEMP_X: f32 = 64.0;
+const UNIT_X: f32 = TEMP_X;
+const UNIT_Y: f32 = 134.0;
+const UNIT_W: f32 = 28.0;
+const UNIT_H: f32 = 18.0;
+const DETAIL_X: f32 = 150.0;
+const DETAIL_W: f32 = 140.0;
+/// The 24h button before the x on the city line.
+const HOURS_BTN_W: f32 = 38.0;
 /// Width of the text at the right of the city line ("Open-Meteo · 14:30"), and so where the
 /// button that switches the weather off sits: just before it.
 const CREDIT_W: f32 = 126.0;
@@ -343,6 +354,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             // once there is one (`rows` = 1).
             if rows > 0 {
                 out.push((Button::CityOff, r(cl + cw - CREDIT_W - 28.0, 66.0, 24.0, 24.0)));
+                out.push((Button::Hours, r(cl + cw - CREDIT_W - 32.0 - HOURS_BTN_W, 68.0, HOURS_BTN_W, 20.0)));
                 for (k, unit) in [weather::Unit::C, weather::Unit::F].into_iter().enumerate() {
                     out.push((Button::Unit(unit), r(cl + UNIT_X + k as f32 * UNIT_W, UNIT_Y, UNIT_W, UNIT_H)));
                 }
@@ -1557,6 +1569,14 @@ impl Renderer {
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();
+        // Every third hour of the 24-hour strip with its icon, while it shows on the Weather page.
+        let hour_lines: Vec<_> = if page == Some(Page::Weather) && v.hours {
+            v.weather.hours.iter().step_by(3).filter_map(|h| {
+                let ic = icons::weather(h.sky, h.day);
+                let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
+                Some((*h, ic, geoms))
+            }).collect()
+        } else { Vec::new() };
         // The pill's battery icon (Lucide) with its paths as geometry.
         let battery_line = (|| {
             let b = v.battery?;
@@ -2391,7 +2411,7 @@ impl Renderer {
                                     // City on the left; on the right where the data comes from (Open-Meteo asks
                                     // for the credit, CC BY 4.0) and when it was fetched, "old" when stale; the
                                     // x before it switches the weather off.
-                                    text(&place.name, F_TITLE, rect(cl, 68.0 * s, cr - (CREDIT_W + 32.0) * s, 88.0 * s), lead, grey(1.0, a))?;
+                                    text(&place.name, F_TITLE, rect(cl, 68.0 * s, cr - (CREDIT_W + 36.0 + HOURS_BTN_W) * s, 88.0 * s), lead, grey(1.0, a))?;
                                     let fetched = wx.updated.map_or(String::new(), |u| format!(" · {}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100));
                                     let credit = if stale { solid(ORANGE, a) } else { grey(0.5, a) };
                                     text(&format!("Open-Meteo{fetched}"), F_LABEL, rect(cr - CREDIT_W * s, 68.0 * s, cr, 88.0 * s), trail, credit)?;
@@ -2400,16 +2420,23 @@ impl Renderer {
                                         hover_disc(Button::CityOff)?;
                                         text(ICON_CLOSE, F_SMALL_ICON, ob, center, if hot { color(1.0, 0.45, 0.4, a) } else { grey(0.55, a) })?;
                                     }
-                                    // The icon, then the temperature and the sky in words.
-                                    draw_wx_icon(ic, geoms, cl + 4.0 * s, 92.0 * s, 56.0 * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
-                                    // The big temperature, shrunk to fit before the unit chips when it is long
+                                    // The 24h button, lit while the forecast shows.
+                                    let open = v.hours && !hour_lines.is_empty();
+                                    if let (Some(hb), false) = (rect_of(Button::Hours), wx.hours.is_empty()) {
+                                        let lit = if open { 0.22 } else if hovered == Some(Button::Hours) { 0.14 } else { 0.08 };
+                                        rt.FillRoundedRectangle(&rounded(hb, 10.0 * s), &self.brush(grey(1.0, a * lit))?);
+                                        text("24h", F_LABEL, hb, center, grey(if open { 1.0 } else { 0.75 }, a))?;
+                                    }
+                                    // The icon, then the temperature and the sky in words, the unit chips under them.
+                                    draw_wx_icon(ic, geoms, cl + 4.0 * s, 90.0 * s, 52.0 * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
+                                    // The big temperature, shrunk to fit before the column beside when it is long
                                     // ("−128°"), turning about its left end.
                                     let temp = format!("{}°", v.unit.number(n.temp));
-                                    let (tx, ty) = (cl + 72.0 * s, 108.0 * s);
-                                    let k = (UNIT_X - 72.0 - 4.0) * s / width(&temp, F_BIG);
+                                    let (tx, ty) = (cl + TEMP_X * s, 104.0 * s);
+                                    let k = (DETAIL_X - TEMP_X - 8.0) * s / width(&temp, F_BIG);
                                     let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                                     rt.SetTransform(&(translate(-tx, -ty) * scaling(k.min(1.0)) * translate(tx, ty) * base));
-                                    text(&temp, F_BIG, rect(tx, 92.0 * s, tx + width(&temp, F_BIG) + 6.0 * s, 124.0 * s), lead, grey(1.0, a * fade))?;
+                                    text(&temp, F_BIG, rect(tx, 88.0 * s, tx + width(&temp, F_BIG) + 6.0 * s, 120.0 * s), lead, grey(1.0, a * fade))?;
                                     rt.SetTransform(&base);
                                     // The unit to show it in: one capsule holding both, the chosen one lit, the
                                     // other lighting on hover.
@@ -2424,17 +2451,37 @@ impl Renderer {
                                         }
                                         text(unit.symbol(), F_LABEL, chip, center, grey(if on { 1.0 } else { 0.55 }, a))?;
                                     }
-                                    text(weather::describe(n.sky), F_BODY, rect(cl + 72.0 * s, 124.0 * s, cl + 210.0 * s, 144.0 * s), lead, grey(0.7, a))?;
-                                    // Feels like, humidity, wind.
-                                    let rows = [
-                                        (tr("Cảm giác", "Feels like"), format!("{}{}", v.unit.number(n.feels), v.unit.symbol())),
-                                        (tr("Độ ẩm", "Humidity"), format!("{:.0}%", n.humidity)),
-                                        (tr("Gió", "Wind"), format!("{:.0} km/h", n.wind)),
-                                    ];
-                                    for (k, (label, value)) in rows.iter().enumerate() {
-                                        let y = (96.0 + k as f32 * 20.0) * s;
-                                        text(label, F_LABEL, rect(cl + 222.0 * s, y, cl + 292.0 * s, y + 18.0 * s), lead, grey(0.55, a))?;
-                                        text(value, F_LABEL, rect(cl + 288.0 * s, y, cr, y + 18.0 * s), trail, grey(0.95, a))?;
+                                    text(weather::describe(n.sky), F_BODY, rect(cl + TEMP_X * s, 116.0 * s, cl + (DETAIL_X - 4.0) * s, 132.0 * s), lead, grey(0.7, a))?;
+                                    let (dl, dr) = (cl + DETAIL_X * s, cl + (DETAIL_X + DETAIL_W) * s);
+                                    if open {
+                                        // The 24h button swaps the details for the next 24 hours, every third hour:
+                                        // time, icon, temperature, and the chance of rain when there is one.
+                                        let sw = (cr - dl) / hour_lines.len() as f32;
+                                        for (i, (h, ic, geoms)) in hour_lines.iter().enumerate() {
+                                            let x = dl + i as f32 * sw;
+                                            text(&format!("{}h", h.hour), F_LABEL, rect(x, 86.0 * s, x + sw, 102.0 * s), center, grey(0.55, a * fade))?;
+                                            draw_wx_icon(ic, geoms, x + sw / 2.0 - 10.0 * s, 103.0 * s, 20.0 * s, Some(weather::tints(h.sky, h.day)), a * fade, 9.0)?;
+                                            text(&format!("{}°", v.unit.number(h.temp)), F_LABEL, rect(x, 124.0 * s, x + sw, 140.0 * s), center, grey(1.0, a * fade))?;
+                                            if h.rain >= 20 {
+                                                text(&format!("{}%", h.rain), F_LABEL, rect(x, 138.0 * s, x + sw, 154.0 * s), center, solid(BLUE, a * fade))?;
+                                            }
+                                        }
+                                    } else {
+                                        // Feels like, humidity, wind, close beside the temperature.
+                                        let rows = [
+                                            (tr("Cảm giác", "Feels like"), format!("{}{}", v.unit.number(n.feels), v.unit.symbol())),
+                                            (tr("Độ ẩm", "Humidity"), format!("{:.0}%", n.humidity)),
+                                            (tr("Gió", "Wind"), format!("{:.0} km/h", n.wind)),
+                                        ];
+                                        for (k, (label, value)) in rows.iter().enumerate() {
+                                            let y = (86.0 + k as f32 * 16.0) * s;
+                                            text(label, F_LABEL, rect(dl, y, dr - 60.0 * s, y + 18.0 * s), lead, grey(0.55, a))?;
+                                            text(value, F_LABEL, rect(dl, y, dr, y + 18.0 * s), trail, grey(0.95, a))?;
+                                        }
+                                        // The next 24 hours in one line, after the unit chips: rain, the high, strong wind.
+                                        if !wx.hours.is_empty() {
+                                            text(&weather::outlook(&wx.hours, v.unit), F_LABEL, rect(cl + (UNIT_X + 2.0 * UNIT_W + 10.0) * s, (UNIT_Y + 1.0) * s, cr, (UNIT_Y + UNIT_H + 1.0) * s), lead, grey(0.75, a * fade))?;
+                                        }
                                     }
                                 }
                                 _ => {
@@ -2738,7 +2785,7 @@ mod tests {
             let note = Note { app: "Test".into(), id: "PuwNotch.NewIcon".into(), title: "Test".into(), body: String::new(), at: 0, open: None };
             let mut view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "12:00", date: "30/10",
                 battery: None, banner: None, music: Some(&track), live: false, robot: None, phase: 0.0, banner_age: 9.0,
-                lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: std::slice::from_ref(&note),
+                lyrics: false, hours: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: std::slice::from_ref(&note),
                 weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3059,7 +3106,7 @@ mod tests {
             let mut size = target(Mode::Expanded, false);
             size[0] += LYRICS_EXTRA_W;
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hours: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3100,7 +3147,7 @@ mod tests {
             size[0] += LYRICS_EXTRA_W;
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10",
                 battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track),
-                live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
+                live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hours: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3149,7 +3196,7 @@ mod tests {
             let mut sheet = Vec::new();
             for (items, counts, typed) in &frames {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
-                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
+                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hours: false, hovered: None, page: Page::Todo,
                     leaving: None, todos: items, notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
                     list: ListView { counts: *counts, remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3166,6 +3213,49 @@ mod tests {
             bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
             bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
             std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/todo-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "writes target/hours-preview.bmp: the Weather page, then with the 24-hour forecast in place of the details"]
+    fn hours_preview() {
+        use weather::{Hour, Now, Place, Sky, State};
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (820i32, 200i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Hours preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            // Sunny to 15h, then a shower with wind.
+            let hours: Vec<Hour> = (0..24).map(|i| {
+                let hour = ((14 + i) % 24) as u8;
+                let day = (6..18).contains(&hour);
+                let rain = match hour { 16 => 40, 17 => 70, 18 => 60, _ => 0 };
+                let sky = if rain >= 50 { Sky::Rain } else if day { Sky::Clear } else { Sky::PartlyCloudy };
+                Hour { hour, temp: 31.0 - (i as f32 - 1.0).abs() * 0.5, rain, wind: if hour == 17 { 34.0 } else { 12.0 }, sky, day }
+            }).collect();
+            let st = State { place: Some(Place { name: "Đà Nẵng".into(), lat: 16.0, lon: 108.0 }),
+                now: Some(Now { temp: 30.0, feels: 33.0, humidity: 82.0, wind: 11.0, sky: Sky::PartlyCloudy, day: true }), hours, updated: Some(202610311340), ..State::default() };
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            let mut sheet = Vec::new();
+            for open in [false, true] {
+                let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "13:40", date: "T7, 31/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
+                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hours: open, hovered: None, page: Page::Weather,
+                    leaving: None, todos: &[], notes: &[], weather: &st, page_age: 9.0, unit: weather::Unit::C,
+                    list: ListView { counts: (0, 0), remind_before: 15, now: 202610311340, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                sheet.extend_from_slice(&renderer.grabbed[..]);
+            }
+            let sh = h * 2;
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + sheet.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-sh).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/hours-preview.bmp"), bytes).unwrap();
             DestroyWindow(hwnd).unwrap();
         }
     }
@@ -3218,7 +3308,7 @@ mod tests {
             let n = frames.len() as i32;
             for (mode, music, page, st, typed, unit) in &frames {
                 let view = View { mode: *mode, size: target(*mode, *music), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
-                    banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: *page,
+                    banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hours: false, hovered: None, page: *page,
                     leaving: None, todos: &[], notes: &[], weather: st, page_age: 9.0, unit: *unit,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3268,7 +3358,7 @@ mod tests {
             let mut sheet = Vec::new();
             for (toast, lines) in [(&note, 1), (&device, 0), (&charging, 0)] {
             let view = View { mode: Mode::Alert, size: notch::alert_size(lines), time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
-                banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
+                banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hours: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3304,7 +3394,7 @@ mod tests {
             for (i, t) in [0.0f32, 1.5, 3.0, 4.5].into_iter().enumerate() {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16", date: "T5, 29/10",
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
-                    phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
+                    phase: t, banner_age: 0.0, lyrics: false, hours: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 // The first frame waits for the cover and the fade-in.
@@ -3349,7 +3439,7 @@ mod tests {
                 if lyrics { size[0] += LYRICS_EXTRA_W; }
                 let view = |phase: f32| View { mode, size, time: "23:16", date: "T5, 29/10",
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
-                    phase, banner_age: 0.0, lyrics, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C,
+                    phase, banner_age: 0.0, lyrics, hours: false, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
                 // Settle first: the cover loads and the Music page's glow fades in.
@@ -3396,7 +3486,13 @@ mod tests {
             let place = Some(Place { name: "Đà Nẵng".into(), lat: 16.0, lon: 108.0 });
             let sky = |sky, temp: f32| State { place: place.clone(), now: Some(Now { temp, feels: temp + 3.0, humidity: 82.0, wind: 11.0, sky, day: true }), updated: Some(202610290140), ..State::default() };
             let (none, partly, rain) = (State::default(), sky(Sky::PartlyCloudy, 29.0), sky(Sky::Rain, 26.0));
-            let partly_30 = sky(Sky::PartlyCloudy, 30.0);
+            // With the next 24 hours: a shower late in the afternoon, so the outlook line has rain.
+            let hours: Vec<weather::Hour> = (0..24).map(|i| {
+                let hour = ((2 + i) % 24) as u8;
+                let rain = match hour { 16 => 40, 17 => 70, _ => 0 };
+                weather::Hour { hour, temp: if (6..18).contains(&hour) { 26.0 + (hour.min(13) - 6) as f32 } else { 25.0 }, rain, wind: 12.0, sky: if rain >= 50 { Sky::Rain } else { Sky::PartlyCloudy }, day: (6..18).contains(&hour) }
+            }).collect();
+            let partly_30 = State { hours, ..sky(Sky::PartlyCloudy, 30.0) };
             let mut health = Health::default();
             (health.water_on, health.sit_on) = (false, false);
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
@@ -3421,7 +3517,7 @@ mod tests {
                 if lyrics {
                     size[0] += LYRICS_EXTRA_W;
                 }
-                let view = View { mode, size, time, date, battery, banner: None, music, live, robot: None, phase: 1.3, banner_age: 0.0, lyrics, hovered: None, page,
+                let view = View { mode, size, time, date, battery, banner: None, music, live, robot: None, phase: 1.3, banner_age: 0.0, lyrics, hours: false, hovered: None, page,
                     leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
@@ -3460,7 +3556,7 @@ mod tests {
             let mut sheet = Vec::new();
             for (percent, charging, saver) in states {
                 let view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "16:00", date: "", battery: Some(Battery { percent, charging, saver }),
-                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music,
+                    banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hours: false, hovered: None, page: Page::Music,
                     leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3494,7 +3590,7 @@ mod tests {
                 note("Outlook", "Lịch họp tuần", "Phòng 3, 9:00 thứ Hai", 202610281730)];
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "16:00", date: "T5, 29/10",
                 battery: Some(Battery { percent: 79, charging: true, saver: false }), banner: None, music: None, live: false, robot: None,
-                phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: &notes,
+                phase: 0.0, banner_age: 0.0, lyrics: false, hours: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: &notes,
                 weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 202610291600, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3526,7 +3622,7 @@ mod tests {
                 can_previous: true, can_seek: true, ..Default::default() };
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
-                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: Some(Button::PlayPause), page: Page::Music,
+                banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hours: false, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
@@ -3652,7 +3748,7 @@ mod tests {
                 let mode = notch.mode;
                 let view = View { mode, size: notch.size(), time: "09:41", date: &date, battery: Some(Battery { percent: 82, charging, saver: false }),
                     banner: (mode == Mode::Alert).then_some(&toast), music: live.then_some(&track), live: notch.live, robot: eyes, phase: now,
-                    banner_age: (now - 19.6).max(0.0), lyrics: false,
+                    banner_age: (now - 19.6).max(0.0), lyrics: false, hours: false,
                     hovered: (mode == Mode::Expanded && (10.0..18.2).contains(&now)).then_some(Button::PageNext), page, leaving,
                     list: ListView { counts: (3, 1), remind_before: 15, now: 202610290941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     todos: &todos, notes: &notes, health: HealthView { h: &health, now: crate::todo::minutes(202610290941), minute_of_day: 9 * 60 + 41, settings: None },
