@@ -19,20 +19,16 @@ fn ring_colour(b: &Battery) -> (f32, f32, f32) {
 }
 
 impl Renderer {
-    /// A ring of diameter `d` (px) centred on `(x, y)`, filled to `b.percent`, at opacity `a`.
-    pub(super) fn draw_battery_ring(&self, (x, y): (f32, f32), d: f32, b: &Battery, a: f32) -> Result<()> {
+    /// A ring of diameter `d` (px) centred on `(x, y)` with a stroke of `width`: a grey track and
+    /// an arc of `fraction` (0..1) from the top clockwise with round ends, in `accent`.
+    pub(super) fn draw_ring(&self, (x, y): (f32, f32), d: f32, width: f32, fraction: f32, accent: (f32, f32, f32), a: f32) -> Result<()> {
         let rt = &self.rt;
-        let accent = ring_colour(b);
-        let width = d * 0.16;
         let radius = (d - width) / 2.0;
         let ring = D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: radius, radiusY: radius };
         let arc_colour = color(accent.0, accent.1, accent.2, a);
-        // Everything in the middle is drawn on a grid where the ring is 22 across.
-        let k = d / 22.0;
-        let at = |px: f32, py: f32| Vector2 { X: x + px * k, Y: y + py * k };
         unsafe {
             rt.DrawEllipse(&ring, &self.brush(grey(0.3, a))?, width, None);
-            let fraction = (b.percent.min(100) as f32 / 100.0).max(0.03);
+            let fraction = fraction.clamp(0.0, 1.0).max(0.03);
             if fraction >= 1.0 {
                 rt.DrawEllipse(&ring, &self.brush(arc_colour)?, width, None);
             } else {
@@ -52,6 +48,18 @@ impl Renderer {
                 sink.Close()?;
                 rt.DrawGeometry(&geo, &self.brush(arc_colour)?, width, &self.round);
             }
+        }
+        Ok(())
+    }
+
+    /// The battery ring of diameter `d` (px) centred on `(x, y)`, filled to `b.percent`, at opacity `a`.
+    pub(super) fn draw_battery_ring(&self, (x, y): (f32, f32), d: f32, b: &Battery, a: f32) -> Result<()> {
+        let rt = &self.rt;
+        self.draw_ring((x, y), d, d * 0.16, b.percent as f32 / 100.0, ring_colour(b), a)?;
+        // Everything in the middle is drawn on a grid where the ring is 22 across.
+        let k = d / 22.0;
+        let at = |px: f32, py: f32| Vector2 { X: x + px * k, Y: y + py * k };
+        unsafe {
             let white = self.brush(grey(0.95, a))?;
             if b.charging {
                 let geo = self.factory.CreatePathGeometry()?;
