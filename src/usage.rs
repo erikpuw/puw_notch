@@ -54,7 +54,7 @@ impl App {
     /// What to do when there is nothing to show.
     pub fn open_hint(self) -> &'static str {
         match self {
-            App::Claude => tr("Mở Claude Code (terminal) và nhắn một tin để tính", "Open Claude Code (terminal) and send a message to count"),
+            App::Claude => tr("Mở app Claude (hoặc Claude Code ở terminal) để tính", "Open the Claude app (or Claude Code in a terminal) to count"),
             App::Codex => tr("Mở Codex và dùng một lần để tính", "Open Codex and use it once to count"),
             App::Antigravity => tr("Mở Antigravity để tính", "Open Antigravity to count"),
         }
@@ -188,6 +188,24 @@ pub fn parse_antigravity(text: &str) -> Vec<Bar> {
     out
 }
 
+/// The Claude desktop app's own history of its plan usage (`plan-usage-history.json` in its data
+/// folder: `{version, samples: [{t (ms), org, u: {fh: 5-hour %, sd: weekly %, ...}}]}`, a sample
+/// every ~15 minutes while the app runs): the last sample, as (time in seconds, bars). It has no
+/// reset times.
+pub fn parse_claude_history(text: &str) -> Option<(i64, Vec<Bar>)> {
+    let samples = JsonObject::Parse(&key(text)).ok()?.GetNamedArray(&key("samples")).ok()?;
+    let last = samples.GetObjectAt(samples.Size().ok()?.checked_sub(1)?).ok()?;
+    let used = obj(&last, "u")?;
+    let bars: Vec<Bar> = [("fh", false), ("sd", true)]
+        .into_iter()
+        .filter_map(|(k, weekly)| {
+            let label = if weekly { tr("Tuần", "Week") } else { tr("5 giờ", "5 h") };
+            Some(Bar { label: label.to_string(), weekly, used: num(&used, k)? as f32, resets_at: 0 })
+        })
+        .collect();
+    (!bars.is_empty()).then_some(((num(&last, "t")? / 1000.0) as i64, bars))
+}
+
 /// A window that already started over reads zero until the next use shows its new reset time.
 fn rolled(mut bars: Vec<Bar>, now: i64) -> Vec<Bar> {
     for b in &mut bars {
@@ -204,9 +222,41 @@ fn some(bars: Vec<Bar>) -> Option<Vec<Bar>> {
     (!bars.is_empty()).then_some(bars)
 }
 
-fn read_claude() -> Option<Vec<Bar>> {
+/// The app's last sample is trusted for this long (it takes one every 15 minutes while it runs).
+const CLAUDE_SAMPLE_MAX_AGE: i64 = 30 * 60;
+
+/// Claude Code's status-line file (as (time written, bars)): it has the reset times.
+fn read_claude_status_line() -> Option<(i64, Vec<Bar>)> {
     let path = PathBuf::from(std::env::var_os("APPDATA")?).join("PuwNotch").join("claude-limits.json");
-    some(parse_claude(&std::fs::read_to_string(path).ok()?))
+    let written = std::fs::metadata(&path).ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    Some((written, some(parse_claude(&std::fs::read_to_string(path).ok()?))?))
+}
+
+/// The desktop app's usage history, wherever its data folder is (its name carries the package id).
+fn read_claude_app() -> Option<(i64, Vec<Bar>)> {
+    let data = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Claude-Data");
+    children(&data).into_iter().find_map(|d| parse_claude_history(&std::fs::read_to_string(d.join("plan-usage-history.json")).ok()?))
+}
+
+/// Whichever of the two readings is newer wins; the desktop app's, which has no reset times,
+/// borrows those of the status line while they are still ahead.
+fn newest_claude(status_line: Option<(i64, Vec<Bar>)>, app: Option<(i64, Vec<Bar>)>, now: i64) -> Option<Vec<Bar>> {
+    let app = app.filter(|(at, _)| now - at <= CLAUDE_SAMPLE_MAX_AGE);
+    match (status_line, app) {
+        (Some((_, bars)), None) => Some(rolled(bars, now)),
+        (Some((written, bars)), Some((at, _))) if at <= written => Some(rolled(bars, now)),
+        (status_line, Some((_, mut bars))) => {
+            for bar in &mut bars {
+                bar.resets_at = status_line.iter().flat_map(|(_, b)| b).find(|o| o.label == bar.label && o.resets_at > now).map_or(0, |o| o.resets_at);
+            }
+            Some(bars)
+        }
+        (None, None) => None,
+    }
+}
+
+fn read_claude() -> Option<Vec<Bar>> {
+    newest_claude(read_claude_status_line(), read_claude_app(), now_secs())
 }
 
 /// Children of `dir` by name, newest (largest name) first: the logs sit in sessions/YYYY/MM/DD/rollout-<time>-....jsonl.
@@ -347,7 +397,7 @@ fn post_local(port: u16, path: &str, token: &str) -> Option<String> {
 
 fn read_all() -> Snapshot {
     let now = now_secs();
-    Snapshot { apps: [read_claude().map(|b| rolled(b, now)), read_codex().map(|b| rolled(b, now)), read_antigravity()] }
+    Snapshot { apps: [read_claude(), read_codex().map(|b| rolled(b, now)), read_antigravity()] }
 }
 
 /// The worker that keeps a `Snapshot` fresh and tells the window when it changes.
@@ -511,6 +561,28 @@ mod tests {
         for app in APPS {
             println!("{}: {:?}", app.name(), snap.get(app));
         }
+    }
+
+    #[test]
+    fn the_claude_app_keeps_a_history_of_its_usage() {
+        let (at, bars) = parse_claude_history(r#"{"version":2,"samples":[{"t":1000000,"org":"o","u":{"fh":5,"sd":1}},{"t":1793000000000,"org":"o","u":{"fh":36,"sd":8,"so":2}}]}"#).unwrap();
+        assert_eq!(at, 1_793_000_000);
+        assert_eq!((bars.len(), bars[0].used, bars[1].used, bars[1].weekly), (2, 36.0, 8.0, true), "the last sample; other keys are left out");
+        assert!(parse_claude_history(r#"{"version":2,"samples":[]}"#).is_none());
+    }
+
+    #[test]
+    fn the_newer_claude_reading_wins_and_borrows_reset_times() {
+        let bar = |label: &str, used, resets_at| Bar { label: label.into(), weekly: label == "Tuần", used, resets_at };
+        let hook = Some((100, vec![bar("5 giờ", 10.0, 5000), bar("Tuần", 4.0, 9000)]));
+        let app = Some((200, vec![bar("5 giờ", 30.0, 0), bar("Tuần", 8.0, 0)]));
+        let both = newest_claude(hook.clone(), app.clone(), 300).unwrap();
+        assert_eq!((both[0].used, both[0].resets_at, both[1].used, both[1].resets_at), (30.0, 5000, 8.0, 9000));
+        let late_hook = Some((250, hook.clone().unwrap().1));
+        assert_eq!(newest_claude(late_hook, app.clone(), 300).unwrap()[0].used, 10.0, "the status line is newer");
+        assert_eq!(newest_claude(None, app.clone(), 300).unwrap()[0].resets_at, 0);
+        assert!(newest_claude(None, app, 200 + CLAUDE_SAMPLE_MAX_AGE + 1).is_none(), "an old sample is not shown");
+        assert!(newest_claude(None, None, 300).is_none());
     }
 
     #[test]
