@@ -51,6 +51,12 @@ impl App {
         }
     }
 
+    /// Whether the app itself shows what is left (counting down from 100 %: Codex, Antigravity)
+    /// rather than what is used (Claude); the notch follows each app's own way.
+    pub fn counts_down(self) -> bool {
+        self != App::Claude
+    }
+
     /// What to do when there is nothing to show.
     pub fn open_hint(self) -> &'static str {
         match self {

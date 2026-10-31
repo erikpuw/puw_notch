@@ -61,6 +61,8 @@ impl Renderer {
         let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
         let tab = self.usage_tab.min(APPS.len() - 1);
         let now = usage::now_secs();
+        // What is shown (the app's own way: the part left, or the part used) and how full it looks.
+        let shown = |used: f32| if APPS[tab].counts_down() { 100.0 - used } else { used }.clamp(0.0, 100.0);
         unsafe {
             // The segmented control: one dark track, the chosen app lifted on it.
             let segment = |i: usize| tabs.iter().find(|(x, _)| *x == Button::UsageTab(i)).map(|(_, b)| *b);
@@ -107,8 +109,8 @@ impl Renderer {
                     let d = 56.0 * s;
                     let mid = (r.top + r.bottom) / 2.0;
                     let ring_x = r.left + PAD * s + d / 2.0;
-                    self.draw_ring((ring_x, mid), d, d * 0.15, bar.used / 100.0, ring_colour(bar.used), a)?;
-                    text(&format!("{}%", bar.used.round()), F_TITLE, rect(ring_x - d / 2.0, mid - d / 2.0, ring_x + d / 2.0, mid + d / 2.0), center, grey(1.0, a))?;
+                    self.draw_ring((ring_x, mid), d, d * 0.15, shown(bar.used) / 100.0, ring_colour(bar.used), a)?;
+                    text(&format!("{}%", shown(bar.used).round()), F_TITLE, rect(ring_x - d / 2.0, mid - d / 2.0, ring_x + d / 2.0, mid + d / 2.0), center, grey(1.0, a))?;
                     let tx = ring_x + d / 2.0 + 10.0 * s;
                     let (_, window) = split_label(&bar.label);
                     let line = 17.0 * s;
@@ -135,10 +137,10 @@ impl Renderer {
                     let y = r.top + (30.0 + k as f32 * 29.0) * s;
                     let (_, window) = split_label(&bar.label);
                     text(window, F_LABEL, rect(inner.0, y, inner.1, y + 15.0 * s), lead, grey(0.7, a))?;
-                    text(&format!("{}%", bar.used.round()), F_LABEL, rect(inner.0, y, inner.1, y + 15.0 * s), trail, grey(1.0, a))?;
+                    text(&format!("{}%", shown(bar.used).round()), F_LABEL, rect(inner.0, y, inner.1, y + 15.0 * s), trail, grey(1.0, a))?;
                     let track = rect(inner.0, y + 18.0 * s, inner.1, y + 22.0 * s);
                     rt.FillRoundedRectangle(&rounded(track, 2.0 * s), &self.brush(grey(0.26, a))?);
-                    let to = track.left + (track.right - track.left) * (bar.used / 100.0).clamp(0.0, 1.0).max(0.03);
+                    let to = track.left + (track.right - track.left) * (shown(bar.used) / 100.0).max(0.03);
                     rt.FillRoundedRectangle(&rounded(rect(track.left, track.top, to, track.bottom), 2.0 * s), &self.brush(solid(ring_colour(bar.used), a))?);
                 }
                 x += width + GAP * s;
