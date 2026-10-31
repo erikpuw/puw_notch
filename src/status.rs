@@ -4,13 +4,20 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use windows::core::GUID;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CAPITAL, VK_NUMLOCK, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetKeyState, VIRTUAL_KEY, VK_CAPITAL, VK_LWIN, VK_NUMLOCK, VK_RWIN, VK_SHIFT, VK_SNAPSHOT, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Posted after Caps Lock / Num Lock is released, WPARAM = virtual key.
 pub const WM_LOCKKEY: u32 = WM_APP + 3;
 /// Posted on a volume key press taken from Windows, WPARAM = virtual key.
 pub const WM_VOLUMEKEY: u32 = WM_APP + 8;
+/// Posted when a screenshot starts (Print Screen, Win+Shift+S).
+pub const WM_SCREENSHOTKEY: u32 = WM_APP + 11;
+
+/// Print Screen, or S pressed while Win and Shift are held.
+fn is_screenshot_key(vk: u32, win: bool, shift: bool) -> bool {
+    vk == VK_SNAPSHOT.0 as u32 || (vk == u32::from(b'S') && win && shift)
+}
 
 static TARGET: AtomicIsize = AtomicIsize::new(0);
 /// Volume keys are taken from Windows (so its OSD stays away) and handled by the app.
@@ -27,6 +34,12 @@ unsafe extern "system" fn keyboard_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LR
         let hwnd = HWND(TARGET.load(Ordering::Relaxed) as _);
         if msg == WM_KEYUP && (vk == VK_CAPITAL.0 as u32 || vk == VK_NUMLOCK.0 as u32) {
             let _ = PostMessageW(Some(hwnd), WM_LOCKKEY, WPARAM(vk as usize), LPARAM(0));
+        }
+        if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+            let held = |k: VIRTUAL_KEY| GetAsyncKeyState(k.0 as i32) < 0;
+            if is_screenshot_key(vk, held(VK_LWIN) || held(VK_RWIN), held(VK_SHIFT)) {
+                let _ = PostMessageW(Some(hwnd), WM_SCREENSHOTKEY, WPARAM(0), LPARAM(0));
+            }
         }
         if TAKE_VOLUME_KEYS.load(Ordering::Relaxed) && is_volume_key(vk) {
             if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
@@ -81,6 +94,14 @@ mod tests {
     fn volume_keys() {
         assert!(is_volume_key(VK_VOLUME_UP.0 as u32) && is_volume_key(VK_VOLUME_DOWN.0 as u32) && is_volume_key(VK_VOLUME_MUTE.0 as u32));
         assert!(!is_volume_key(VK_CAPITAL.0 as u32));
+    }
+
+    #[test]
+    fn screenshot_keys() {
+        assert!(is_screenshot_key(VK_SNAPSHOT.0 as u32, false, false), "Print Screen");
+        assert!(is_screenshot_key(u32::from(b'S'), true, true), "Win+Shift+S");
+        assert!(!is_screenshot_key(u32::from(b'S'), true, false), "Win+S is search");
+        assert!(!is_screenshot_key(u32::from(b'S'), false, true), "Shift+S is typing");
     }
 
     #[test]

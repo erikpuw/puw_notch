@@ -15,7 +15,7 @@
 
 ## Features
 
-- **Notch**: clock, battery icon (three steps, a green bolt while charging, yellow in battery saver), music waves. Hover to open the panel. Shrinks when it would cover tabs or text underneath (to read what is under the pill, the notch stays out of screenshots, recordings and screen shares), hides during fullscreen games and videos.
+- **Notch**: clock, battery icon (three steps, a green bolt while charging, yellow in battery saver), music waves. Hover to open the panel. Shrinks when it would cover tabs or text underneath (to read what is under the pill, the notch stays out of recordings and screen shares; after Print Screen or Win+Shift+S it shows in screenshots for 30 s), hides during fullscreen games and videos.
 - **5 pages** (switch with ‹ ›):
   - **Music**: cover art, synced lyrics (LRCLIB), ⏮ ⏯ ⏭; click or drag the progress bar to seek, with a time preview while dragging and one command on release. Seeking uses Windows media controls when supported, the native iTunes adapter, or foobar2000's Default UI seekbar. Unsupported players and live sources without a duration keep seeking disabled; changing tracks cancels a drag. A lyrics button widens the panel to show scrolling lyrics; background and aurora line follow the cover's colours.
   - **Tasks**: one list for tasks and appointments. Type "Buy milk", "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Tick / edit / delete; overdue shows red with "Late". ⚙ picks an early reminder of 0–60 min, plus one on time.

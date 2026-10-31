@@ -147,7 +147,8 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
 
 /// The notch is left out of screen capture for good, so a capture of the screen sees what is under
 /// the pill. Set once: switching it per sample made the compositor redraw the screen twice and
-/// waited a frame on the UI thread. The price: the notch is not in screenshots or screen shares.
+/// waited a frame on the UI thread. Screenshot keys bring it back for a while (`show_in_capture`);
+/// screen recordings and shares do not show it.
 static LEFT_OUT: AtomicBool = AtomicBool::new(false);
 
 /// Called once for the notch window. Fails on Windows 10 before 2004 and some remote / driver
@@ -158,6 +159,13 @@ pub fn leave_out_of_capture(own: HWND) {
         Ok(()) => LEFT_OUT.store(true, Ordering::Relaxed),
         Err(e) => crate::system::log(&format!("cannot leave the notch out of screen capture ({e}); not sampling under the pill")),
     }
+}
+
+/// Back in screen capture while the user takes a screenshot; nothing under the pill is sampled
+/// until `leave_out_of_capture` again (the capture would hold the pill itself).
+pub fn show_in_capture(own: HWND) {
+    LEFT_OUT.store(false, Ordering::Relaxed);
+    let _ = unsafe { SetWindowDisplayAffinity(own, WDA_NONE) };
 }
 
 /// Edge pixels in a screen capture of the area under the pill.

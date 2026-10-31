@@ -15,7 +15,7 @@
 
 ## Tính năng
 
-- **Notch**: giờ, icon pin (3 nấc, sét xanh khi sạc, vàng khi tiết kiệm pin), sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi đè lên tab hoặc chữ bên dưới (để đọc được phần dưới pill, notch không hiện trong ảnh chụp, quay hay chia sẻ màn hình); khi chơi game / xem phim toàn màn hình, thu mượt về mép trên rồi ẩn hẳn, thoát toàn màn hình thì bung lại.
+- **Notch**: giờ, icon pin (3 nấc, sét xanh khi sạc, vàng khi tiết kiệm pin), sóng nhạc. Rê chuột để mở bảng. Tự thu mini khi đè lên tab hoặc chữ bên dưới (để đọc được phần dưới pill, notch không hiện khi quay hay chia sẻ màn hình; bấm PrtScn hoặc Win+Shift+S thì notch hiện trong ảnh chụp 30 giây); khi chơi game / xem phim toàn màn hình, thu mượt về mép trên rồi ẩn hẳn, thoát toàn màn hình thì bung lại.
 - **5 trang** (chuyển bằng ‹ ›):
   - **Nhạc**: ảnh bìa, lời bài hát đồng bộ (LRCLIB), ⏮ ⏯ ⏭; bấm hoặc kéo thanh tiến độ để tua, xem trước thời gian khi kéo và gửi lệnh lúc thả. Hỗ trợ tua qua Windows media controls khi app cho phép, iTunes qua adapter riêng, foobar2000 qua seekbar của giao diện Default UI. App không hỗ trợ tua hoặc nguồn live không có thời lượng thì khóa thanh; đổi bài khi đang kéo sẽ hủy thao tác. Nút lời giãn bảng ngang để xem lời chạy theo bài; chọn câu sớm 80 ms và cuộn bằng lò xo độc lập với nhịp cập nhật nhạc, tua xa hoặc mở lại trang thì vào thẳng câu hiện tại. Nền và đường aurora theo màu ảnh bìa.
   - **Việc**: một danh sách cho việc và lịch hẹn. Gõ "Mua sữa", "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Tick / sửa / xóa; quá giờ tô đỏ kèm "Trễ". ⚙ chọn nhắc trước 0–60 phút, luôn nhắc thêm đúng giờ.
