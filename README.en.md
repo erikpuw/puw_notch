@@ -22,7 +22,7 @@
 | **Banners** | Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth (with the device's battery), network, battery, battery saver, USB. An × closes one early; a screenshot banner shows a thumbnail, click to open. |
 | **Approve on the notch** | Questions from Claude Code and Antigravity (permission to use a tool, multiple-choice questions) show as banners; click **Allow** / **Deny** or pick an answer. No auto-approve; the banner closes by itself after 20 s (the app asks as usual) and at once when you answer in the app, and the tray switch turns it off. Setup [below](#setting-up-claude-code-optional). |
 | **Robot** | After 30 s without input an LED face replaces the clock, after 5 min it sleeps. Toggle in the tray. |
-| **Light** | Loads only what is visible: lyrics while the Music page is open, icons while Notifications is open; paused while hidden for fullscreen. About 7 MB of RAM and 0 % CPU at rest ([Task Manager picture](#light-and-the-tray-menu)). |
+| **Light** | Loads only what is visible: lyrics while the Music page is open, icons while Notifications is open; paused while hidden for fullscreen. About 7 MB of RAM and 0 % CPU at rest, about 14 MB while music plays in the pill, about 22 MB with the Music page open and its aurora ([Task Manager pictures](#light-and-the-tray-menu)). |
 | **Tray** | Minimal notch, Idle robot, Notch style, Pages shown (keep only the pages you use; a hidden page stops completely: no task, water or stand-up reminders, and no music, weather, limits or notifications are read), More features (Approve on the notch, Hide Windows volume popup: off by default), Start with Windows, Language (Tiếng Việt / English), About, Quit. |
 
 **6 pages** (switch with ‹ ›):
@@ -90,9 +90,11 @@ With the weather on:
 
 ## Light and the tray menu
 
-Task Manager while the notch rests: 0 % CPU, 7.3 MB of RAM.
+Task Manager in three states (measured on one PC, the figures vary by PC):
 
-![Task Manager: PUW Notch 0 % CPU, 7.3 MB of RAM](assets/screenshots/task-manager.png)
+| The notch at rest | Music playing, as the pill | The Music page open, with the aurora |
+|---|---|---|
+| ![](assets/screenshots/task-manager.png)<br>0 % CPU, 7.3 MB of RAM | ![](assets/screenshots/task-manager-music-pill.png)<br>0.4 % CPU, 14.5 MB of RAM | ![](assets/screenshots/task-manager-music-page.png)<br>0.5 % CPU, 21.6 MB of RAM |
 
 The tray menu (right-click the icon):
 

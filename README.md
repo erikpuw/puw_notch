@@ -22,7 +22,7 @@
 | **Banner** | Thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth (kèm % pin thiết bị), mạng, pin, tiết kiệm pin, USB. Nút × tắt sớm; ảnh chụp màn hình có ảnh thu nhỏ, bấm để mở. |
 | **Duyệt trên notch** | Câu hỏi của Claude Code và Antigravity (xin quyền dùng công cụ, câu hỏi chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt; banner tự đóng sau 20 giây (app hỏi lại như thường) và đóng ngay khi bạn trả lời trong app, tắt hẳn ở tray. Cách thiết lập ở [dưới](#thiết-lập-cho-claude-code-tuỳ-chọn). |
 | **Robot** | 30 giây không đụng máy thì mặt LED thay đồng hồ, 5 phút thì ngủ. Bật / tắt ở tray. |
-| **Nhẹ** | Chỉ tải phần đang hiện: lời bài hát khi mở trang Nhạc, icon khi mở trang Thông báo; ẩn toàn màn hình thì ngừng tải. Khi nghỉ chỉ chừng 7 MB RAM và 0% CPU ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
+| **Nhẹ** | Chỉ tải phần đang hiện: lời bài hát khi mở trang Nhạc, icon khi mở trang Thông báo; ẩn toàn màn hình thì ngừng tải. Khi nghỉ chỉ chừng 7 MB RAM và 0% CPU, đang phát nhạc ở dạng pill chừng 14 MB, mở trang Nhạc có aurora chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
 | **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị (chỉ giữ trang bạn dùng; trang ẩn thì hoàn toàn ngừng: không nhắc việc, uống nước, đứng dậy, không đọc nhạc, thời tiết, hạn mức, thông báo), Tính năng khác (Duyệt ngay trên notch, Ẩn bảng âm lượng Windows: mặc định tắt), Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát. |
 
 **6 trang** (chuyển bằng ‹ ›):
@@ -90,9 +90,11 @@ Có thời tiết:
 
 ## Nhẹ và menu tray
 
-Task Manager khi notch đang nghỉ: 0% CPU, 7,3 MB RAM.
+Task Manager ở ba trạng thái (đo trên một máy, số thay đổi theo máy):
 
-![Task Manager: PUW Notch 0% CPU, 7,3 MB RAM](assets/screenshots/task-manager.png)
+| Notch đang nghỉ | Phát nhạc, dạng pill | Mở trang Nhạc, có aurora |
+|---|---|---|
+| ![](assets/screenshots/task-manager.png)<br>0% CPU, 7,3 MB RAM | ![](assets/screenshots/task-manager-music-pill.png)<br>0,4% CPU, 14,5 MB RAM | ![](assets/screenshots/task-manager-music-page.png)<br>0,5% CPU, 21,6 MB RAM |
 
 Menu ở khay hệ thống (chuột phải vào biểu tượng):
 
