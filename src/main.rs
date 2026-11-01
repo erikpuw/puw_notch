@@ -24,9 +24,9 @@ mod usb;
 mod weather;
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
@@ -74,6 +74,36 @@ const CHECK_MS: u32 = 500;
 /// a few MB instead of what the last panel touched. They come back on demand. (The other notch app
 /// trims as it enters its resting state, too.)
 const TRIM_TICKS: u32 = 10;
+/// When `tick` last ran (unix ms) and where the notch was then (mode * 16 + page): the watchdog
+/// writes to the log when the window stops answering, which the log could not say before.
+static BEAT: AtomicU64 = AtomicU64::new(0);
+static WHERE: AtomicU8 = AtomicU8::new(0);
+const STALL_MS: u64 = 6000;
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+fn watchdog() {
+    std::thread::spawn(|| {
+        let mut said = false;
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let (beat, here) = (BEAT.load(Ordering::Relaxed), WHERE.load(Ordering::Relaxed));
+            if beat == 0 {
+                continue;
+            }
+            let late = unix_ms().saturating_sub(beat);
+            if late > STALL_MS && !said {
+                said = true;
+                system::log(&format!("window not answering for {} s (mode {}, page {})", late / 1000, here / 16, PAGES.get((here % 16) as usize).map_or("?", |p| p.name())));
+            } else if late <= STALL_MS && said {
+                said = false;
+                system::log("window answers again");
+            }
+        }
+    });
+}
 const MENU_MINIMAL: usize = 10;
 const MENU_AUTOSTART: usize = 11;
 const MENU_QUIT: usize = 12;
@@ -172,6 +202,8 @@ struct App {
     last_foreground: Option<(isize, RECT)>,
     /// Ticks the pill has rested without a move; at `TRIM_TICKS` the working set is handed back.
     rested: u32,
+    /// Whether the log last said the panel is open (so it says it once per change).
+    logged_open: bool,
     page: Page,
     todo: todo::Todo,
     today: u32,
@@ -491,7 +523,14 @@ impl App {
 
     /// Let go of a panel the mouse has left without Windows saying so (see `notch::hover_stale`).
     fn release_stale_hover(&mut self) {
-        if self.seek_drag.is_some() || !notch::hover_stale(self.notch.mode, self.hover_in, self.editing, self.cursor_inside()) {
+        // A seek drag ends with the button: one that outlived it (the release went elsewhere) would
+        // hold the panel open for good.
+        if self.seek_drag.is_some() && unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } >= 0 {
+            self.cancel_seek();
+        }
+        // Only the pages with a text box are held open by typing.
+        let typing = self.editing && matches!(self.page, Page::Todo | Page::Weather);
+        if self.seek_drag.is_some() || !notch::hover_stale(self.notch.mode, self.hover_in, typing, self.cursor_inside()) {
             return;
         }
         self.hover_in = false;
@@ -511,6 +550,18 @@ impl App {
         }
     }
 
+    /// Tells the watchdog the window still answers, and leaves a line in the log when the panel
+    /// opens or closes: a panel that "does not retract" then shows in the log with its page.
+    fn beat(&mut self) {
+        BEAT.store(unix_ms(), Ordering::Relaxed);
+        WHERE.store(self.notch.mode as u8 * 16 + PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as u8, Ordering::Relaxed);
+        let open = self.notch.mode == Mode::Expanded;
+        if open != self.logged_open {
+            self.logged_open = open;
+            system::log(&if open { format!("panel open: {}", self.page.name()) } else { "panel closed".to_string() });
+        }
+    }
+
     fn tick(&mut self) {
         // Typing needs the keyboard: when the notch is not the foreground window (Windows refused
         // the focus, or took it back without a WM_ACTIVATE) it cannot be typing, and `editing`
@@ -518,6 +569,7 @@ impl App {
         if self.editing && unsafe { GetForegroundWindow() } != self.hwnd {
             self.end_edit();
         }
+        self.beat();
         self.keep_on_top();
         self.release_stale_hover();
         let (time, date) = system::clock();
@@ -574,9 +626,10 @@ impl App {
         // New ones get a banner; the Notifications page lists what Windows still keeps.
         let new = self.notifications.as_mut().filter(|_| render::page_shown(Page::Notify)).map(|r| r.poll()).unwrap_or_default();
         let showing_notes = self.notch.mode == Mode::Expanded && self.page == Page::Notify;
-        if showing_notes && !self.hidden {
+        // The list is read again when something arrived (and when the page opens), not on every tick.
+        if showing_notes && !self.hidden && !new.is_empty() {
             self.refresh_notes();
-            changed |= showing_notes;
+            changed = true;
         }
         if let Some(t) = new.into_iter().last() {
             // A newer one restarts the 5 s from the start (show_banner re-arms the timer).
@@ -1574,6 +1627,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
 fn main() -> windows::core::Result<()> {
     let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
     system::log_open();
+    watchdog();
     system::log(&format!("start v{} pid {} cwd {cwd}", env!("CARGO_PKG_VERSION"), std::process::id()));
     std::panic::set_hook(Box::new(|info| system::log(&format!("panic: {info}"))));
     let result = run();
@@ -1679,6 +1733,7 @@ fn run() -> windows::core::Result<()> {
             hovered_button: None,
             last_foreground: None,
             rested: 0,
+            logged_open: false,
             page: Page::Music,
             todo: todo::Todo::load(system::now_stamp()),
             today: system::today(),
