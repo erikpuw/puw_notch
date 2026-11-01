@@ -63,7 +63,7 @@ pub const LYRICS_EXTRA_W: f32 = 284.0;
 /// Window must fit the largest target plus the hover margin.
 /// Includes room for the spring overshoot and the ears.
 pub const MAX_W: f32 = 820.0;
-pub const MAX_H: f32 = 210.0;
+pub const MAX_H: f32 = 260.0;
 /// How long a notification banner stays.
 pub const ALERT_MS: u32 = 5000;
 /// How long a status banner (Caps Lock, brightness) stays.
@@ -172,6 +172,8 @@ pub struct Notch {
     alert_choice: bool,
     /// The lyrics show beside the player: the open panel is LYRICS_EXTRA_W wider.
     wide: bool,
+    /// Width and height of the open panel: each page asks for its own (`set_panel`).
+    panel: [f32; 2],
     obstructed: bool,
     clear_checks: u8,
     busy_checks: u8,
@@ -180,7 +182,7 @@ pub struct Notch {
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_choice: false, wide: false, obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_choice: false, wide: false, panel: [target(Mode::Expanded, false)[0], target(Mode::Expanded, false)[1]], obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
         for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
@@ -277,10 +279,20 @@ impl Notch {
             return if self.alert_choice { alert_size_choice(self.alert_lines) } else { alert_size(self.alert_lines) };
         }
         let mut t = target(self.mode, self.live);
-        if self.wide && self.mode == Mode::Expanded {
-            t[0] += LYRICS_EXTRA_W;
+        if self.mode == Mode::Expanded {
+            (t[0], t[1]) = (self.panel[0], self.panel[1]);
+            if self.wide {
+                t[0] += LYRICS_EXTRA_W;
+            }
         }
         t
+    }
+
+    /// The open panel's size for the page on show; the springs glide to it. Returns true if it changed.
+    pub fn set_panel(&mut self, size: [f32; 2]) -> bool {
+        let changed = self.panel != size;
+        self.panel = size;
+        changed
     }
 
     /// Lyrics view on / off. Returns true if it changed.

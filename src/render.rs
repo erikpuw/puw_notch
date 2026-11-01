@@ -264,8 +264,21 @@ const SIDE: f32 = 44.0;
 const ARROW: f32 = 24.0;
 /// Pages are clipped this far in from the panel's sides (just inside the arrows).
 const PAGE_CLIP: f32 = 34.0;
-const ARROW_Y: f32 = 80.0;
-const DOTS_Y: f32 = 174.0;
+/// The arrows sit level with the panel's middle and the dots near its bottom, whatever its height.
+fn arrow_y(h: f32) -> f32 {
+    h / 2.0 - 13.0
+}
+
+fn dots_y(h: f32) -> f32 {
+    h - 12.0
+}
+
+/// What the open panel measures (logical px) while `page` shows. One place decides it; the notch
+/// glides to it, and the layout and hit areas of the page read the same height.
+pub fn panel_size(_page: Page) -> [f32; 2] {
+    let [w, h, _] = target(Mode::Expanded, false);
+    [w, h]
+}
 /// Task list page.
 const INPUT_Y: f32 = 36.0;
 const INPUT_H: f32 = 26.0;
@@ -296,7 +309,7 @@ const NOTE_Y: f32 = 36.0;
 const NOTE_H: f32 = 38.0;
 pub const NOTE_ROWS: usize = 3;
 /// "Clear all" under the rows, right-aligned with their times: a pill hugging its label (the click
-/// area is this wide), inside the pages' clip, which ends at DOTS_Y - 3.
+/// area is this wide), inside the pages' clip, which ends at dots_y - 3.
 const CLEAR_W: f32 = 64.0;
 const CLEAR_H: f32 = 18.0;
 const CLEAR_Y: f32 = NOTE_Y + NOTE_H * NOTE_ROWS as f32 + 1.0;
@@ -359,6 +372,7 @@ fn setting_rows(card: Card) -> &'static [(Setting, bool)] {
 /// Every clickable rect of the open panel on `page`. `rows` / `scroll` place list rows,
 /// `settings` = health card showing its settings.
 pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize, settings: Option<Card>, wide: bool) -> Vec<(Button, D2D_RECT_F)> {
+    let panel_h = panel_size(page)[1];
     // Only the Music page can be wide.
     let wide = wide && page == Page::Music;
     let w = panel_w(wide);
@@ -367,8 +381,8 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     let mut out = Vec::new();
     // The arrows are hidden while the lyrics are open.
     if !wide {
-        out.push((Button::PagePrev, r(10.0, ARROW_Y, ARROW, ARROW)));
-        out.push((Button::PageNext, r(w - 10.0 - ARROW, ARROW_Y, ARROW, ARROW)));
+        out.push((Button::PagePrev, r(10.0, arrow_y(panel_h), ARROW, ARROW)));
+        out.push((Button::PageNext, r(w - 10.0 - ARROW, arrow_y(panel_h), ARROW, ARROW)));
     }
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {
@@ -2605,7 +2619,8 @@ impl Renderer {
                 };
 
                 // Pages slide inside the space between the arrows.
-                rt.PushAxisAlignedClip(&rect(l + PAGE_CLIP * s, 30.0 * s, r - PAGE_CLIP * s, (DOTS_Y - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
+                let ph = panel_size(v.page)[1];
+                rt.PushAxisAlignedClip(&rect(l + PAGE_CLIP * s, 30.0 * s, r - PAGE_CLIP * s, (dots_y(ph) - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
                 match v.leaving {
                     Some((from, t, dir)) => {
                         let span = (cr - cl) * 0.55;
@@ -2621,8 +2636,8 @@ impl Renderer {
                 // Side arrows and page dots.
                 // They sit on the panel's own edges, so they follow it while it widens or narrows.
                 let nav = [
-                    (Button::PagePrev, rect(l + 10.0 * s, ARROW_Y * s, l + (10.0 + ARROW) * s, (ARROW_Y + ARROW) * s)),
-                    (Button::PageNext, rect(r - (10.0 + ARROW) * s, ARROW_Y * s, r - 10.0 * s, (ARROW_Y + ARROW) * s)),
+                    (Button::PagePrev, rect(l + 10.0 * s, arrow_y(ph) * s, l + (10.0 + ARROW) * s, (arrow_y(ph) + ARROW) * s)),
+                    (Button::PageNext, rect(r - (10.0 + ARROW) * s, arrow_y(ph) * s, r - 10.0 * s, (arrow_y(ph) + ARROW) * s)),
                 ];
                 // While the lyrics are open the arrows are hidden (they fade as the panel widens), so the
                 // way back is the lyrics button: shrinking the panel never leaves the mouse outside it.
@@ -2650,7 +2665,7 @@ impl Renderer {
                 for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
                     let on = p == v.page;
                     let dw = if on { wide } else { dot };
-                    rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &self.brush(if on { grey(1.0, a) } else { grey(0.45, a) })?);
+                    rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(if on { grey(1.0, a) } else { grey(0.45, a) })?);
                     dx += dw + gap;
                 }
                 // The Weather page's source (Open-Meteo asks for the credit, CC BY 4.0) and when it was
@@ -2660,7 +2675,7 @@ impl Renderer {
                     let stale = v.weather.is_stale(v.list.now);
                     let when = format!("{}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100);
                     let ink = if stale { solid(ORANGE, a) } else { grey(0.4, a) };
-                    text(&format!("Open-Meteo · {when}"), F_LABEL, rect(cx + 36.0 * s, (DOTS_Y - 8.0) * s, r - 32.0 * s, (DOTS_Y + 7.0) * s), trail, ink)?;
+                    text(&format!("Open-Meteo · {when}"), F_LABEL, rect(cx + 36.0 * s, (dots_y(ph) - 8.0) * s, r - 32.0 * s, (dots_y(ph) + 7.0) * s), trail, ink)?;
                 }
             }
             if let Err(e) = rt.EndDraw(None, None) {
@@ -2869,9 +2884,9 @@ mod tests {
 
     #[test]
     fn cover_shadow_ends_above_the_page_clip() {
-        // The shadow reaches PAD past the dropped cover; pages are cut at DOTS_Y - 3.
+        // The shadow reaches PAD past the dropped cover; pages are cut at dots_y - 3.
         let bottom = COVER_TOP + COVER + COVER_SHADOW_DROP + COVER_SHADOW_PAD;
-        assert!(bottom <= DOTS_Y - 3.0, "shadow ends at {bottom}, clipped at {}", DOTS_Y - 3.0);
+        assert!(bottom <= dots_y(186.0) - 3.0, "shadow ends at {bottom}, clipped at {}", dots_y(186.0) - 3.0);
     }
 
     #[test]
@@ -2981,7 +2996,7 @@ mod tests {
             assert_eq!(hit_button(cx, scale, mid(seek).0, mid(seek).1, Some(&track), Page::Music, 0, 0, None, false), Some(Button::Seek));
             assert_eq!(hit_button(cx, scale, mid(lyr).0, mid(lyr).1, Some(&track), Page::Music, 0, 0, None, false), Some(Button::Lyrics));
             assert_eq!(hit_button(cx, scale, px, py, None, Page::Music, 0, 0, None, false), None);
-            assert!(buttons(cx, scale, false).iter().all(|(_, r)| r.bottom <= DOTS_Y * scale));
+            assert!(buttons(cx, scale, false).iter().all(|(_, r)| r.bottom <= dots_y(186.0) * scale));
             // Controls live in the right column: right of the cover, left of the side arrow, no overlaps.
             let left = cx - 220.0 * scale;
             let cover_right = left + (SIDE + COVER) * scale;
@@ -3001,7 +3016,7 @@ mod tests {
         let [_, panel_h, _] = target(Mode::Expanded, false);
         assert!(CLEAR_Y >= NOTE_Y + NOTE_H * NOTE_ROWS as f32, "below the last row");
         assert!(panel_h - (CLEAR_Y + CLEAR_H) >= 12.0, "well inside the panel's bottom edge");
-        assert!(CLEAR_Y + CLEAR_H + 1.0 <= DOTS_Y - 3.0, "whole, border included, inside the pages' clip");
+        assert!(CLEAR_Y + CLEAR_H + 1.0 <= dots_y(186.0) - 3.0, "whole, border included, inside the pages' clip");
         for scale in [1.0, 1.5] {
             let cx = 265.0 * scale;
             let (x, y) = (cx + (220.0 - SIDE - 10.0) * scale, (CLEAR_Y + CLEAR_H / 2.0) * scale);

@@ -428,6 +428,7 @@ impl App {
             self.hours_open = false;
         }
         self.notch.set_wide(self.lyrics_wide());
+        self.notch.set_panel(render::panel_size(self.page));
         let mut moving = self.notch.step(dt);
         if self.hidden && self.notch.is_hidden() {
             unsafe { let _ = ShowWindow(self.hwnd, SW_HIDE); }
