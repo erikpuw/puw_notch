@@ -2828,7 +2828,10 @@ impl Renderer {
             shown.ok()?;
             // The mouse belongs to the drawn shape: the pill or panel, its ears, and the shadow under it.
             let reach = if open > 0.0 { (SHADOW_STEPS as f32 * SHADOW_STEP + SHADOW_DY) * s } else { 0.0 };
-            let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((gy + nh + reach).ceil() as i32).min(h));
+            // While the row of page icons is open its cells take clicks at once, though the panel is still
+            // growing down to them: the region reaches their bottom from the first frame.
+            let nh_hit = if nav_open() && v.mode == Mode::Expanded { nh.max((panel_size(v.page)[1] + NAV_EXTRA) * s) } else { nh };
+            let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((gy + nh_hit + reach).ceil() as i32).min(h));
             self.place(hwnd, (x, y, w, h), region);
             // Poll the media clock between lines; the spring requests vsync until it settles,
             // including after pausing in the middle of a transition.

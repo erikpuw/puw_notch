@@ -498,6 +498,7 @@ impl App {
             return false;
         }
         let (half, h) = notch::hover_area(self.notch.size());
+        let h = if self.nav_open && self.notch.mode == Mode::Expanded { h.max(render::panel_size(self.page)[1] + render::NAV_EXTRA) } else { h };
         let (half, h) = (half * self.scale, h * self.scale);
         let cx = (self.win.0 + self.win.2 / 2) as f32;
         let (x, y) = (p.x as f32, (p.y - self.win.1) as f32);
@@ -871,8 +872,6 @@ impl App {
             Button::GoPage(target) => {
                 self.cancel_task_edit();
                 self.end_edit();
-                self.nav_open = false;
-                render::set_nav_open(false);
                 if target != self.page {
                     let from = PAGES.iter().position(|p| *p == self.page).unwrap_or(0);
                     let to = PAGES.iter().position(|p| *p == target).unwrap_or(0);
