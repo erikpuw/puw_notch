@@ -591,7 +591,7 @@ impl App {
         self.keep_on_top();
         self.release_stale_hover();
         let (time, date) = system::clock();
-        let battery = system::battery();
+        let battery = system::battery_cached();
         mark(0, &mut lap);
         let mut changed = (&time, &date, battery) != (&self.time, &self.date, self.battery);
         if let (Some(old), Some(new)) = (self.battery, battery) {

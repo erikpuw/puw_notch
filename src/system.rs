@@ -115,6 +115,26 @@ pub fn battery() -> Option<Battery> {
     Some(Battery { percent: s.BatteryLifePercent.min(100), charging: s.ACLineStatus == 1, saver: saver_on(s.SystemStatusFlag, effective_overlay()) })
 }
 
+/// The battery as the last look found it. The look (`battery`) asks the power service, which can
+/// take 100 ms or more while the power mode or battery saver changes: it is taken once a second
+/// on its own thread, so the window never waits for it.
+pub fn battery_cached() -> Option<Battery> {
+    static CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Option<Battery>>>> = std::sync::OnceLock::new();
+    let cell = CACHE.get_or_init(|| {
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(battery()));
+        let mine = cell.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let now = battery();
+            if let Ok(mut b) = mine.lock() {
+                *b = now;
+            }
+        });
+        cell
+    });
+    cell.lock().map_or(None, |b| *b)
+}
+
 fn settings_path() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("APPDATA")?).join("PuwNotch").join("settings.txt"))
 }
@@ -287,6 +307,24 @@ pub fn set_autostart(on: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "timing: prints how long the power status calls take (they run on the UI thread)"]
+    fn power_call_times() {
+        let t = |name: &str, f: &dyn Fn()| {
+            let (n, t0) = (200, std::time::Instant::now());
+            let mut worst = 0.0f64;
+            for _ in 0..n {
+                let t1 = std::time::Instant::now();
+                f();
+                worst = worst.max(t1.elapsed().as_secs_f64() * 1000.0);
+            }
+            println!("{name}: avg {:.2} ms, worst {worst:.2} ms", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        };
+        t("GetSystemPowerStatus", &|| { let mut s = SYSTEM_POWER_STATUS::default(); let _ = unsafe { GetSystemPowerStatus(&mut s) }; });
+        t("effective_overlay", &|| { let _ = effective_overlay(); });
+        t("battery()", &|| { let _ = battery(); });
+    }
+
     use super::*;
 
     fn b(percent: u8, charging: bool, saver: bool) -> Battery {
