@@ -4,7 +4,8 @@
 //! a tool. That becomes a banner (see approve.rs) and the click is sent back to the same server.
 //! Nothing is answered without a click, and a request that is not clicked stays in Antigravity.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use windows::core::HSTRING;
@@ -143,20 +144,30 @@ fn waiting_now(server: &usage::LocalServer) -> Vec<Waiting> {
 }
 
 /// Start watching: a request for every new waiting step goes to the approval queue.
-pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, hwnd: HWND) {
+pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<u64>>>, enabled: Arc<AtomicBool>, hwnd: HWND) {
     let target = hwnd.0 as isize;
     std::thread::spawn(move || {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
-        let mut seen: HashSet<(String, i64)> = HashSet::new();
+        // The steps asked about so far, each with the request that is up for it (while it waits).
+        let mut seen: HashMap<(String, i64), Option<u64>> = HashMap::new();
         loop {
-            let Some(server) = usage::antigravity_server() else {
+            let server = if enabled.load(Ordering::Relaxed) { usage::antigravity_server() } else { None };
+            let Some(server) = server else {
                 seen.clear();
                 std::thread::sleep(POLL_CLOSED);
                 continue;
             };
             std::thread::sleep(POLL);
-            for waiting in waiting_now(&server) {
-                if !seen.insert((waiting.cascade.clone(), waiting.step)) {
+            let now = waiting_now(&server);
+            // A question answered in Antigravity itself no longer waits: its banner goes.
+            for (key, id) in seen.iter_mut() {
+                if id.is_some() && !now.iter().any(|w| (&w.cascade, w.step) == (&key.0, key.1)) {
+                    approve::cancel(&cancelled, target, id.take().unwrap_or(0));
+                }
+            }
+            for waiting in now {
+                let key = (waiting.cascade.clone(), waiting.step);
+                if seen.contains_key(&key) {
                     continue;
                 }
                 let (title, detail, mut options) = match &waiting.ask {
@@ -166,7 +177,8 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, hwnd: HWND) {
                 if !options.is_empty() {
                     options.push(tr("Trong app", "In the app").to_string());
                 }
-                let rx = approve::enqueue(&queue, target, "Antigravity".into(), title, detail, options);
+                let (id, rx) = approve::enqueue(&queue, target, "Antigravity".into(), title, detail, options);
+                seen.insert(key, Some(id));
                 // One thread per request: it waits for the click, then answers.
                 std::thread::spawn(move || {
                     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }

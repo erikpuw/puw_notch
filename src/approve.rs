@@ -4,8 +4,9 @@
 //! (do nothing, the app asks as usual). The pipe only speaks on this PC. Nothing is ever allowed
 //! without a click, and an unanswered request falls back to `ask` after TIMEOUT.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use windows::core::w;
@@ -19,8 +20,11 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 /// Posted when a request waits in the queue.
 pub const WM_APPROVE: u32 = WM_APP + 13;
 
-/// How long a request waits for a click before the app is told to ask as usual (also the banner's time).
+/// How long a request waits for an answer before the app is told to ask as usual.
 pub const TIMEOUT: Duration = Duration::from_secs(50);
+
+/// How long its banner stays on the notch: it hands the question back to the app when it goes.
+pub const BANNER: Duration = Duration::from_secs(20);
 
 /// Biggest request read (a line of a few hundred bytes).
 const MAX_REQUEST: usize = 8 * 1024;
@@ -48,6 +52,7 @@ impl Answer {
 
 /// A request waiting for an answer.
 pub struct Pending {
+    pub id: u64,
     pub app: String,
     pub title: String,
     pub detail: String,
@@ -64,6 +69,10 @@ impl Pending {
 
 pub struct Server {
     queue: Arc<Mutex<VecDeque<Pending>>>,
+    /// Requests whose question was answered elsewhere (in the app itself): their banner goes.
+    cancelled: Arc<Mutex<HashSet<u64>>>,
+    /// The tray switch: off, every request is handed back to its app at once.
+    enabled: Arc<AtomicBool>,
 }
 
 impl Server {
@@ -87,7 +96,28 @@ impl Server {
             let (shared, pipe) = (shared.clone(), pipe.0 as isize);
             std::thread::spawn(move || serve(HANDLE(pipe as _), &shared, target));
         });
-        Server { queue }
+        Server { queue, cancelled: Arc::default(), enabled: Arc::new(AtomicBool::new(true)) }
+    }
+
+    pub fn cancelled(&self) -> Arc<Mutex<HashSet<u64>>> {
+        self.cancelled.clone()
+    }
+
+    pub fn enabled(&self) -> Arc<AtomicBool> {
+        self.enabled.clone()
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_enabled(&self, on: bool) {
+        self.enabled.store(on, Ordering::Relaxed);
+    }
+
+    /// Was this request cancelled (answered in its app)? Asking forgets it.
+    pub fn take_cancelled(&self, id: u64) -> bool {
+        self.cancelled.lock().is_ok_and(|mut c| c.remove(&id))
     }
 
     /// The queue, for other sources of requests (see antigravity.rs).
@@ -101,20 +131,30 @@ impl Server {
 }
 
 /// Put a request in the queue and tell the window; its answer arrives on the receiver.
-pub fn enqueue(queue: &Mutex<VecDeque<Pending>>, target: isize, app: String, title: String, detail: String, options: Vec<String>) -> Receiver<Answer> {
+pub fn enqueue(queue: &Mutex<VecDeque<Pending>>, target: isize, app: String, title: String, detail: String, options: Vec<String>) -> (u64, Receiver<Answer>) {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let (reply, rx) = channel();
     if let Ok(mut q) = queue.lock() {
-        q.push_back(Pending { app, title, detail, options, reply });
+        q.push_back(Pending { id, app, title, detail, options, reply });
     }
     unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_APPROVE, WPARAM(0), LPARAM(0)); }
-    rx
+    (id, rx)
+}
+
+/// The app answered this request itself: tell the window, its banner goes.
+pub fn cancel(cancelled: &Mutex<HashSet<u64>>, target: isize, id: u64) {
+    if let Ok(mut c) = cancelled.lock() {
+        c.insert(id);
+    }
+    unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_APPROVE, WPARAM(0), LPARAM(0)); }
 }
 
 /// One client: read its request, wait for the answer, reply, hang up.
 fn serve(pipe: HANDLE, queue: &Mutex<VecDeque<Pending>>, target: isize) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     let answer = read_request(pipe).map_or(Answer::Ask, |(app, title, detail, options)| {
-        enqueue(queue, target, app, title, detail, options).recv_timeout(TIMEOUT + Duration::from_secs(2)).unwrap_or(Answer::Ask)
+        enqueue(queue, target, app, title, detail, options).1.recv_timeout(TIMEOUT + Duration::from_secs(2)).unwrap_or(Answer::Ask)
     });
     unsafe {
         let mut written = 0u32;

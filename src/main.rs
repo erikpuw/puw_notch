@@ -80,6 +80,7 @@ const MENU_ABOUT: usize = 16;
 const MENU_VOLUME_KEYS: usize = 17;
 const MENU_STYLE_EARS: usize = 18;
 const MENU_STYLE_PILL: usize = 19;
+const MENU_APPROVE: usize = 20;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
 struct SeekDrag {
@@ -330,7 +331,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
+        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -612,9 +613,14 @@ impl App {
             return;
         }
         while let Some(p) = self.approve.next() {
+            // Switched off in the tray, or answered in its app while it waited: back to the app.
+            if !self.approve.is_enabled() || self.approve.take_cancelled(p.id) {
+                p.answer(approve::Answer::Ask);
+                continue;
+            }
             let choices = if p.options.is_empty() { vec![tr("Đồng ý", "Allow").to_string(), tr("Không", "Deny").to_string()] } else { p.options.clone() };
             let toast = Toast { app: p.app.clone(), title: p.title.clone(), body: p.detail.clone(), level: None, icon: Some(render::ICON_WARN), image: None, open: None, badge: None, choices };
-            if self.show_banner(toast, approve::TIMEOUT.as_millis() as u32) {
+            if self.show_banner(toast, approve::BANNER.as_millis() as u32) {
                 self.approval = Some(p);
                 return;
             }
@@ -989,6 +995,7 @@ impl App {
                 let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Pill), MENU_STYLE_PILL, &text(tr("Viên thuốc", "Pill")));
                 let _ = AppendMenuW(menu, MF_POPUP, styles.0 as usize, &text(tr("Kiểu notch", "Notch style")));
             }
+            let _ = AppendMenuW(menu, MF_STRING | check(self.approve.is_enabled()), MENU_APPROVE, &text(tr("Duyệt ngay trên notch", "Approve on the notch")));
             let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
             let _ = AppendMenuW(menu, MF_STRING | check(status::taking_volume_keys()), MENU_VOLUME_KEYS, &text(tr("Ẩn bảng âm lượng của Windows", "Hide Windows volume popup")));
             let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, &text(tr("Khởi động cùng Windows", "Start with Windows")));
@@ -1017,6 +1024,12 @@ impl App {
                     self.renderer.style = self.style;
                     system::save_settings(self.settings());
                     self.kick();
+                }
+                MENU_APPROVE => {
+                    self.approve.set_enabled(!self.approve.is_enabled());
+                    system::save_settings(self.settings());
+                    // What is on the banner now goes back to its app.
+                    self.finish_approval(approve::Answer::Ask);
                 }
                 MENU_AUTOSTART => system::set_autostart(!system::autostart_enabled()),
                 MENU_ROBOT => {
@@ -1284,6 +1297,10 @@ impl App {
             }
             // From the limits worker: a reading changed.
             approve::WM_APPROVE => {
+                // A question answered in its own app: its banner goes now.
+                if self.approval.as_ref().is_some_and(|p| self.approve.take_cancelled(p.id)) {
+                    self.finish_approval(approve::Answer::Ask);
+                }
                 self.approve_next();
                 return Some(LRESULT(0));
             }
@@ -1576,7 +1593,12 @@ fn run() -> windows::core::Result<()> {
             mic_muted: None,
             music: music::Music::start(hwnd),
             usage: usage::Monitor::start(hwnd),
-            approve: { let server = approve::Server::start(hwnd); antigravity::watch(server.queue(), hwnd); server },
+            approve: {
+                let server = approve::Server::start(hwnd);
+                server.set_enabled(settings.approve);
+                antigravity::watch(server.queue(), server.cancelled(), server.enabled(), hwnd);
+                server
+            },
             approval: None,
             usage_watch: usage::Watch::default(),
             usage_alerts: Vec::new(),

@@ -20,10 +20,10 @@
 | **Notch** | Clock, battery ring (green while charging, yellow in battery saver, red at 20 %), music waves. Hover to open the panel. Two looks, chosen in the tray: ears or a floating pill. |
 | **Stays clear** | Shrinks when it would cover text underneath, hides during fullscreen games and videos. Stays out of recordings and screen shares; Print Screen or Win+Shift+S bring it into screenshots for 30 s. |
 | **Banners** | Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth (with the device's battery), network, battery, battery saver, USB. An × closes one early; a screenshot banner shows a thumbnail, click to open. |
-| **Approve on the notch** | Questions from Claude Code and Antigravity (permission to use a tool, multiple-choice questions) show as banners; click **Allow** / **Deny** or pick an answer. No auto-approve. Setup [below](#setting-up-claude-code-optional). |
+| **Approve on the notch** | Questions from Claude Code and Antigravity (permission to use a tool, multiple-choice questions) show as banners; click **Allow** / **Deny** or pick an answer. No auto-approve; the banner closes by itself after 20 s (the app asks as usual) and at once when you answer in the app, and the tray switch turns it off. Setup [below](#setting-up-claude-code-optional). |
 | **Robot** | After 30 s without input an LED face replaces the clock, after 5 min it sleeps. Toggle in the tray. |
 | **Light** | Loads only what is visible: lyrics while the Music page is open, icons while Notifications is open; paused while hidden for fullscreen. |
-| **Tray** | Minimal notch, Notch style, Idle robot, Hide Windows volume popup (off by default), Start with Windows, Language (Tiếng Việt / English), About, Quit. |
+| **Tray** | Minimal notch, Notch style, Approve on the notch (on / off), Idle robot, Hide Windows volume popup (off by default), Start with Windows, Language (Tiếng Việt / English), About, Quit. |
 
 **6 pages** (switch with ‹ ›):
 
