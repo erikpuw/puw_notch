@@ -459,7 +459,9 @@ impl App {
     fn refresh_audio(&mut self) {
         let hwnd = self.hwnd;
         let Some(a) = &mut self.audio else { return };
-        a.watch_speaker(hwnd);
+        if a.watch_speaker(hwnd) {
+            connectivity::nudge();
+        }
         let now = a.mic_muted();
         let mic_flip = match (self.mic_muted, now) {
             (Some(before), Some(after)) if before != after => Some(after),

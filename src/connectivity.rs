@@ -166,6 +166,28 @@ pub fn take_events() -> Vec<Event> {
 }
 
 /// Start the watcher. What is already on / connected at start is not announced.
+/// Wakes the watcher before its next poll: the default speaker changed, which is what a headset
+/// connecting or leaving does first. The watcher then looks again for a few seconds, quickly.
+static NUDGE: (Mutex<bool>, std::sync::Condvar) = (Mutex::new(false), std::sync::Condvar::new());
+const QUICK: Duration = Duration::from_millis(500);
+const QUICK_POLLS: u32 = 6;
+
+pub fn nudge() {
+    if let Ok(mut n) = NUDGE.0.lock() {
+        *n = true;
+        NUDGE.1.notify_one();
+    }
+}
+
+/// Sleep until the next poll, or until nudged; true when nudged.
+fn wait(period: Duration) -> bool {
+    let Ok(guard) = NUDGE.0.lock() else {
+        std::thread::sleep(period);
+        return false;
+    };
+    NUDGE.1.wait_timeout_while(guard, period, |n| !*n).map_or(false, |(mut n, _)| std::mem::take(&mut *n))
+}
+
 pub fn watch(hwnd: HWND) {
     let target = hwnd.0 as isize;
     std::thread::spawn(move || {
@@ -174,8 +196,13 @@ pub fn watch(hwnd: HWND) {
         // Class lookups are a round trip each; remember them per device id.
         let mut kinds: BTreeMap<String, DeviceKind> = BTreeMap::new();
         let mut last = snapshot(&mut kinds);
+        let mut quick = 0;
         loop {
-            std::thread::sleep(POLL);
+            if wait(if quick > 0 { QUICK } else { POLL }) {
+                quick = QUICK_POLLS;
+            } else {
+                quick = quick.saturating_sub(1);
+            }
             let now = snapshot(&mut kinds);
             let events = changes(&last, &now);
             last = now;

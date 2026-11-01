@@ -52,24 +52,27 @@ impl Audio {
     }
 
     /// Watch the default speaker, moving the callback over when the default changes
-    /// (headphones plugged in). Cheap when nothing changed; called on every check.
-    pub fn watch_speaker(&mut self, hwnd: HWND) {
+    /// (headphones plugged in). Cheap when nothing changed; called on every check. True when the
+    /// default speaker is another one than before.
+    pub fn watch_speaker(&mut self, hwnd: HWND) -> bool {
         unsafe {
-            let Ok(dev) = self.devices.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return };
-            let Ok(raw) = dev.GetId() else { return };
+            let Ok(dev) = self.devices.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return false };
+            let Ok(raw) = dev.GetId() else { return false };
             let id = raw.to_string().unwrap_or_default();
             CoTaskMemFree(Some(raw.0 as _));
             if self.watched.as_ref().is_some_and(|w| w.0 == id) {
-                return;
+                return false;
             }
+            let moved = self.watched.is_some();
             if let Some((_, ep, cb)) = self.watched.take() {
                 let _ = ep.UnregisterControlChangeNotify(&cb);
             }
-            let Ok(ep) = dev.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) else { return };
+            let Ok(ep) = dev.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) else { return false };
             let cb: IAudioEndpointVolumeCallback = VolumeWatch(hwnd.0 as isize).into();
             if ep.RegisterControlChangeNotify(&cb).is_ok() {
                 self.watched = Some((id, ep, cb));
             }
+            moved
         }
     }
 

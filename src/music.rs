@@ -15,6 +15,7 @@ use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 use windows::Web::Http::HttpClient;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_MEDIA_PLAY_PAUSE};
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow, PostMessageW, WM_APP};
 
 /// Posted when the snapshot changed (new track, play/pause, lyrics arrived).
@@ -168,21 +169,42 @@ fn playback_snapshot(source_id: String, playing: bool, previous: Option<&Track>)
     t
 }
 
+/// Did the player take the command (an operation of the media session, waited for)?
+macro_rules! done {
+    ($op:expr) => {
+        $op.and_then(|o| o.get()) == Ok(true)
+    };
+}
+
+/// Play / pause that does not give up after the first "no": a session left over from before the
+/// headphones went away may refuse the toggle yet take play or pause, and when none of them does,
+/// the media key goes to whatever Windows treats as the current player.
+fn play_pause(s: &GlobalSystemMediaTransportControlsSession) -> bool {
+    let info = s.GetPlaybackInfo().ok();
+    let toggle = info.as_ref().and_then(|i| i.Controls().ok()).is_some_and(|c| c.IsPlayPauseToggleEnabled().unwrap_or(false));
+    let playing = info.and_then(|i| i.PlaybackStatus().ok()) == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+    let direct = || if playing { s.TryPauseAsync() } else { s.TryPlayAsync() };
+    let ok = if toggle { done!(s.TryTogglePlayPauseAsync()) || done!(direct()) } else { done!(direct()) || done!(s.TryTogglePlayPauseAsync()) };
+    ok || media_key()
+}
+
+fn media_key() -> bool {
+    let key = |flags| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VK_MEDIA_PLAY_PAUSE, dwFlags: flags, ..Default::default() } } };
+    let inputs = [key(Default::default()), key(KEYEVENTF_KEYUP)];
+    unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) == 2 }
+}
+
 fn session_command(s: &GlobalSystemMediaTransportControlsSession, cmd: &Cmd, track: &Track) -> bool {
+    if matches!(cmd, Cmd::PlayPause) {
+        return play_pause(s);
+    }
     let foobar = track.source_id.to_ascii_lowercase().contains("foobar2000");
     if let Cmd::Seek(position) = cmd {
         let supported = s.GetPlaybackInfo().and_then(|i| i.Controls()).and_then(|c| c.IsPlaybackPositionEnabled()).unwrap_or(false);
         if foobar && !supported { return crate::foobar::seek(*position, track.duration_ms); }
     }
     let op = match cmd {
-        Cmd::PlayPause => {
-            let info = s.GetPlaybackInfo().ok();
-            if info.as_ref().and_then(|i| i.Controls().ok()).is_some_and(|c| c.IsPlayPauseToggleEnabled().unwrap_or(false)) {
-                s.TryTogglePlayPauseAsync()
-            } else if info.and_then(|i| i.PlaybackStatus().ok()) == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
-                s.TryPauseAsync()
-            } else { s.TryPlayAsync() }
-        }
+        Cmd::PlayPause => unreachable!("handled above"),
         Cmd::Next => s.TrySkipNextAsync(),
         Cmd::Previous => s.TrySkipPreviousAsync(),
         Cmd::Seek(position) => s.TryChangePlaybackPositionAsync(track.seek_ticks(*position)),
@@ -232,7 +254,9 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
         let mut session = match &cmd {
             Some(_) if native_target => None,
             Some((_, track)) => manager.as_ref().and_then(|m| m.GetSessions().ok()).and_then(|sessions|
-                sessions.into_iter().find(|s| s.SourceAppUserModelId().is_ok_and(|id| id == track.source_id.as_str()))),
+                sessions.into_iter().find(|s| s.SourceAppUserModelId().is_ok_and(|id| id == track.source_id.as_str())))
+                // The player's session is gone (its audio device went away): the current one is the best guess.
+                .or_else(|| manager.as_ref().and_then(|m| m.GetCurrentSession().ok())),
             None => manager.as_ref().and_then(|m| m.GetCurrentSession().ok()),
         };
         let had_command = cmd.is_some();
