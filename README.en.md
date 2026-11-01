@@ -30,7 +30,7 @@
 | Page | What it does |
 |---|---|
 | **Music** | Cover, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, drag the bar to seek (Windows media controls, iTunes, foobar2000). The lyrics button widens the panel; background and aurora follow the cover. |
-| **Tasks** | Tasks and appointments in one list. Type "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Overdue shows red "Late"; ⚙ picks a reminder 0–60 min ahead. |
+| **Notes** | Notes and appointments in one list. Type "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Overdue shows red "Late"; ⚙ picks a reminder 0–60 min ahead. |
 | **Notifications** | The ~30 latest Windows notifications with app icons; click to open the app; "Clear all" hides what is there (Windows keeps it). |
 | **Health** | Water and stand-up reminders with adjustable times and amounts. |
 | **Weather** | Type a city once: large icon, feels-like, humidity, wind, a 24-hour forecast (**24h** button), °C | °F. Open-Meteo data, refreshed every 30 min. |
@@ -51,7 +51,7 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 | | |
 |---|---|
 | ![Music](assets/screenshots/page-music.png)<br>**Music**: cover, title, lyrics, background and aurora line in the cover's colours | ![Music, nothing playing](assets/screenshots/page-music-empty.png)<br>**Music** with nothing playing |
-| ![Tasks](assets/screenshots/page-tasks.png)<br>**Tasks**: tasks and appointments in one list | ![Notifications](assets/screenshots/page-notifications.png)<br>**Notifications**: each with its app's icon |
+| ![Notes](assets/screenshots/page-tasks.png)<br>**Notes**: notes and appointments in one list | ![Notifications](assets/screenshots/page-notifications.png)<br>**Notifications**: each with its app's icon |
 | ![Health](assets/screenshots/page-health.png)<br>**Health**: water and stand-up reminders | ![Banner](assets/screenshots/banner.png)<br>Notification **banner** |
 
 ![Music with lyrics](assets/screenshots/page-music-lyrics.png)<br>**Music** with lyrics: the panel widens, the line being sung lit in the middle, the aurora line swaying along the bottom

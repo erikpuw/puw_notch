@@ -130,7 +130,7 @@ impl Page {
     pub fn name(self) -> &'static str {
         match self {
             Page::Music => tr("Nhạc", "Music"),
-            Page::Todo => tr("Việc", "Tasks"),
+            Page::Todo => tr("Ghi chú", "Notes"),
             Page::Notify => tr("Thông báo", "Notifications"),
             Page::Health => tr("Sức khỏe", "Health"),
             Page::Weather => tr("Thời tiết", "Weather"),
@@ -279,8 +279,8 @@ const INPUT_Y: f32 = 36.0;
 const INPUT_H: f32 = 24.0;
 /// The left column of the page (the ring of the day's progress and what it counts), then the
 /// right column (the add box and the list) from `LIST_X` on, as far as the content reaches.
-const HERO_W: f32 = 112.0;
-const LIST_X: f32 = HERO_W + 10.0;
+const HERO_W: f32 = 92.0;
+const LIST_X: f32 = HERO_W + 6.0;
 const ROW_Y: f32 = 66.0;
 /// A task is a plain row with a hairline under it, and its tick, edit and delete buttons: 28 px high.
 const ROW_H: f32 = 28.0;
@@ -2274,7 +2274,7 @@ impl Renderer {
                         }
                         Page::Todo => {
                             let (x0, xr) = (cl + LIST_X * s, cr);
-                            draw_input(tr("Thêm việc… (vd: Họp 20:00)", "Add a task… (e.g. Call 20:00)"))?;
+                            draw_input(tr("Thêm ghi chú… (vd: Họp 20:00)", "Add a note… (e.g. Call 20:00)"))?;
                             let today = (lv.now / 10_000) as u32;
                             let (open, later) = if current { lv.counts } else { (0, 0) };
                             // Left: the day's progress as a big ring with what is left in it.
@@ -2283,7 +2283,7 @@ impl Renderer {
                             let frac = if v.todos.is_empty() { 0.0 } else { done as f32 / v.todos.len() as f32 };
                             self.draw_ring_on(hub, 84.0 * s, 7.0 * s, frac, GREEN, color(GREEN.0 * 0.2, GREEN.1 * 0.2, GREEN.2 * 0.2, a), a)?;
                             text(&open.to_string(), F_FIGURE, rect(hub.0 - 40.0 * s, hub.1 - 22.0 * s, hub.0 + 40.0 * s, hub.1 + 22.0 * s), center, grey(1.0, a))?;
-                            text(tr("việc còn lại", "tasks left"), F_LABEL, rect(cl, 126.0 * s, cl + HERO_W * s, 142.0 * s), center, grey(0.9, a))?;
+                            text(tr("còn lại", "left"), F_LABEL, rect(cl, 126.0 * s, cl + HERO_W * s, 142.0 * s), center, grey(0.9, a))?;
                             text(&format!("{later} {}", tr("sắp tới", "upcoming")), F_LABEL, rect(cl, 142.0 * s, cl + HERO_W * s, 158.0 * s), center, grey(0.5, a))?;
                             let open_set = settings == Some(Card::Tasks);
                             if let Some(gb) = rect_of(Button::Gear(Card::Tasks)) {
@@ -2305,7 +2305,7 @@ impl Renderer {
                                         text(icon, F_TINY_ICON, sb, center, grey(1.0, a))?;
                                     }
                                 }
-                                text(tr("Việc có giờ còn được nhắc đúng giờ", "Timed tasks also ring on time"), F_LABEL,
+                                text(tr("Ghi chú có giờ còn được nhắc đúng giờ", "Timed notes also ring on time"), F_LABEL,
                                     rect(x0, y + 26.0 * s, xr, y + 44.0 * s), lead, grey(0.5, a))?;
                             } else {
                                 if v.todos.is_empty() {
@@ -2313,7 +2313,7 @@ impl Renderer {
                                     let ring = D2D1_ELLIPSE { point: Vector2 { X: mid, Y: (ROW_Y + 16.0) * s }, radiusX: 11.0 * s, radiusY: 11.0 * s };
                                     rt.DrawEllipse(&ring, &self.brush(grey(0.3, a))?, 1.5 * s, None);
                                     text(ICON_CHECK, F_TINY_ICON, rect(mid - 11.0 * s, (ROW_Y + 5.0) * s, mid + 11.0 * s, (ROW_Y + 27.0) * s), center, grey(0.3, a))?;
-                                    text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, rect(x0, (ROW_Y + 32.0) * s, xr, (ROW_Y + 50.0) * s), center, grey(0.7, a))?;
+                                    text(tr("Chưa có ghi chú nào", "No notes yet"), F_BODY, rect(x0, (ROW_Y + 32.0) * s, xr, (ROW_Y + 50.0) * s), center, grey(0.7, a))?;
                                     text(tr("Gõ vào ô trên rồi nhấn Enter", "Type above and press Enter"), F_LABEL, rect(x0, (ROW_Y + 50.0) * s, xr, (ROW_Y + 66.0) * s), center, grey(0.5, a))?;
                                 }
                                 let rows_on: Vec<_> = btns.iter().filter(|(b, _)| matches!(b, Button::ListToggle(_))).collect();

@@ -30,7 +30,7 @@
 | Trang | Làm gì |
 |---|---|
 | **Nhạc** | Ảnh bìa, lời đồng bộ (LRCLIB), ⏮ ⏯ ⏭, kéo thanh để tua (Windows media controls, iTunes, foobar2000). Nút lời mở rộng bảng; nền và đường aurora theo màu bìa. |
-| **Việc** | Việc và lịch hẹn trong một danh sách. Gõ "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0–60 phút. |
+| **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách. Gõ "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0–60 phút. |
 | **Thông báo** | ~30 thông báo Windows gần nhất kèm icon app; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy, chỉnh giờ và mức. |
 | **Thời tiết** | Gõ tên thành phố một lần: icon lớn, cảm giác, độ ẩm, gió, dự báo 24 giờ (nút **24h**), °C | °F. Dữ liệu Open-Meteo, làm mới 30 phút. |
@@ -51,7 +51,7 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 | | |
 |---|---|
 | ![Nhạc](assets/screenshots/page-music.png)<br>**Nhạc**: ảnh bìa, tên bài, lời, nền và đường aurora theo màu ảnh bìa | ![Nhạc khi không phát](assets/screenshots/page-music-empty.png)<br>**Nhạc** khi chưa phát gì |
-| ![Việc](assets/screenshots/page-tasks.png)<br>**Việc**: việc và lịch hẹn trong một danh sách | ![Thông báo](assets/screenshots/page-notifications.png)<br>**Thông báo**: kèm icon của từng app |
+| ![Ghi chú](assets/screenshots/page-tasks.png)<br>**Ghi chú**: ghi chú và lịch hẹn trong một danh sách | ![Thông báo](assets/screenshots/page-notifications.png)<br>**Thông báo**: kèm icon của từng app |
 | ![Sức khỏe](assets/screenshots/page-health.png)<br>**Sức khỏe**: nhắc uống nước, đứng dậy | ![Banner](assets/screenshots/banner.png)<br>**Banner** thông báo |
 
 ![Nhạc với lời](assets/screenshots/page-music-lyrics.png)<br>**Nhạc** với lời bài hát: bảng giãn ngang, dòng đang hát sáng ở giữa, đường aurora lượn dọc đáy bảng

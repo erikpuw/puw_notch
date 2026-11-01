@@ -762,7 +762,7 @@ impl App {
                 todo::Ring::Soon => format!("{} {} {} · {}", tr("Còn", "In"), todo::minutes(at) - todo::minutes(now), tr("phút", "min"), hhmm(at)),
                 todo::Ring::Now => format!("{} · {}", tr("Đến giờ", "It's time"), hhmm(at)),
             };
-            let toast = status_toast(tr("Nhắc việc", "Reminder"), item.text.clone(), &when, None, render::ICON_REMINDER);
+            let toast = status_toast(tr("Nhắc ghi chú", "Note reminder"), item.text.clone(), &when, None, render::ICON_REMINDER);
             if !self.show_banner(toast, ALERT_MS) {
                 return;
             }
