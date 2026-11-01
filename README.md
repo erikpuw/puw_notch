@@ -40,7 +40,7 @@ Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:
 
 | App | Lấy từ |
 |---|---|
-| **Claude** | `plan-usage-history.json` do app desktop tự ghi (mỗi ~15 phút, không có giờ làm mới); Claude Code ở terminal qua `statusLine` |
+| **Claude** | `plan-usage-history.json` do app desktop tự ghi (mỗi ~15 phút khi app đang lấy số, không có giờ làm mới; tìm trong `%APPDATA%\Claude`, `Claude-Data` và thư mục gói của app; số cũ vẫn hiện kèm tuổi, mở khung giới hạn trong app để làm mới); Claude Code ở terminal qua `statusLine` |
 | **Codex** | Log phiên `~/.codex`, cập nhật sau mỗi lượt agent; số quá 10 phút ghi "Số cũ"; đổi tài khoản thì chờ lượt chạy đầu |
 | **Antigravity** | Máy chủ cục bộ của chính app, chỉ khi app đang mở |
 

@@ -14,8 +14,6 @@ const PAD: f32 = 12.0;
 /// Widest a card gets, so one or two limits do not stretch over the whole page.
 const CARD_MAX_W: f32 = 172.0;
 const RED: (f32, f32, f32) = (1.0, 0.35, 0.35);
-/// A reading older than this (seconds) is shown with its age.
-const STALE_SECS: i64 = 10 * 60;
 
 /// Green while there is room, orange getting close, red nearly out.
 fn ring_colour(used: f32) -> (f32, f32, f32) {
@@ -117,7 +115,7 @@ impl Renderer {
                     let (_, window) = split_label(&bar.label);
                     let line = 17.0 * s;
                     // A reading the app made a while ago says so: what it shows now may be further on.
-                    let stale = self.usage.updated(APPS[tab]).filter(|&at| now - at > STALE_SECS);
+                    let stale = self.usage.updated(APPS[tab]).filter(|&at| now - at > APPS[tab].stale_after());
                     let up = if stale.is_some() { 8.0 * s } else { 0.0 };
                     let (y0, y1) = if bar.resets_at > 0 { (mid - line - up, mid - up) } else { (mid - line / 2.0 - up, mid + line / 2.0 - up) };
                     text(window, F_TITLE, rect(tx, y0, r.right - PAD * s, y1), lead, grey(1.0, a))?;

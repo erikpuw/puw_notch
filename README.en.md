@@ -40,7 +40,7 @@ The Limits page reads this PC only, nothing is sent:
 
 | App | Read from |
 |---|---|
-| **Claude** | `plan-usage-history.json` that the desktop app writes itself (every ~15 min, no reset times); Claude Code in a terminal through `statusLine` |
+| **Claude** | `plan-usage-history.json` that the desktop app writes itself (every ~15 min while the app fetches its numbers, no reset times; looked for in `%APPDATA%\Claude`, `Claude-Data` and the app's package folder; an old reading still shows with its age, open the usage popup in the app to refresh it); Claude Code in a terminal through `statusLine` |
 | **Codex** | Session logs in `~/.codex`, updated after each agent turn; a reading over 10 min old says "Old"; after switching accounts it waits for the first turn |
 | **Antigravity** | The app's own local server, only while it is open |
 
