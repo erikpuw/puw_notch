@@ -2427,8 +2427,8 @@ impl Renderer {
                                     else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }
                                     else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
                                 // The app's tile, so it is plain whose message it is, then the two lines.
-                                note_tile(row, rect(x0, y + 8.5 * s, x0 + 16.0 * s, y + 24.5 * s))?;
-                                let tx = x0 + 24.0 * s;
+                                note_tile(row, rect(x0, y + 7.5 * s, x0 + 18.0 * s, y + 25.5 * s))?;
+                                let tx = x0 + 26.0 * s;
                                 text(&when, F_LABEL, rect(xr - 64.0 * s, y, xr, y + 18.0 * s), trail, grey(0.55, a))?;
                                 text(&n.title, F_TITLE, rect(tx, y, xr - 68.0 * s, y + 18.0 * s), lead, grey(1.0, a))?;
                                 let line2 = if n.body.is_empty() { n.app.clone() } else { format!("{} · {}", n.app, n.body) };
