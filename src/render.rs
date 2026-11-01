@@ -2380,13 +2380,13 @@ impl Renderer {
                         Page::Notify => {
                             let (x0, xr) = (cl + NOTE_X * s, cr);
                             let today = (lv.now / 10_000) as u32;
-                            // An app's tile: its own icon on a light-grey tile, or its initial on a colour taken from its name.
+                            // An app's mark: its own icon as it is, or its initial on a colour taken from its name.
                             let note_tile = |row: usize, tile: D2D_RECT_F| -> Result<()> {
                                 let Some(n) = v.notes.get(row) else { return Ok(()) };
                                 match note_icons.get(row).and_then(|i| i.as_ref()) {
                                     Some(icon) => {
-                                        rt.FillRoundedRectangle(&rounded(tile, 5.0 * s), &self.brush(grey(0.16, a))?);
-                                        rt.DrawBitmap(icon, Some(&rect(tile.left + 2.0 * s, tile.top + 2.0 * s, tile.right - 2.0 * s, tile.bottom - 2.0 * s)), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                                        // The icon itself, as Windows draws it: no tile behind it, no margin around it.
+                                        rt.DrawBitmap(icon, Some(&tile), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                                     }
                                     None => {
                                         let (tr_, tg, tb) = app_tint(&n.app);
