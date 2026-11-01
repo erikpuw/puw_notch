@@ -25,7 +25,7 @@
 | **Light** | Loads only what is visible: lyrics while the Music page is open, icons while Notifications is open; paused while hidden for fullscreen. About 7 MB of RAM and 0 % CPU at rest, about 14 MB while music plays in the pill, about 22 MB with the Music page open and its aurora ([Task Manager pictures](#light-and-the-tray-menu)). |
 | **Tray** | Minimal notch, Idle robot, Notch style, Pages shown (keep only the pages you use; a hidden page stops completely: no task, water or stand-up reminders, and no music, weather, limits or notifications are read), More features (Approve on the notch, Hide Windows volume popup: off by default), Start with Windows, Language (Tiếng Việt / English), About, Quit. |
 
-**6 pages** (switch with ‹ ›, or click the page dots to show a row of icons and pick a page at once):
+**6 pages** (switch with ‹ ›, or put the mouse on the page dots: they open into a row of icons to pick a page at once, and come back as dots when the mouse leaves):
 
 | Page | What it does |
 |---|---|

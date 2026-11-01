@@ -25,7 +25,7 @@
 | **Nhẹ** | Chỉ tải phần đang hiện: lời bài hát khi mở trang Nhạc, icon khi mở trang Thông báo; ẩn toàn màn hình thì ngừng tải. Khi nghỉ chỉ chừng 7 MB RAM và 0% CPU, đang phát nhạc ở dạng pill chừng 14 MB, mở trang Nhạc có aurora chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
 | **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị (chỉ giữ trang bạn dùng; trang ẩn thì hoàn toàn ngừng: không nhắc việc, uống nước, đứng dậy, không đọc nhạc, thời tiết, hạn mức, thông báo), Tính năng khác (Duyệt ngay trên notch, Ẩn bảng âm lượng Windows: mặc định tắt), Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát. |
 
-**6 trang** (chuyển bằng ‹ ›, hoặc bấm vào chấm trang để hiện hàng biểu tượng và chọn thẳng một trang):
+**6 trang** (chuyển bằng ‹ ›, hoặc rê chuột vào chấm trang: chấm mở thành hàng biểu tượng để chọn thẳng một trang, rời ra thì trả về chấm):
 
 | Trang | Làm gì |
 |---|---|
