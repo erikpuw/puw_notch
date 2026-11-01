@@ -282,9 +282,10 @@ const INPUT_H: f32 = 24.0;
 const HERO_W: f32 = 92.0;
 const LIST_X: f32 = HERO_W + 6.0;
 const ROW_Y: f32 = 66.0;
-/// A task is a plain row with a hairline under it, and its tick, edit and delete buttons: 28 px high.
-const ROW_H: f32 = 28.0;
-pub const LIST_ROWS: usize = 3;
+/// A note is a plain row with a hairline under it, and its tick, edit and delete buttons: 26 px high,
+/// four of them from `ROW_Y` down to just above the page dots.
+const ROW_H: f32 = 26.0;
+pub const LIST_ROWS: usize = 4;
 /// Weather page, logical px from the content's left / the panel's top. City line: the name, then at
 /// its right end the unit chips, 24h and x. Left block: the big icon with the temperature beside it, the
 /// sky's words and the feels-like under that. Right block (from `STRIP_X` to the content's right): the
@@ -304,7 +305,7 @@ const UNIT_H: f32 = 18.0;
 /// `NOTE_X` to the content's end, a row for each notification: its app's tile, then two lines.
 const NOTE_X: f32 = 72.0;
 const NOTE_Y: f32 = 36.0;
-const NOTE_H: f32 = 38.0;
+const NOTE_H: f32 = 44.0;
 pub const NOTE_ROWS: usize = 3;
 /// "Clear all" under the count, in the left column (the click area).
 const CLEAR_W: f32 = 64.0;
@@ -390,8 +391,8 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             let (x0, rw) = (cl + LIST_X, cw - LIST_X);
             out.push((Button::ListInput, r(x0, INPUT_Y, rw, INPUT_H)));
             out.push((Button::ListClear, r(x0 + rw - 26.0, INPUT_Y, 26.0, INPUT_H)));
-            // The settings gear, small, under the last row.
-            out.push((Button::Gear(Card::Tasks), r(x0 + rw - 20.0, ROW_Y + ROW_H * LIST_ROWS as f32 + 4.0, 20.0, 18.0)));
+            // The settings gear, small, in the left column under the count.
+            out.push((Button::Gear(Card::Tasks), r(cl + HERO_W / 2.0 - 10.0, 152.0, 20.0, 18.0)));
             if settings == Some(Card::Tasks) {
                 out.push((Button::RemindStep(-1), r(x0 + rw - 112.0, ROW_Y, 22.0, 22.0)));
                 out.push((Button::RemindStep(1), r(x0 + rw - 24.0, ROW_Y, 22.0, 22.0)));
@@ -2283,8 +2284,8 @@ impl Renderer {
                             let frac = if v.todos.is_empty() { 0.0 } else { done as f32 / v.todos.len() as f32 };
                             self.draw_ring_on(hub, 84.0 * s, 7.0 * s, frac, GREEN, color(GREEN.0 * 0.2, GREEN.1 * 0.2, GREEN.2 * 0.2, a), a)?;
                             text(&open.to_string(), F_FIGURE, rect(hub.0 - 40.0 * s, hub.1 - 22.0 * s, hub.0 + 40.0 * s, hub.1 + 22.0 * s), center, grey(1.0, a))?;
-                            text(tr("còn lại", "left"), F_LABEL, rect(cl, 126.0 * s, cl + HERO_W * s, 142.0 * s), center, grey(0.9, a))?;
-                            text(&format!("{later} {}", tr("sắp tới", "upcoming")), F_LABEL, rect(cl, 142.0 * s, cl + HERO_W * s, 158.0 * s), center, grey(0.5, a))?;
+                            text(tr("còn lại", "left"), F_LABEL, rect(cl, 122.0 * s, cl + HERO_W * s, 137.0 * s), center, grey(0.9, a))?;
+                            text(&format!("{later} {}", tr("sắp tới", "upcoming")), F_LABEL, rect(cl, 136.0 * s, cl + HERO_W * s, 151.0 * s), center, grey(0.5, a))?;
                             let open_set = settings == Some(Card::Tasks);
                             if let Some(gb) = rect_of(Button::Gear(Card::Tasks)) {
                                 let hot = hovered == Some(Button::Gear(Card::Tasks));
@@ -2426,12 +2427,12 @@ impl Renderer {
                                     else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }
                                     else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
                                 // The app's tile, so it is plain whose message it is, then the two lines.
-                                note_tile(row, rect(x0, y + 3.0 * s, x0 + 30.0 * s, y + 33.0 * s))?;
+                                note_tile(row, rect(x0, y + 6.0 * s, x0 + 30.0 * s, y + 36.0 * s))?;
                                 let tx = x0 + 38.0 * s;
-                                text(&when, F_LABEL, rect(xr - 64.0 * s, y, xr, y + 20.0 * s), trail, grey(0.55, a))?;
-                                text(&n.title, F_TITLE, rect(tx, y, xr - 68.0 * s, y + 20.0 * s), lead, grey(1.0, a))?;
+                                text(&when, F_LABEL, rect(xr - 64.0 * s, y + 3.0 * s, xr, y + 23.0 * s), trail, grey(0.55, a))?;
+                                text(&n.title, F_TITLE, rect(tx, y + 3.0 * s, xr - 68.0 * s, y + 23.0 * s), lead, grey(1.0, a))?;
                                 let line2 = if n.body.is_empty() { n.app.clone() } else { format!("{} · {}", n.app, n.body) };
-                                text(&line2, F_BODY, rect(tx, y + 19.0 * s, xr, y + 37.0 * s), lead, grey(0.65, a))?;
+                                text(&line2, F_BODY, rect(tx, y + 22.0 * s, xr, y + 40.0 * s), lead, grey(0.65, a))?;
                             }
                             rt.PopAxisAlignedClip();
                             scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
