@@ -279,9 +279,12 @@ impl App {
         if self.active_page != page {
             self.active_page = page;
             self.music.set_page_open(page == Some(Page::Music));
-            self.renderer.set_page_open(page == Some(Page::Notify));
+            // The notification icons load as soon as the panel opens (on any page), so the Notifications
+            // page already has them when it slides in.
+            let notes = page.is_some() && render::page_shown(Page::Notify);
+            self.renderer.set_page_open(notes);
             self.usage.set_page_open(page == Some(Page::Usage));
-            if page == Some(Page::Notify) { self.refresh_notes(); }
+            if notes { self.refresh_notes(); }
         }
     }
 
@@ -845,7 +848,6 @@ impl App {
                 };
                 self.page_anim = Some((self.page, Instant::now(), dir));
                 self.page = next;
-                self.page_since = Instant::now();
                 self.settings_open = None;
                 self.kick();
             }

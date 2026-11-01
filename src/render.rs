@@ -1612,7 +1612,8 @@ impl Renderer {
                 false
             }
         };
-        let note_icons: Vec<Option<ID2D1Bitmap>> = if page == Some(Page::Notify) { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
+        // Also while the panel shows another page: the icons are then ready (and stay while the page slides out).
+        let note_icons: Vec<Option<ID2D1Bitmap>> = if page.is_some() { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
         let banner_image: Option<ID2D1Bitmap> = v.banner.filter(|_| v.mode == Mode::Alert).and_then(|b| b.image.as_deref()).and_then(|p| self.app_icon(&format!("img:{p}")));
         let rt = &self.rt;
