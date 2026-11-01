@@ -2446,10 +2446,10 @@ impl Renderer {
                                     // ("−128°"), turning about its left end.
                                     let temp = format!("{}°", v.unit.number(n.temp));
                                     let (tx, ty) = (cl + TEMP_X * s, (ICON_Y + 18.0) * s);
-                                    // The figures start 14 px after the longer of the temperature and the sky's words (never before
-                                    // STATS_X, and the temperature shrinks past STATS_X + 60), so a long word is never cut.
+                                    // The figures start 14 px after the longer of the temperature and the sky's words, between
+                                    // STATS_X - 30 and STATS_X + 60: the figure cards take the rest, so no gap and no cut word.
                                     let hero_w = width(&temp, F_BIG).max(width(weather::describe(n.sky), F_BODY)) / s;
-                                    let stats_x = (TEMP_X + hero_w + 14.0).clamp(STATS_X, STATS_X + 60.0);
+                                    let stats_x = (TEMP_X + hero_w + 14.0).clamp(STATS_X - 30.0, STATS_X + 60.0);
                                     let k = (stats_x - TEMP_X - 8.0) * s / width(&temp, F_BIG);
                                     let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                                     rt.SetTransform(&(translate(-tx, -ty) * scaling(k.min(1.0)) * translate(tx, ty) * base));
