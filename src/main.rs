@@ -1102,6 +1102,7 @@ impl App {
             let text = |s: &str| windows::core::HSTRING::from(s);
             let english = i18n::english();
             let _ = AppendMenuW(menu, MF_STRING | check(self.notch.minimal), MENU_MINIMAL, &text(tr("Notch tối giản", "Minimal notch")));
+            let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
             if let Ok(styles) = CreatePopupMenu() {
                 let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Ears), MENU_STYLE_EARS, &text(tr("Tai thỏ", "Ears")));
                 let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Pill), MENU_STYLE_PILL, &text(tr("Viên thuốc", "Pill")));
@@ -1116,9 +1117,11 @@ impl App {
                 }
                 let _ = AppendMenuW(menu, MF_POPUP, pages.0 as usize, &text(tr("Trang hiển thị", "Pages shown")));
             }
-            let _ = AppendMenuW(menu, MF_STRING | check(self.approve.is_enabled()), MENU_APPROVE, &text(tr("Duyệt ngay trên notch", "Approve on the notch")));
-            let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
-            let _ = AppendMenuW(menu, MF_STRING | check(status::taking_volume_keys()), MENU_VOLUME_KEYS, &text(tr("Ẩn bảng âm lượng của Windows", "Hide Windows volume popup")));
+            if let Ok(more) = CreatePopupMenu() {
+                let _ = AppendMenuW(more, MF_STRING | check(self.approve.is_enabled()), MENU_APPROVE, &text(tr("Duyệt ngay trên notch", "Approve on the notch")));
+                let _ = AppendMenuW(more, MF_STRING | check(status::taking_volume_keys()), MENU_VOLUME_KEYS, &text(tr("Ẩn bảng âm lượng của Windows", "Hide Windows volume popup")));
+                let _ = AppendMenuW(menu, MF_POPUP, more.0 as usize, &text(tr("Tính năng khác", "More features")));
+            }
             let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, &text(tr("Khởi động cùng Windows", "Start with Windows")));
             if let Ok(langs) = CreatePopupMenu() {
                 let _ = AppendMenuW(langs, MF_STRING | check(!english), MENU_LANG_VI, w!("Tiếng Việt"));
