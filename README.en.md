@@ -30,11 +30,11 @@
 | Page | What it does |
 |---|---|
 | **Music** | Cover, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, drag the bar to seek (Windows media controls, iTunes, foobar2000). The lyrics button widens the panel; background and aurora follow the cover. |
-| **Notes** | Notes and appointments in one list. Type "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Overdue shows red "Late"; ⚙ picks a reminder 0–60 min ahead. |
-| **Notifications** | The ~30 latest Windows notifications with app icons; click to open the app; "Clear all" hides what is there (Windows keeps it). |
-| **Health** | Water and stand-up reminders with adjustable times and amounts. |
-| **Weather** | Type a city once: large icon, feels-like, humidity, wind, a 24-hour forecast (**24h** button), °C | °F. Open-Meteo data, refreshed every 30 min. |
-| **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity (a free plan: 30 days), a tab per app, only for the apps found on the PC. Codex and Antigravity show what is left, Claude what is used. A banner warns at 80 %, 95 %, or 25 % of the limit in one day. |
+| **Notes** | Notes and appointments in one list, a progress ring says how many are left. Type "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Overdue shows red "Late"; ⚙ picks a reminder 0–60 min ahead; edit and delete show under the mouse. |
+| **Notifications** | The ~30 latest Windows notifications, each with its app icon and two lines; the count on the left; click to open the app; "Clear all" hides what is there (Windows keeps it). |
+| **Health** | Water and stand-up reminders: a big figure, the day's progress as a bar, a round button to log a drink or having stood up; times and amounts under ⚙. |
+| **Weather** | Type a city once: a large icon and temperature, the next 5 slots, feels-like, humidity, wind, the day's high, °C | °F. Open-Meteo data, refreshed every 30 min. |
+| **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity (a free plan: 30 days), a tab per app (with the app's dot), only for the apps found on the PC; Claude shows two concentric rings (5 hours outside, the week inside). Codex and Antigravity show what is left, Claude what is used. A banner warns at 80 %, 95 %, or 25 % of the limit in one day. |
 
 The Limits page reads this PC only, nothing is sent:
 
@@ -56,7 +56,7 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 ![Music with lyrics](assets/screenshots/page-music-lyrics.png)<br>**Music** with lyrics: the panel widens, the line being sung lit in the middle, the aurora line swaying along the bottom
 
-![Weather](assets/screenshots/page-weather.png)<br>**Weather**: large icon, temperature, °C | °F buttons, feels-like, humidity, wind
+![Weather](assets/screenshots/page-weather.png)<br>**Weather**: large icon, temperature, the next 5 slots, one line of figures, °C | °F buttons
 
 **Limits** of Claude, Codex and Antigravity (Claude shows what is used; Codex and Antigravity show what is left, counting down like their own apps). The Codex tab names the plan of the account in use; a free plan counts 30 days:
 

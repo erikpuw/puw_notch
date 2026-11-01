@@ -30,11 +30,11 @@
 | Trang | Làm gì |
 |---|---|
 | **Nhạc** | Ảnh bìa, lời đồng bộ (LRCLIB), ⏮ ⏯ ⏭, kéo thanh để tua (Windows media controls, iTunes, foobar2000). Nút lời mở rộng bảng; nền và đường aurora theo màu bìa. |
-| **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách. Gõ "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0–60 phút. |
-| **Thông báo** | ~30 thông báo Windows gần nhất kèm icon app; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
-| **Sức khỏe** | Nhắc uống nước và đứng dậy, chỉnh giờ và mức. |
-| **Thời tiết** | Gõ tên thành phố một lần: icon lớn, cảm giác, độ ẩm, gió, dự báo 24 giờ (nút **24h**), °C | °F. Dữ liệu Open-Meteo, làm mới 30 phút. |
-| **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab, chỉ hiện app tìm thấy trên máy. Codex và Antigravity hiện phần còn lại, Claude phần đã dùng. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
+| **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách, vòng tiến độ cho biết còn bao nhiêu. Gõ "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0–60 phút; nút sửa và xóa hiện khi rê chuột. |
+| **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng; số lượng ở bên trái; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
+| **Sức khỏe** | Nhắc uống nước và đứng dậy: số lớn, thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy; chỉnh giờ và mức ở ⚙. |
+| **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Dữ liệu Open-Meteo, làm mới 30 phút. |
+| **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab (chấm màu của app), chỉ hiện app tìm thấy trên máy; Claude hiện hai vòng đồng tâm (5 giờ ngoài, tuần trong). Codex và Antigravity hiện phần còn lại, Claude phần đã dùng. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
 
 Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:
 
@@ -56,7 +56,7 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 
 ![Nhạc với lời](assets/screenshots/page-music-lyrics.png)<br>**Nhạc** với lời bài hát: bảng giãn ngang, dòng đang hát sáng ở giữa, đường aurora lượn dọc đáy bảng
 
-![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, nút °C | °F, cảm nhận, độ ẩm, gió
+![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, một dòng số liệu, nút °C | °F
 
 **Giới hạn** của Claude, Codex và Antigravity (Claude: phần đã dùng; Codex và Antigravity: phần còn lại, đếm lùi như chính app của chúng). Tab Codex ghi gói của tài khoản đang dùng, gói free tính theo 30 ngày:
 
