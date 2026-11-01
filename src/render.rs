@@ -1807,32 +1807,6 @@ impl Renderer {
                 let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
                 rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
             }
-            // The other pages have a softer glow of their own colour rising from the bottom, like the
-            // Music page's, so each page has an identity; it fades with the page.
-            if open > 0.0 && v.mode == Mode::Expanded {
-                let accent = |page: Page| -> Option<(f32, f32, f32)> {
-                    match page {
-                        Page::Music => None,
-                        Page::Todo => Some(GREEN),
-                        Page::Notify => Some(BLUE),
-                        Page::Health => Some((1.0, 0.42, 0.5)),
-                        Page::Weather => Some(v.weather.now.map_or((1.0, 0.78, 0.25), |n| weather::tints(n.sky, n.day).1)),
-                        Page::Usage => Some(usage_page::app_accent(crate::usage::APPS[self.usage_tab.min(crate::usage::APPS.len() - 1)])),
-                    }
-                };
-                let shown = match v.leaving {
-                    Some((from, t, _)) => [(v.page, page_fades(t).1), (from, page_fades(t).0)],
-                    None => [(v.page, 1.0), (v.page, 0.0)],
-                };
-                for (page, weight) in shown {
-                    let Some(k) = accent(page).filter(|_| weight > 0.01) else { continue };
-                    let (gr, gg, gb) = dim_to_lum(k, 0.55);
-                    let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * weight) };
-                    let stops = rt.CreateGradientStopCollection(&[stop(0.60, 0.0), stop(0.80, 0.10), stop(1.0, 0.34)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
-                    let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
-                    rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
-                }
-            }
             // Aurora over the glow: a thin glowing line in the cover's two colours, swaying slowly.
             let aurora_a = open * level * gate;
             if aurora_a > 0.01 && v.mode != Mode::Alert {
