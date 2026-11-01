@@ -2628,19 +2628,22 @@ impl Renderer {
                                 // A ring of the day's progress with the card's own picture in it; the figure and
                                 // its unit beside it, the status line under both.
                                 let (bl, br_) = (x + 12.0 * s, x + card_w * s - 12.0 * s);
-                                let hub = (bl + 28.0 * s, (CARD_TOP + 62.0) * s);
+                                // The ring and the figures share one middle line, between the title and the button, and the
+                                // ring starts where the title does.
+                                let ring_d = 52.0;
+                                let hub = (x + (14.0 + ring_d / 2.0) * s, (CARD_TOP + 56.0) * s);
                                 // The empty ring keeps the card's own tint, so it reads as designed, not as missing.
                                 let track = color(accent.0 * 0.35, accent.1 * 0.35, accent.2 * 0.35, a);
-                                self.draw_ring_on(hub, 56.0 * s, 6.0 * s, frac, accent, track, a)?;
+                                self.draw_ring_on(hub, ring_d * s, 6.0 * s, frac, accent, track, a)?;
                                 if card == Card::Water {
-                                    let g = self.water_drop(hub.0, hub.1, 22.0 * s)?;
+                                    let g = self.water_drop(hub.0, hub.1, 20.0 * s)?;
                                     rt.FillGeometry(&g, &self.brush(solid(accent, a))?, None);
                                 } else {
-                                    text(ICON_WALK, F_ICON, rect(hub.0 - 14.0 * s, hub.1 - 14.0 * s, hub.0 + 14.0 * s, hub.1 + 14.0 * s), center, solid(accent, a))?;
+                                    text(ICON_WALK, F_ICON, rect(hub.0 - 13.0 * s, hub.1 - 13.0 * s, hub.0 + 13.0 * s, hub.1 + 13.0 * s), center, solid(accent, a))?;
                                 }
                                 // The figure large, its unit on the same line when it fits (else under it), then
                                 // the status in the card's colour.
-                                let (tx, by) = (bl + 68.0 * s, (CARD_TOP + 30.0) * s);
+                                let (tx, by) = (x + (14.0 + ring_d + 12.0) * s, (CARD_TOP + 33.0) * s);
                                 let (bw, uw) = (width(&big, F_BIG), width(unit.trim(), F_LABEL));
                                 text(&big, F_BIG, rect(tx, by, br_, by + 28.0 * s), lead, grey(1.0, a))?;
                                 let line2 = if tx + bw + 6.0 * s + uw <= br_ {
