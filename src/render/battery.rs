@@ -21,13 +21,18 @@ fn ring_colour(b: &Battery) -> (f32, f32, f32) {
 impl Renderer {
     /// A ring of diameter `d` (px) centred on `(x, y)` with a stroke of `width`: a grey track and
     /// an arc of `fraction` (0..1) from the top clockwise with round ends, in `accent`.
-    pub(super) fn draw_ring(&self, (x, y): (f32, f32), d: f32, width: f32, fraction: f32, accent: (f32, f32, f32), a: f32) -> Result<()> {
+    pub(super) fn draw_ring(&self, centre: (f32, f32), d: f32, width: f32, fraction: f32, accent: (f32, f32, f32), a: f32) -> Result<()> {
+        self.draw_ring_on(centre, d, width, fraction, accent, grey(0.3, a), a)
+    }
+
+    /// The same ring on a track of the given colour (a card's own tint, say).
+    pub(super) fn draw_ring_on(&self, (x, y): (f32, f32), d: f32, width: f32, fraction: f32, accent: (f32, f32, f32), track: D2D1_COLOR_F, a: f32) -> Result<()> {
         let rt = &self.rt;
         let radius = (d - width) / 2.0;
         let ring = D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: radius, radiusY: radius };
         let arc_colour = color(accent.0, accent.1, accent.2, a);
         unsafe {
-            rt.DrawEllipse(&ring, &self.brush(grey(0.3, a))?, width, None);
+            rt.DrawEllipse(&ring, &self.brush(track)?, width, None);
             let fraction = fraction.clamp(0.0, 1.0).max(0.03);
             if fraction >= 1.0 {
                 rt.DrawEllipse(&ring, &self.brush(arc_colour)?, width, None);

@@ -2550,15 +2550,8 @@ impl Renderer {
                                 rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(color(accent.0 * 0.26 + 0.04, accent.1 * 0.26 + 0.04, accent.2 * 0.26 + 0.04, a))?);
                                 // Title row: icon, name, gear.
                                 let ty = (CARD_TOP + 4.0) * s;
-                                let ib = rect(x + 10.0 * s, ty, x + 32.0 * s, ty + 22.0 * s);
-                                if card == Card::Water {
-                                    let g = self.water_drop((ib.left + ib.right) / 2.0, (ib.top + ib.bottom) / 2.0, 16.0 * s)?;
-                                    rt.FillGeometry(&g, &self.brush(solid(accent, a))?, None);
-                                } else {
-                                    text(ICON_WALK, F_ICON, ib, center, solid(accent, a))?;
-                                }
                                 let title = if card == Card::Water { tr("Uống nước", "Water") } else { tr("Đứng dậy", "Stand up") };
-                                text(title, F_TITLE, rect(ib.right + 4.0 * s, ty, x + card_w * s - 30.0 * s, ty + 22.0 * s), lead, grey(1.0, a))?;
+                                text(title, F_TITLE, rect(x + 14.0 * s, ty, x + card_w * s - 34.0 * s, ty + 22.0 * s), lead, grey(1.0, a))?;
                                 let open = settings == Some(card);
                                 if let Some(gb) = rect_of(Button::Gear(card)) {
                                     let hot = hovered == Some(Button::Gear(card));
@@ -2635,18 +2628,30 @@ impl Renderer {
                                 // A ring of the day's progress with the card's own picture in it; the figure and
                                 // its unit beside it, the status line under both.
                                 let (bl, br_) = (x + 12.0 * s, x + card_w * s - 12.0 * s);
-                                let hub = (bl + 27.0 * s, (CARD_TOP + 58.0) * s);
-                                self.draw_ring(hub, 54.0 * s, 6.0 * s, frac, accent, a)?;
+                                let hub = (bl + 28.0 * s, (CARD_TOP + 62.0) * s);
+                                // The empty ring keeps the card's own tint, so it reads as designed, not as missing.
+                                let track = color(accent.0 * 0.35, accent.1 * 0.35, accent.2 * 0.35, a);
+                                self.draw_ring_on(hub, 56.0 * s, 6.0 * s, frac, accent, track, a)?;
                                 if card == Card::Water {
                                     let g = self.water_drop(hub.0, hub.1, 22.0 * s)?;
                                     rt.FillGeometry(&g, &self.brush(solid(accent, a))?, None);
                                 } else {
                                     text(ICON_WALK, F_ICON, rect(hub.0 - 14.0 * s, hub.1 - 14.0 * s, hub.0 + 14.0 * s, hub.1 + 14.0 * s), center, solid(accent, a))?;
                                 }
-                                let (tx, by) = (bl + 64.0 * s, (CARD_TOP + 28.0) * s);
+                                // The figure large, its unit on the same line when it fits (else under it), then
+                                // the status in the card's colour.
+                                let (tx, by) = (bl + 68.0 * s, (CARD_TOP + 30.0) * s);
+                                let (bw, uw) = (width(&big, F_BIG), width(unit.trim(), F_LABEL));
                                 text(&big, F_BIG, rect(tx, by, br_, by + 28.0 * s), lead, grey(1.0, a))?;
-                                text(unit.trim(), F_LABEL, rect(tx, by + 28.0 * s, br_, by + 44.0 * s), lead, grey(0.6, a))?;
-                                text(&status, F_LABEL, rect(tx, by + 44.0 * s, br_, by + 60.0 * s), lead, grey(0.65, a))?;
+                                let line2 = if tx + bw + 6.0 * s + uw <= br_ {
+                                    text(unit.trim(), F_LABEL, rect(tx + bw + 6.0 * s, by + 8.0 * s, br_, by + 26.0 * s), lead, grey(0.6, a))?;
+                                    by + 28.0 * s
+                                } else {
+                                    text(unit.trim(), F_LABEL, rect(tx, by + 28.0 * s, br_, by + 44.0 * s), lead, grey(0.6, a))?;
+                                    by + 44.0 * s
+                                };
+                                let tint = (accent.0 * 0.5 + 0.5, accent.1 * 0.5 + 0.5, accent.2 * 0.5 + 0.5);
+                                text(&status, F_LABEL, rect(tx, line2 + 2.0 * s, br_, line2 + 18.0 * s), lead, solid(tint, a * 0.9))?;
                                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                                 if let Some(pb) = rect_of(ab) {
                                     let hot = hovered == Some(ab);
@@ -3470,7 +3475,7 @@ mod tests {
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
                     phase, banner_age: 0.0, lyrics, hours: false, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
+                    health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 // Settle first: the cover loads and the Music page's glow fades in.
                 for i in 0..120 {
                     renderer.present(hwnd, 0, 0, w, h, scale, &view(i as f32 / 60.0)).unwrap();
@@ -3523,7 +3528,8 @@ mod tests {
             }).collect();
             let partly_30 = State { hours, ..sky(Sky::PartlyCloudy, 30.0) };
             let mut health = Health::default();
-            (health.water_on, health.sit_on) = (false, false);
+            // A mid-afternoon day: 750 ml of 2000 so far, 42 minutes at the desk.
+            (health.water_on, health.sit_on, health.taken_ml, health.water_mark, health.sitting_since) = (true, true, 750, Some(999_970), Some(999_958));
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
             let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
             // (file, mode, music, page, lyrics open, weather, battery, time, date)
@@ -3553,7 +3559,7 @@ mod tests {
                 let view = View { mode, size, time, date, battery, banner: None, music, live, robot: None, phase: 1.3, banner_age: 0.0, lyrics, hours: false, hovered: None, page,
                     leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
+                    health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 // A fresh renderer per picture, run for a second and a half: the cover decodes, the
                 // glow and the equaliser reach their resting strength.
                 let mut renderer = Renderer::new().unwrap();
@@ -3618,7 +3624,7 @@ mod tests {
                     let view = View { mode, size, time: "20:50", date: "T2, 26/10", battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hours: false, hovered: None, page,
                         leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C,
                         list: ListView { counts: if page == Page::Todo { (3, 1) } else { (0, 0) }, remind_before: 15, now: crate::todo::stamp(20261029, 2, 5), draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                        health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } };
+                        health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                     let mut renderer = Renderer::new().unwrap();
                     renderer.grab = true;
                     (renderer.style, renderer.usage, renderer.usage_tab) = (style, snap.clone(), tab);
