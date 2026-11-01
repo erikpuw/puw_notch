@@ -59,6 +59,7 @@ impl Renderer {
     pub(super) fn draw_usage(
         &self,
         text: &dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
+        width: &dyn Fn(&str, usize) -> f32,
         tabs: &[(Button, D2D_RECT_F)],
         (cl, cr): (f32, f32),
         s: f32,
@@ -77,31 +78,32 @@ impl Renderer {
         unsafe {
             // The segmented control: one dark track, the chosen app lifted on it.
             let ends = (0..APPS.len()).filter_map(segment).fold(None, |ends: Option<(D2D_RECT_F, D2D_RECT_F)>, b| Some(ends.map_or((b, b), |(first, _)| (first, b))));
-            let Some((first, last)) = ends else {
+            let Some(_) = ends else {
                 // None of the three is on this PC.
                 let r = rect(cl, CARDS_TOP * s, cr, (CARDS_TOP + CARDS_H) * s);
                 rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(grey(0.11, a))?);
                 text(crate::i18n::tr("Chưa thấy Claude, Codex hay Antigravity trên máy này", "No Claude, Codex or Antigravity found on this PC"), F_LABEL, r, center, grey(0.6, a))?;
                 return Ok(());
             };
-            rt.FillRoundedRectangle(&rounded(rect(first.left, first.top, last.right, first.bottom), 11.0 * s), &self.brush(grey(0.11, a))?);
+            // The apps as chips: a dot in the app's colour and its name; the chosen one on a light chip.
             for (i, app) in APPS.iter().enumerate() {
                 let Some(b) = segment(i) else { continue };
-                let inner = rect(b.left + 2.0 * s, b.top + 2.0 * s, b.right - 2.0 * s, b.bottom - 2.0 * s);
                 if i == tab {
-                    let k = app_accent(*app);
-                    rt.FillRoundedRectangle(&rounded(inner, 9.0 * s), &self.brush(color(k.0 * 0.45 + 0.08, k.1 * 0.45 + 0.08, k.2 * 0.45 + 0.08, a))?);
+                    rt.FillRoundedRectangle(&rounded(b, (b.bottom - b.top) / 2.0), &self.brush(grey(0.11, a))?);
                 } else if hovered == Some(Button::UsageTab(i)) {
-                    rt.FillRoundedRectangle(&rounded(inner, 9.0 * s), &self.brush(grey(0.17, a))?);
+                    rt.FillRoundedRectangle(&rounded(b, (b.bottom - b.top) / 2.0), &self.brush(grey(0.07, a))?);
                 }
-                // An app that has not counted yet is dimmer; the label is centred in its segment.
+                // An app that has not counted yet is dimmer.
                 let counted = self.usage.get(*app).is_some();
-                let shade = match (i == tab, counted) { (true, true) => 1.0, (true, false) => 0.7, (false, true) => 0.62, (false, false) => 0.38 };
+                let shade = match (i == tab, counted) { (true, true) => 1.0, (true, false) => 0.7, (false, true) => 0.55, (false, false) => 0.35 };
+                let dot = app_accent(*app);
+                let mid = (b.top + b.bottom) / 2.0;
+                rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: b.left + 11.0 * s, Y: mid }, radiusX: 3.5 * s, radiusY: 3.5 * s }, &self.brush(solid(dot, a * if counted { 1.0 } else { 0.5 }))?);
                 let name = match self.usage.plan(*app) {
                     Some(plan) => format!("{} · {}", app.name(), plan),
                     None => app.name().to_string(),
                 };
-                text(&name, F_LABEL, b, center, grey(shade, a))?;
+                text(&name, F_LABEL, rect(b.left + 22.0 * s, b.top, b.right, b.bottom), lead, grey(shade, a))?;
             }
 
             let top = CARDS_TOP * s;
@@ -118,37 +120,38 @@ impl Renderer {
             };
 
             if bars.len() <= 2 {
-                // A card per limit: the ring with its percent, the window and the time left beside it.
-                // One limit gets a wider card, so its name never has to be cut.
-                let cap = if bars.len() == 1 { CARD_MAX_W * 1.4 } else { CARD_MAX_W };
-                let room = if bars.len() == 1 { cr - cl } else { ((cr - cl) - GAP * s) / 2.0 };
-                let width = room.min(cap * s);
-                let mut x = cl + ((cr - cl) - width * bars.len() as f32 - GAP * s * (bars.len() as f32 - 1.0)) / 2.0;
-                for bar in bars {
-                    let r = card(x, width)?;
-                    let d = 72.0 * s;
-                    let mid = (r.top + r.bottom) / 2.0;
-                    let ring_x = r.left + PAD * s + d / 2.0;
-                    self.draw_ring((ring_x, mid), d, d * 0.12, shown(bar.used) / 100.0, ring_colour(bar.used), a)?;
-                    text(&format!("{}%", shown(bar.used).round()), F_TITLE, rect(ring_x - d / 2.0, mid - d / 2.0, ring_x + d / 2.0, mid + d / 2.0), center, grey(1.0, a))?;
-                    let tx = ring_x + d / 2.0 + 12.0 * s;
+                // One dial of rings (the outer is the first limit, the inner the second) and a row for each limit
+                // beside it: its window, the share, the time left, and a thin bar.
+                let hub = (cl + 58.0 * s, 114.0 * s);
+                let d = 100.0 * s;
+                let k = app_accent(APPS[tab]);
+                self.draw_ring_on(hub, d, 9.0 * s, shown(bars[0].used) / 100.0, ring_colour(bars[0].used), grey(0.14, a), a)?;
+                if let Some(second) = bars.get(1) {
+                    self.draw_ring_on(hub, d - 26.0 * s, 8.0 * s, shown(second.used) / 100.0, k, grey(0.12, a), a)?;
+                }
+                text(&format!("{}%", shown(bars[0].used).round()), F_TITLE, rect(hub.0 - 30.0 * s, hub.1 - 14.0 * s, hub.0 + 30.0 * s, hub.1 + 14.0 * s), center, grey(1.0, a))?;
+                let x0 = cl + 134.0 * s;
+                // A reading the app made a while ago says so: what it shows now may be further on.
+                let stale = self.usage.updated(APPS[tab]).filter(|&at| now - at > APPS[tab].stale_after());
+                for (n, bar) in bars.iter().enumerate() {
+                    let y = (if bars.len() == 1 { 84.0 } else { 70.0 + n as f32 * 52.0 }) * s;
                     let (_, window) = split_label(&bar.label);
-                    let line = 22.0 * s;
-                    // A reading the app made a while ago says so: what it shows now may be further on.
-                    let stale = self.usage.updated(APPS[tab]).filter(|&at| now - at > APPS[tab].stale_after());
-                    let up = if stale.is_some() { 8.0 * s } else { 0.0 };
-                    let (y0, y1) = if bar.resets_at > 0 { (mid - line - up, mid - up) } else { (mid - line / 2.0 - up, mid + line / 2.0 - up) };
-                    // Taller than its line, so the tail of a g or a y is not cut.
-                    text(window, F_BIG, rect(tx, y0 - 8.0 * s, r.right - PAD * s, y1 + 4.0 * s), lead, grey(1.0, a))?;
+                    let tone = if n == 0 { ring_colour(bar.used) } else { k };
+                    text(window, F_BIG, rect(x0, y - 4.0 * s, cr, y + 30.0 * s), lead, grey(1.0, a))?;
+                    let name_w = width(window, F_BIG);
+                    text(&format!("{}%", shown(bar.used).round()), F_LABEL, rect(x0 + name_w + 8.0 * s, y + 8.0 * s, cr, y + 28.0 * s), lead, solid(tone, a))?;
                     if bar.resets_at > 0 {
-                        let left = format!("{} {}", crate::i18n::tr("Còn", "In"), usage::in_words(bar.resets_at, now));
-                        text(&left, F_LABEL, rect(tx, mid + 5.0 * s - up, r.right - PAD * s, mid + line + 4.0 * s - up), lead, grey(0.6, a))?;
+                        let left = format!("{} {}", crate::i18n::tr("còn", "in"), usage::in_words(bar.resets_at, now));
+                        text(&left, F_LABEL, rect(x0, y + 8.0 * s, cr, y + 28.0 * s), trail, grey(0.5, a))?;
                     }
-                    if let Some(at) = stale {
-                        let ago = format!("{} {}", crate::i18n::tr("Số cũ", "Old"), usage::in_words(now, at));
-                        text(&ago, F_LABEL, rect(tx, mid + line - up + 1.0 * s, r.right - PAD * s, mid + 2.0 * line - up), lead, grey(0.42, a))?;
-                    }
-                    x += width + GAP * s;
+                    let track = rect(x0, y + 34.0 * s, cr, y + 38.0 * s);
+                    rt.FillRoundedRectangle(&rounded(track, 2.0 * s), &self.brush(color(tone.0 * 0.2, tone.1 * 0.2, tone.2 * 0.2, a))?);
+                    let to = track.left + (track.right - track.left) * (shown(bar.used) / 100.0).max(0.03);
+                    rt.FillRoundedRectangle(&rounded(rect(track.left, track.top, to, track.bottom), 2.0 * s), &self.brush(solid(tone, a))?);
+                }
+                if let Some(at) = stale {
+                    let ago = format!("{} {}", crate::i18n::tr("Số cũ", "Old"), usage::in_words(now, at));
+                    text(&ago, F_LABEL, rect(x0, 152.0 * s, cr, 168.0 * s), lead, grey(0.42, a))?;
                 }
                 return Ok(());
             }

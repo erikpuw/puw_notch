@@ -333,6 +333,8 @@ pub fn set_usage_apps(mask: u8) {
 }
 
 /// The Limits page's app tabs: one segmented control.
+/// A Limits tab is a chip this wide.
+const USAGE_CHIP_W: f32 = 110.0;
 const USAGE_TAB_H: f32 = 22.0;
 const SET_ROW: f32 = 18.0;
 const SET_Y: f32 = 62.0;
@@ -432,11 +434,10 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             }
         }
         Page::Usage => {
-            // Only the apps found on this PC get a tab.
+            // Only the apps found on this PC get a tab: chips side by side, from the content's left.
             let shown: Vec<usize> = (0..3).filter(|i| USAGE_APPS.load(Ordering::Relaxed) >> i & 1 == 1).collect();
-            let tab_w = (w - 2.0 * SIDE) / shown.len().max(1) as f32;
             for (place, &i) in shown.iter().enumerate() {
-                out.push((Button::UsageTab(i), r(SIDE + place as f32 * tab_w, CARD_TOP, tab_w, USAGE_TAB_H)));
+                out.push((Button::UsageTab(i), r(cl + place as f32 * (USAGE_CHIP_W + 4.0), CARD_TOP, USAGE_CHIP_W, USAGE_TAB_H)));
             }
         }
         Page::Health => {
@@ -454,10 +455,11 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
                         }
                     }
                 } else if card == Card::Water {
-                    out.push((Button::Drink, r(x + 12.0, bottom - 32.0, card_w - 84.0, 24.0)));
-                    out.push((Button::Snooze, r(x + card_w - 68.0, bottom - 32.0, 56.0, 24.0)));
+                    // The round + at the tile's bottom right, "later" beside it.
+                    out.push((Button::Drink, r(x + card_w - 48.0, bottom - 44.0, 34.0, 34.0)));
+                    out.push((Button::Snooze, r(x + card_w - 100.0, bottom - 37.0, 48.0, 20.0)));
                 } else {
-                    out.push((Button::Stood, r(x + 12.0, bottom - 32.0, card_w - 24.0, 24.0)));
+                    out.push((Button::Stood, r(x + card_w - 48.0, bottom - 44.0, 34.0, 34.0)));
                 }
             }
         }
@@ -567,6 +569,8 @@ const F_CLOCK: usize = 13;
 const F_CLOCK_BOLD: usize = 14;
 /// A page's big figure: the number in its ring.
 const F_FIGURE: usize = 15;
+/// A big faint picture behind a tile (a walking figure).
+const F_MARK: usize = 16;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
 /// of the thin divider after the player's controls, its right margin and its width. The margin
 /// stays wider than the pages' clip (PAGE_CLIP), with room for a last letter's ink past the box.
@@ -1190,6 +1194,7 @@ impl Renderer {
                 make(display, 14.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(display, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(display, 30.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(w!("Segoe Fluent Icons"), 96.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -2438,7 +2443,7 @@ impl Renderer {
                                 text(label, F_LABEL, pb, center, grey(if hot { 1.0 } else { 0.85 }, a))?;
                             }
                         }
-                        Page::Usage => self.draw_usage(&text, &btns, (cl, cr), s, a, hovered)?,
+                        Page::Usage => self.draw_usage(&text, &width, &btns, (cl, cr), s, a, hovered)?,
                         Page::Weather => {
                             draw_input(tr("Nhập thành phố (vd: Hà Nội, Đà Nẵng)", "Type a city (e.g. Hanoi, Da Nang)"))?;
                             let wx = v.weather;
@@ -2560,8 +2565,9 @@ impl Renderer {
                                 let x = if card == Card::Water { cl } else { cl + (card_w + CARD_GAP) * s };
                                 let cb = rect(x, CARD_TOP * s, x + card_w * s, bottom * s);
                                 let accent = if card == Card::Water { BLUE } else { ORANGE };
-                                // The card carries a wash of its own colour.
-                                rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(color(accent.0 * 0.26 + 0.04, accent.1 * 0.26 + 0.04, accent.2 * 0.26 + 0.04, a))?);
+                                // A neutral tile with a hairline of light along its top edge.
+                                rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(grey(0.067, a))?);
+                                rt.FillRectangle(&rect(cb.left + 12.0 * s, cb.top, cb.right - 12.0 * s, cb.top + 1.0 * s), &self.brush(grey(1.0, a * 0.08))?);
                                 // Title row: icon, name, gear.
                                 let ty = (CARD_TOP + 4.0) * s;
                                 let title = if card == Card::Water { tr("Uống nước", "Water") } else { tr("Đứng dậy", "Stand up") };
@@ -2620,8 +2626,8 @@ impl Renderer {
                                     }
                                     continue;
                                 }
-                                // Big number + unit, progress bar, status line, action button.
-                                let (big, unit, frac, status, action) = if card == Card::Water {
+                                // The figure, the share of the day done, and the status line.
+                                let (big, frac, status) = if card == Card::Water {
                                     let status = if !h.water_on { tr("Đang tắt", "Off").to_string() }
                                         else if h.taken_ml >= h.goal_ml { tr("Đạt mục tiêu hôm nay", "Goal reached today").to_string() }
                                         else if hv.minute_of_day < h.from_min { format!("{} {}", tr("Bắt đầu nhắc lúc", "Reminders start at"), health::hhmm(h.from_min)) }
@@ -2631,57 +2637,55 @@ impl Renderer {
                                                 None => tr("Ngoài giờ nhắc", "Outside reminder hours").to_string(),
                                             }
                                         };
-                                    (h.taken_ml.to_string(), format!(" / {} ml", h.goal_ml), h.taken_ml as f32 / h.goal_ml.max(1) as f32, status, format!("+ {} ml", h.cup_ml))
+                                    (h.taken_ml.to_string(), h.taken_ml as f32 / h.goal_ml.max(1) as f32, status)
                                 } else {
                                     let sat = h.sitting_minutes(hv.now);
                                     let status = if !h.sit_on { tr("Đang tắt", "Off").to_string() }
                                         else if h.sitting_since.is_none() { tr("Đang rời máy", "Away from the PC").to_string() }
                                         else { format!("{} {} {}", tr("Nhắc sau", "Reminder in"), (h.sit_every_min as i64 - sat).max(0), tr("phút", "min")) };
-                                    (sat.to_string(), format!(" {}", tr("phút ngồi", "min sitting")), sat as f32 / h.sit_every_min.max(1) as f32, status, tr("Đã đứng dậy", "I stood up").to_string())
+                                    (sat.to_string(), sat as f32 / h.sit_every_min.max(1) as f32, status)
                                 };
-                                // A ring of the day's progress with the card's own picture in it; the figure and
-                                // its unit beside it, the status line under both.
-                                let br_ = x + card_w * s - 12.0 * s;
-                                // The ring and the figures share one middle line, between the title and the button, and the
-                                // ring starts where the title does.
-                                let ring_d = 52.0;
-                                let hub = (x + (14.0 + ring_d / 2.0) * s, (CARD_TOP + 56.0) * s);
-                                // The empty ring keeps the card's own tint, so it reads as designed, not as missing.
-                                let track = color(accent.0 * 0.35, accent.1 * 0.35, accent.2 * 0.35, a);
-                                self.draw_ring_on(hub, ring_d * s, 6.0 * s, frac, accent, track, a)?;
+                                // The card's own picture, big and faint in its bottom right corner, cut by the tile.
+                                rt.PushAxisAlignedClip(&cb, D2D1_ANTIALIAS_MODE_ALIASED);
                                 if card == Card::Water {
-                                    let g = self.water_drop(hub.0, hub.1, 20.0 * s)?;
-                                    rt.FillGeometry(&g, &self.brush(solid(accent, a))?, None);
+                                    let g = self.water_drop(cb.right - 16.0 * s, cb.bottom - 10.0 * s, 96.0 * s)?;
+                                    rt.FillGeometry(&g, &self.brush(solid(accent, a * 0.09))?, None);
                                 } else {
-                                    text(ICON_WALK, F_ICON, rect(hub.0 - 13.0 * s, hub.1 - 13.0 * s, hub.0 + 13.0 * s, hub.1 + 13.0 * s), center, solid(accent, a))?;
+                                    text(ICON_WALK, F_MARK, rect(cb.right - 84.0 * s, cb.bottom - 90.0 * s, cb.right + 30.0 * s, cb.bottom + 24.0 * s), center, solid(accent, a * 0.08))?;
                                 }
-                                // The figure large, its unit on the same line when it fits (else under it), then
-                                // the status in the card's colour.
-                                let (tx, by) = (x + (14.0 + ring_d + 12.0) * s, (CARD_TOP + 33.0) * s);
-                                let (bw, uw) = (width(&big, F_BIG), width(unit.trim(), F_LABEL));
-                                text(&big, F_BIG, rect(tx, by, br_, by + 28.0 * s), lead, grey(1.0, a))?;
-                                let line2 = if tx + bw + 6.0 * s + uw <= br_ {
-                                    text(unit.trim(), F_LABEL, rect(tx + bw + 6.0 * s, by + 8.0 * s, br_, by + 26.0 * s), lead, grey(0.6, a))?;
-                                    by + 28.0 * s
+                                rt.PopAxisAlignedClip();
+                                // The figure large; under it what it is of and when the next reminder is.
+                                let (bx, by) = (x + 14.0 * s, (CARD_TOP + 30.0) * s);
+                                let lower = |t: &str| { let mut c = t.chars(); c.next().map_or(String::new(), |f| f.to_lowercase().chain(c).collect()) };
+                                let (unit_inline, caption) = if card == Card::Water {
+                                    (String::new(), format!("{} {} ml · {}", tr("trên", "of"), h.goal_ml, lower(&status)))
                                 } else {
-                                    text(unit.trim(), F_LABEL, rect(tx, by + 28.0 * s, br_, by + 44.0 * s), lead, grey(0.6, a))?;
-                                    by + 44.0 * s
+                                    (tr("phút", "min").to_string(), format!("{} · {}", tr("đã ngồi", "sitting"), lower(&status)))
                                 };
-                                let tint = (accent.0 * 0.5 + 0.5, accent.1 * 0.5 + 0.5, accent.2 * 0.5 + 0.5);
-                                text(&status, F_LABEL, rect(tx, line2 + 2.0 * s, br_, line2 + 18.0 * s), lead, solid(tint, a * 0.9))?;
+                                text(&big, F_FIGURE, rect(bx, by, x + card_w * s - 12.0 * s, by + 36.0 * s), lead, grey(1.0, a))?;
+                                if !unit_inline.is_empty() {
+                                    let bw = width(&big, F_FIGURE);
+                                    text(&unit_inline, F_BODY, rect(bx + bw + 5.0 * s, by + 8.0 * s, x + card_w * s - 12.0 * s, by + 32.0 * s), lead, grey(0.6, a))?;
+                                }
+                                text(&caption, F_LABEL, rect(bx, by + 38.0 * s, x + card_w * s - 10.0 * s, by + 56.0 * s), lead, grey(0.6, a))?;
+                                // The day's progress as a thin bar along the tile's bottom, in its colour.
+                                let (track_l, track_r, track_y) = (bx, x + (card_w - 64.0) * s, (bottom - 16.0) * s);
+                                let track = |right: f32| rounded(rect(track_l, track_y, right, track_y + 4.0 * s), 2.0 * s);
+                                rt.FillRoundedRectangle(&track(track_r), &self.brush(color(accent.0 * 0.22, accent.1 * 0.22, accent.2 * 0.22, a))?);
+                                rt.FillRoundedRectangle(&track(track_l + (track_r - track_l) * frac.clamp(0.0, 1.0)), &self.brush(solid(accent, a))?);
+                                // The round action button: + for a drink, a tick for having stood up.
                                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                                 if let Some(pb) = rect_of(ab) {
-                                    let hot = hovered == Some(ab);
-                                    let k = if hot { 1.0 } else { 0.82 };
-                                    rt.FillRoundedRectangle(&rounded(pb, 12.0 * s), &self.brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
-                                    // Dark label on the orange button: white on it is only 3.1:1.
-                                    text(&action, F_SMALL, pb, center, if card == Card::Sit { grey(0.06, a) } else { grey(1.0, a) })?;
+                                    let k = if hovered == Some(ab) { 1.0 } else { 0.9 };
+                                    let c = D2D1_ELLIPSE { point: Vector2 { X: (pb.left + pb.right) / 2.0, Y: (pb.top + pb.bottom) / 2.0 }, radiusX: (pb.right - pb.left) / 2.0, radiusY: (pb.bottom - pb.top) / 2.0 };
+                                    rt.FillEllipse(&c, &self.brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
+                                    // Dark on both: white on the orange is only 3.1:1.
+                                    text(if card == Card::Water { ICON_PLUS } else { ICON_CHECK }, F_SMALL_ICON, pb, center, grey(0.06, a))?;
                                 }
                                 if let Some(sb) = rect_of(Button::Snooze) {
                                     if card == Card::Water {
                                         let hot = hovered == Some(Button::Snooze);
-                                        rt.FillRoundedRectangle(&rounded(sb, 12.0 * s), &self.brush(grey(if hot { 0.3 } else { 0.2 }, a))?);
-                                        text(tr("Để sau", "Later"), F_LABEL, sb, center, grey(1.0, a))?;
+                                        text(tr("Để sau", "Later"), F_LABEL, sb, center, grey(if hot { 1.0 } else { 0.6 }, a))?;
                                     }
                                 }
                             }
