@@ -279,12 +279,8 @@ pub fn panel_size(page: Page) -> [f32; 2] {
     let [w, h, _] = target(Mode::Expanded, false);
     match page {
         // Four task cards instead of three.
-        // Each page takes the room its content wants, both ways.
-        Page::Todo => [w + 60.0, h + 84.0],
-        Page::Notify => [w + 80.0, h + 84.0],
-        Page::Health => [w + 80.0, h + 64.0],
-        Page::Weather => [w + 140.0, h + 64.0],
-        Page::Usage => [w + 60.0, h + 50.0],
+        // The pages other than Music share one standard size: 480 x 186.
+        Page::Todo | Page::Notify | Page::Health | Page::Weather | Page::Usage => [w + 40.0, h],
         _ => [w, h],
     }
 }
@@ -292,33 +288,33 @@ pub fn panel_size(page: Page) -> [f32; 2] {
 const INPUT_Y: f32 = 36.0;
 const INPUT_H: f32 = 26.0;
 const COUNT_Y: f32 = 66.0;
-const ROW_Y: f32 = 94.0;
+const ROW_Y: f32 = 90.0;
 /// Under the counts: how much of today's list is done.
-const PROGRESS_Y: f32 = 85.0;
+const PROGRESS_Y: f32 = 83.0;
 /// A task row is also its tick, edit and delete buttons: 29 px high, drawn as a card.
-const ROW_H: f32 = 29.0;
-pub const LIST_ROWS: usize = 5;
+const ROW_H: f32 = 26.0;
+pub const LIST_ROWS: usize = 3;
 /// Weather page, logical px from the content's left / the panel's top. City line: the 24h and x
 /// buttons at its right end. Left block: the icon with the temperature beside it and the sky's
 /// words under that, the unit chips under the icon. Right block (from `STATS_X` to the content's
 /// right): a 3 x 2 grid of figures, or the 24-hour strip in its place.
 const CITY_Y: f32 = 62.0;
-const ICON_Y: f32 = 94.0;
-const WX_ICON: f32 = 68.0;
-const TEMP_X: f32 = 78.0;
+const ICON_Y: f32 = 90.0;
+const WX_ICON: f32 = 46.0;
+const TEMP_X: f32 = 54.0;
 const UNIT_X: f32 = 0.0;
-const UNIT_Y: f32 = 186.0;
+const UNIT_Y: f32 = 144.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 18.0;
-const STATS_X: f32 = 196.0;
+const STATS_X: f32 = 160.0;
 /// The grid's two rows (label on top); the 24h strip starts at the first.
-const STATS_Y: [f32; 2] = [96.0, 154.0];
+const STATS_Y: [f32; 2] = [90.0, 128.0];
 const HOURS_BTN_W: f32 = 38.0;
 
 /// Notifications page: rows of two lines.
 const NOTE_Y: f32 = 57.0;
 const NOTE_H: f32 = 38.0;
-pub const NOTE_ROWS: usize = 5;
+pub const NOTE_ROWS: usize = 3;
 /// "Clear all" under the rows, right-aligned with their times: a pill hugging its label (the click
 /// area is this wide), inside the pages' clip, which ends at dots_y - 3.
 const CLEAR_W: f32 = 64.0;
@@ -2641,18 +2637,18 @@ impl Renderer {
                                 // A ring of the day's progress with the card's own picture in it; the figure and
                                 // its unit beside it, the status line under both.
                                 let (bl, br_) = (x + 12.0 * s, x + card_w * s - 12.0 * s);
-                                let hub = (bl + 43.0 * s, (CARD_TOP + 76.0) * s);
-                                self.draw_ring(hub, 86.0 * s, 9.0 * s, frac, accent, a)?;
+                                let hub = (bl + 27.0 * s, (CARD_TOP + 58.0) * s);
+                                self.draw_ring(hub, 54.0 * s, 6.0 * s, frac, accent, a)?;
                                 if card == Card::Water {
-                                    let g = self.water_drop(hub.0, hub.1, 34.0 * s)?;
+                                    let g = self.water_drop(hub.0, hub.1, 22.0 * s)?;
                                     rt.FillGeometry(&g, &self.brush(solid(accent, a))?, None);
                                 } else {
-                                    text(ICON_WALK, F_ICON, rect(hub.0 - 18.0 * s, hub.1 - 18.0 * s, hub.0 + 18.0 * s, hub.1 + 18.0 * s), center, solid(accent, a))?;
+                                    text(ICON_WALK, F_ICON, rect(hub.0 - 14.0 * s, hub.1 - 14.0 * s, hub.0 + 14.0 * s, hub.1 + 14.0 * s), center, solid(accent, a))?;
                                 }
-                                let (tx, by) = (bl + 100.0 * s, (CARD_TOP + 46.0) * s);
+                                let (tx, by) = (bl + 64.0 * s, (CARD_TOP + 28.0) * s);
                                 text(&big, F_BIG, rect(tx, by, br_, by + 28.0 * s), lead, grey(1.0, a))?;
-                                text(unit.trim(), F_LABEL, rect(tx, by + 28.0 * s, br_, by + 46.0 * s), lead, grey(0.6, a))?;
-                                text(&status, F_LABEL, rect(bl, (CARD_TOP + 128.0) * s, br_, (CARD_TOP + 146.0) * s), lead, grey(0.65, a))?;
+                                text(unit.trim(), F_LABEL, rect(tx, by + 28.0 * s, br_, by + 44.0 * s), lead, grey(0.6, a))?;
+                                text(&status, F_LABEL, rect(tx, by + 44.0 * s, br_, by + 60.0 * s), lead, grey(0.65, a))?;
                                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                                 if let Some(pb) = rect_of(ab) {
                                     let hot = hovered == Some(ab);

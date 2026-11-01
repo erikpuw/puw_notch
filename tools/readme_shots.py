@@ -20,9 +20,9 @@ BACKDROP = os.path.join(ROOT, "assets", "backdrop.jpg")
 SIZES = {
     "pill-idle": (260, 44), "pill-music": (260, 44), "weather-pill": (260, 44), "weather-pill-music": (260, 44),
     "style-pill-idle": (260, 50), "style-pill-music": (260, 50),
-    "page-music": (580, 218), "page-music-empty": (580, 218), "page-health": (660, 330), "page-weather": (700, 330),
-    "page-tasks": (640, 350), "page-notifications": (660, 350),
-    "page-usage-claude": (640, 320), "page-usage-codex": (640, 320), "page-usage-antigravity": (640, 320),
+    "page-music": (580, 218), "page-music-empty": (580, 218), "page-health": (580, 218), "page-weather": (580, 218),
+    "page-tasks": (580, 218), "page-notifications": (580, 218),
+    "page-usage-claude": (580, 218), "page-usage-codex": (580, 218), "page-usage-antigravity": (580, 218),
     "style-pill-page": (580, 224),
     "page-music-lyrics": (900, 218),
     "banner-approve-claude": (580, None), "banner-approve-antigravity": (580, None),
