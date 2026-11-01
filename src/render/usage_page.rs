@@ -21,7 +21,7 @@ fn ring_colour(used: f32) -> (f32, f32, f32) {
 }
 
 /// Each app's own colour: the chosen tab and the cards carry a wash of it.
-fn app_accent(app: usage::App) -> (f32, f32, f32) {
+pub(super) fn app_accent(app: usage::App) -> (f32, f32, f32) {
     match app {
         usage::App::Claude => (0.85, 0.47, 0.34),
         usage::App::Codex => (0.25, 0.8, 0.65),
