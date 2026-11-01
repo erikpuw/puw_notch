@@ -278,9 +278,7 @@ fn dots_y(h: f32) -> f32 {
 pub fn panel_size(page: Page) -> [f32; 2] {
     let [w, h, _] = target(Mode::Expanded, false);
     match page {
-        // Four task cards instead of three.
-        // The pages other than Music share one standard size: 480 x 186.
-        Page::Todo | Page::Notify | Page::Health | Page::Weather | Page::Usage => [w + 40.0, h],
+        // Every page shares one standard size, 480 x 186; a page that needs more asks for it here.
         _ => [w, h],
     }
 }
@@ -3051,10 +3049,10 @@ mod tests {
             assert_eq!(hit_button(cx, scale, px, py, None, Page::Music, 0, 0, None, false), None);
             assert!(buttons(cx, scale, false).iter().all(|(_, r)| r.bottom <= dots_y(186.0) * scale));
             // Controls live in the right column: right of the cover, left of the side arrow, no overlaps.
-            let left = cx - 220.0 * scale;
+            let left = cx - 240.0 * scale;
             let cover_right = left + (SIDE + COVER) * scale;
             for r in [prev, play, next, seek, lyr] {
-                assert!(r.left > cover_right && r.right <= left + (440.0 - SIDE) * scale, "{r:?}");
+                assert!(r.left > cover_right && r.right <= left + (480.0 - SIDE) * scale, "{r:?}");
             }
             assert!(prev.right <= play.left && play.right <= next.left && next.right <= lyr.left, "buttons must not overlap");
             assert!(seek.bottom <= prev.top.min(play.top).min(lyr.top), "bar above the buttons");
