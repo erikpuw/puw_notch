@@ -70,9 +70,10 @@ const PAGE_MORPH_S: f32 = 0.32;
 const NOTES_MAX: usize = 30;
 const CARET_MS: u32 = 530;
 const CHECK_MS: u32 = 500;
-/// A pill that has rested this long (30 s) gives its pages back to Windows: Task Manager then shows
-/// a few MB instead of what the last panel touched. They come back on demand.
-const TRIM_TICKS: u32 = 60;
+/// A pill that has rested this long (5 s) gives its pages back to Windows: Task Manager then shows
+/// a few MB instead of what the last panel touched. They come back on demand. (The other notch app
+/// trims as it enters its resting state, too.)
+const TRIM_TICKS: u32 = 10;
 const MENU_MINIMAL: usize = 10;
 const MENU_AUTOSTART: usize = 11;
 const MENU_QUIT: usize = 12;
