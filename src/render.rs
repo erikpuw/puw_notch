@@ -2446,12 +2446,16 @@ impl Renderer {
                                     // ("−128°"), turning about its left end.
                                     let temp = format!("{}°", v.unit.number(n.temp));
                                     let (tx, ty) = (cl + TEMP_X * s, (ICON_Y + 18.0) * s);
-                                    let k = (STATS_X - TEMP_X - 8.0) * s / width(&temp, F_BIG);
+                                    // The figures start 14 px after the longer of the temperature and the sky's words (never before
+                                    // STATS_X, and the temperature shrinks past STATS_X + 60), so a long word is never cut.
+                                    let hero_w = width(&temp, F_BIG).max(width(weather::describe(n.sky), F_BODY)) / s;
+                                    let stats_x = (TEMP_X + hero_w + 14.0).clamp(STATS_X, STATS_X + 60.0);
+                                    let k = (stats_x - TEMP_X - 8.0) * s / width(&temp, F_BIG);
                                     let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                                     rt.SetTransform(&(translate(-tx, -ty) * scaling(k.min(1.0)) * translate(tx, ty) * base));
                                     text(&temp, F_BIG, rect(tx, (ICON_Y + 4.0) * s, tx + width(&temp, F_BIG) + 6.0 * s, (ICON_Y + 36.0) * s), lead, grey(1.0, a * fade))?;
                                     rt.SetTransform(&base);
-                                    text(weather::describe(n.sky), F_BODY, rect(tx, (ICON_Y + 34.0) * s, cl + (STATS_X - 6.0) * s, (ICON_Y + 52.0) * s), lead, grey(0.7, a))?;
+                                    text(weather::describe(n.sky), F_BODY, rect(tx, (ICON_Y + 34.0) * s, cl + (stats_x - 6.0) * s, (ICON_Y + 52.0) * s), lead, grey(0.7, a))?;
                                     // The unit to show it in: one capsule holding both, the chosen one lit, the
                                     // other lighting on hover.
                                     if let (Some(first), Some(last)) = (rect_of(Button::Unit(weather::Unit::C)), rect_of(Button::Unit(weather::Unit::F))) {
@@ -2466,7 +2470,7 @@ impl Renderer {
                                         text(unit.symbol(), F_LABEL, chip, center, grey(if on { 1.0 } else { 0.55 }, a))?;
                                     }
                                     // Right block: the figures, or the next 24 hours in their place.
-                                    let bl = cl + STATS_X * s;
+                                    let bl = cl + stats_x * s;
                                     if open {
                                         // Every third hour: time, icon, temperature, the chance of rain when there is one.
                                         let sw = (cr - bl) / hour_lines.len() as f32;
