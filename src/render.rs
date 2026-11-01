@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicU8, Ordering};
 use std::time::Instant;
 
 use crate::connectivity::DeviceKind;
@@ -1538,7 +1538,28 @@ impl Renderer {
         Some(bmp)
     }
 
+    /// One frame. A failure other than the handled device loss (the GPU switching with the power
+    /// plan or battery saver, a driver reset) used to stop all drawing silently: it is logged, and
+    /// the device is made again so the next frame draws.
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
+        match self.present_frame(hwnd, x, y, w, h, scale, v) {
+            Err(e) => {
+                // Once a second at most: a GPU that stays gone must not make a device every frame.
+                static LAST_MS: AtomicU64 = AtomicU64::new(0);
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+                if now.saturating_sub(LAST_MS.load(Ordering::Relaxed)) < 1000 {
+                    return Err(e);
+                }
+                LAST_MS.store(now, Ordering::Relaxed);
+                crate::system::log(&format!("draw failed: {e} ({:?}); making the device again", e.code()));
+                self.lose_device()?;
+                Ok(true)
+            }
+            ok => ok,
+        }
+    }
+
+    fn present_frame(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
         let page = visible_page(v.mode, false, v.page);
         self.set_page_open(page == Some(Page::Notify));
         self.icon_loader.hwnd.store(hwnd.0 as isize, Ordering::Relaxed);
