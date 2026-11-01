@@ -358,6 +358,15 @@ fn nav_cells(cx: f32, scale: f32, ph: f32) -> Vec<(Page, D2D_RECT_F)> {
     }).collect()
 }
 
+/// Is the mouse (window px) over the row of page icons, or just above it? The row shows while it is, and
+/// the page dots come back once it leaves.
+pub fn in_nav_zone(cx: f32, scale: f32, ph: f32, x: f32, y: f32) -> bool {
+    let cells = nav_cells(cx, scale, ph);
+    let (Some((_, first)), Some((_, last))) = (cells.first(), cells.last()) else { return false };
+    x >= first.left - 16.0 * scale && x <= last.right + 16.0 * scale
+        && y >= (dots_y(ph) - 4.0) * scale && y <= (ph + NAV_EXTRA + 10.0) * scale
+}
+
 /// Which apps (bit per `usage::APPS` index) have a tab on the Limits page: those found on this PC.
 static USAGE_APPS: AtomicU8 = AtomicU8::new(0b111);
 

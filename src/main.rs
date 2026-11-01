@@ -492,6 +492,16 @@ impl App {
     }
 
     /// Is the cursor over the area that reacts to the mouse right now (`notch::hover_area`)?
+    /// Open or close the row of page icons under the page dots.
+    fn set_nav(&mut self, open: bool) {
+        if self.nav_open != open {
+            self.nav_open = open;
+            render::set_nav_open(open);
+            system::log(if open { "page icons shown" } else { "page icons hidden" });
+            self.kick();
+        }
+    }
+
     fn cursor_inside(&self) -> bool {
         let mut p = POINT::default();
         if unsafe { GetCursorPos(&mut p) }.is_err() {
@@ -864,11 +874,7 @@ impl App {
                 self.renderer.usage_tab = i;
                 self.kick();
             }
-            Button::Dots => {
-                self.nav_open = !self.nav_open;
-                render::set_nav_open(self.nav_open);
-                self.kick();
-            }
+            Button::Dots => self.set_nav(true),
             Button::GoPage(target) => {
                 self.cancel_task_edit();
                 self.end_edit();
@@ -1289,6 +1295,16 @@ impl App {
                     self.hit(x, y)
                 } else { None };
                 if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
+                // The page dots open into the row of page icons while the mouse is on them; the row goes
+                // when the mouse leaves it.
+                if self.notch.mode == Mode::Expanded {
+                    let (x, y) = ((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32 - self.top_px());
+                    if !self.nav_open && hover == Some(Button::Dots) {
+                        self.set_nav(true);
+                    } else if self.nav_open && !render::in_nav_zone(self.win.2 as f32 / 2.0, self.scale, render::panel_size(self.page)[1], x, y) {
+                        self.set_nav(false);
+                    }
+                }
                 // The x of a notification banner lights up under the mouse.
                 let hot = self.notch.mode == Mode::Alert && self.banner_target().is_some() && {
                     let (x, y) = ((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32 - self.top_px());
