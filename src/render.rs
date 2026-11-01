@@ -297,16 +297,16 @@ pub const LIST_ROWS: usize = 3;
 /// words under that, the unit chips under the icon. Right block (from `STATS_X` to the content's
 /// right): a 3 x 2 grid of figures, or the 24-hour strip in its place.
 const CITY_Y: f32 = 62.0;
-const ICON_Y: f32 = 90.0;
+const ICON_Y: f32 = 94.0;
 const WX_ICON: f32 = 46.0;
 const TEMP_X: f32 = 54.0;
 const UNIT_X: f32 = 0.0;
 const UNIT_Y: f32 = 144.0;
 const UNIT_W: f32 = 28.0;
-const UNIT_H: f32 = 18.0;
+const UNIT_H: f32 = 16.0;
 const STATS_X: f32 = 160.0;
 /// The grid's two rows (label on top); the 24h strip starts at the first.
-const STATS_Y: [f32; 2] = [90.0, 128.0];
+const STATS_Y: [f32; 2] = [92.0, 132.0];
 const HOURS_BTN_W: f32 = 38.0;
 
 /// Notifications page: rows of two lines.
@@ -2450,9 +2450,14 @@ impl Renderer {
                                     // Left block: the icon, the temperature beside it, the sky's words under it, the
                                     // unit chips under the icon, on a card washed with the sky's colour.
                                     {
-                                        let (sky, _) = weather::tints(n.sky, n.day);
-                                        let hero = rect(cl - 8.0 * s, (ICON_Y - 8.0) * s, cl + (STATS_X - 10.0) * s, (UNIT_Y + UNIT_H + 6.0) * s);
-                                        rt.FillRoundedRectangle(&rounded(hero, 14.0 * s), &self.brush(color(sky.0 * 0.30 + 0.05, sky.1 * 0.30 + 0.05, sky.2 * 0.30 + 0.05, a * fade))?);
+                                        // The card takes the colour of the sky's accent (the sun, the rain), not of its cloud.
+                                        let (_, sky) = weather::tints(n.sky, n.day);
+                                        let hero = rect(cl - 8.0 * s, (ICON_Y - 6.0) * s, cl + (STATS_X - 10.0) * s, (UNIT_Y + UNIT_H + 4.0) * s);
+                                        // Brighter at the top left, sinking into the panel's black at the bottom right.
+                                        let wash = |k: f32, base: f32| color(sky.0 * k + base, sky.1 * k + base, sky.2 * k + base, a * fade);
+                                        let stops = rt.CreateGradientStopCollection(&[D2D1_GRADIENT_STOP { position: 0.0, color: wash(0.55, 0.05) }, D2D1_GRADIENT_STOP { position: 1.0, color: wash(0.14, 0.03) }], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                                        let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: hero.left, Y: hero.top }, endPoint: Vector2 { X: hero.right, Y: hero.bottom } };
+                                        rt.FillRoundedRectangle(&rounded(hero, 14.0 * s), &rt.CreateLinearGradientBrush(&line, None, &stops)?);
                                     }
                                     draw_wx_icon(ic, geoms, cl, ICON_Y * s, WX_ICON * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
                                     // The big temperature, shrunk to fit before the right block when it is long
@@ -2510,9 +2515,9 @@ impl Renderer {
                                         let shown = if wx.hours.is_empty() { 3 } else { 6 };
                                         for (k, (label, value, ink)) in cells.iter().enumerate().take(shown) {
                                             let (x, y) = (bl + (k % 3) as f32 * col, STATS_Y[k / 3] * s);
-                                            rt.FillRoundedRectangle(&rounded(rect(x, y - 4.0 * s, x + col - 6.0 * s, y + 35.0 * s), 10.0 * s), &self.brush(grey(0.07, a))?);
-                                            text(label, F_LABEL, rect(x + 8.0 * s, y, x + col - 8.0 * s, y + 15.0 * s), lead, grey(0.55, a))?;
-                                            text(value, F_BODY, rect(x + 8.0 * s, y + 15.0 * s, x + col - 8.0 * s, y + 33.0 * s), lead, *ink)?;
+                                            rt.FillRoundedRectangle(&rounded(rect(x, y - 4.0 * s, x + col - 6.0 * s, y + 32.0 * s), 10.0 * s), &self.brush(grey(0.08, a))?);
+                                            text(label, F_LABEL, rect(x + 9.0 * s, y - 1.0 * s, x + col - 9.0 * s, y + 13.0 * s), lead, grey(0.55, a))?;
+                                            text(value, F_BODY, rect(x + 9.0 * s, y + 12.0 * s, x + col - 9.0 * s, y + 30.0 * s), lead, *ink)?;
                                         }
                                     }
                                 }
