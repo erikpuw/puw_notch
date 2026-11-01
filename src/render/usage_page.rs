@@ -20,6 +20,15 @@ fn ring_colour(used: f32) -> (f32, f32, f32) {
     if used < 60.0 { GREEN } else if used < 85.0 { ORANGE } else { RED }
 }
 
+/// Each app's own colour: the chosen tab and the cards carry a wash of it.
+fn app_accent(app: usage::App) -> (f32, f32, f32) {
+    match app {
+        usage::App::Claude => (0.85, 0.47, 0.34),
+        usage::App::Codex => (0.25, 0.8, 0.65),
+        usage::App::Antigravity => (0.55, 0.5, 1.0),
+    }
+}
+
 /// "Gemini · Week" -> (Some("Gemini"), "Week"); "5 h" -> (None, "5 h").
 fn split_label(label: &str) -> (Option<&str>, &str) {
     match label.rsplit_once(" · ") {
@@ -80,7 +89,8 @@ impl Renderer {
                 let Some(b) = segment(i) else { continue };
                 let inner = rect(b.left + 2.0 * s, b.top + 2.0 * s, b.right - 2.0 * s, b.bottom - 2.0 * s);
                 if i == tab {
-                    rt.FillRoundedRectangle(&rounded(inner, 9.0 * s), &self.brush(grey(0.26, a))?);
+                    let k = app_accent(*app);
+                    rt.FillRoundedRectangle(&rounded(inner, 9.0 * s), &self.brush(color(k.0 * 0.45 + 0.08, k.1 * 0.45 + 0.08, k.2 * 0.45 + 0.08, a))?);
                 } else if hovered == Some(Button::UsageTab(i)) {
                     rt.FillRoundedRectangle(&rounded(inner, 9.0 * s), &self.brush(grey(0.17, a))?);
                 }
@@ -97,7 +107,8 @@ impl Renderer {
             let top = CARDS_TOP * s;
             let card = |left: f32, width: f32| -> Result<D2D_RECT_F> {
                 let r = rect(left, top, left + width, top + CARDS_H * s);
-                self.rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(grey(0.11, a))?);
+                let k = app_accent(APPS[tab]);
+                self.rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(color(k.0 * 0.12 + 0.05, k.1 * 0.12 + 0.05, k.2 * 0.12 + 0.05, a))?);
                 Ok(r)
             };
             let Some(bars) = self.usage.get(APPS[tab]) else {
