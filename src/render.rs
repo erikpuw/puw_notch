@@ -305,8 +305,8 @@ const UNIT_H: f32 = 18.0;
 /// `NOTE_X` to the content's end, a row for each notification: its app's tile, then two lines.
 const NOTE_X: f32 = 72.0;
 const NOTE_Y: f32 = 36.0;
-const NOTE_H: f32 = 44.0;
-pub const NOTE_ROWS: usize = 3;
+const NOTE_H: f32 = 33.0;
+pub const NOTE_ROWS: usize = 4;
 /// "Clear all" under the count, in the left column (the click area).
 const CLEAR_W: f32 = 64.0;
 const CLEAR_H: f32 = 18.0;
@@ -2385,13 +2385,13 @@ impl Renderer {
                                 let Some(n) = v.notes.get(row) else { return Ok(()) };
                                 match note_icons.get(row).and_then(|i| i.as_ref()) {
                                     Some(icon) => {
-                                        rt.FillRoundedRectangle(&rounded(tile, 9.0 * s), &self.brush(grey(0.16, a))?);
-                                        rt.DrawBitmap(icon, Some(&rect(tile.left + 3.0 * s, tile.top + 3.0 * s, tile.right - 3.0 * s, tile.bottom - 3.0 * s)), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                                        rt.FillRoundedRectangle(&rounded(tile, 5.0 * s), &self.brush(grey(0.16, a))?);
+                                        rt.DrawBitmap(icon, Some(&rect(tile.left + 2.0 * s, tile.top + 2.0 * s, tile.right - 2.0 * s, tile.bottom - 2.0 * s)), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                                     }
                                     None => {
                                         let (tr_, tg, tb) = app_tint(&n.app);
-                                        rt.FillRoundedRectangle(&rounded(tile, 9.0 * s), &self.brush(color(tr_, tg, tb, a))?);
-                                        text(&app_initial(&n.app), F_TITLE, tile, center, grey(1.0, a))?;
+                                        rt.FillRoundedRectangle(&rounded(tile, 5.0 * s), &self.brush(color(tr_, tg, tb, a))?);
+                                        text(&app_initial(&n.app), F_LABEL, tile, center, grey(1.0, a))?;
                                     }
                                 }
                                 Ok(())
@@ -2412,7 +2412,7 @@ impl Renderer {
                             // from the fractional position, inside the list's own clip.
                             let pos = if current { lv.note_pos } else { 0.0 };
                             let first = pos.floor().max(0.0) as usize;
-                            rt.PushAxisAlignedClip(&rect(x0 - 8.0 * s, NOTE_Y * s, xr + 10.0 * s, (NOTE_Y + NOTE_H * NOTE_ROWS as f32 - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
+                            rt.PushAxisAlignedClip(&rect(x0 - 8.0 * s, NOTE_Y * s, xr + 10.0 * s, (NOTE_Y + NOTE_H * NOTE_ROWS as f32 + 2.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
                             for (row, n) in v.notes.iter().enumerate().skip(first).take(NOTE_ROWS + 1) {
                                 let y = (NOTE_Y + (row as f32 - pos) * NOTE_H) * s;
                                 // The row under the mouse lights up: clicking it opens the notification.
@@ -2427,12 +2427,12 @@ impl Renderer {
                                     else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }
                                     else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
                                 // The app's tile, so it is plain whose message it is, then the two lines.
-                                note_tile(row, rect(x0, y + 6.0 * s, x0 + 30.0 * s, y + 36.0 * s))?;
-                                let tx = x0 + 38.0 * s;
-                                text(&when, F_LABEL, rect(xr - 64.0 * s, y + 3.0 * s, xr, y + 23.0 * s), trail, grey(0.55, a))?;
-                                text(&n.title, F_TITLE, rect(tx, y + 3.0 * s, xr - 68.0 * s, y + 23.0 * s), lead, grey(1.0, a))?;
+                                note_tile(row, rect(x0, y + 8.5 * s, x0 + 16.0 * s, y + 24.5 * s))?;
+                                let tx = x0 + 24.0 * s;
+                                text(&when, F_LABEL, rect(xr - 64.0 * s, y, xr, y + 18.0 * s), trail, grey(0.55, a))?;
+                                text(&n.title, F_TITLE, rect(tx, y, xr - 68.0 * s, y + 18.0 * s), lead, grey(1.0, a))?;
                                 let line2 = if n.body.is_empty() { n.app.clone() } else { format!("{} · {}", n.app, n.body) };
-                                text(&line2, F_BODY, rect(tx, y + 22.0 * s, xr, y + 40.0 * s), lead, grey(0.65, a))?;
+                                text(&line2, F_BODY, rect(tx, y + 15.0 * s, xr, y + 32.0 * s), lead, grey(0.65, a))?;
                             }
                             rt.PopAxisAlignedClip();
                             scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
