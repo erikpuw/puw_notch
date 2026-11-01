@@ -502,7 +502,13 @@ fn rotation(degrees: f32) -> Matrix3x2 {
     Matrix3x2 { M11: cos, M12: sin, M21: -sin, M22: cos, M31: 0.0, M32: 0.0 }
 }
 
-/// Overshoot easing for the page morph: arrives a touch past and settles back.
+/// Easing for the page slide: fast at first, settles without going past (a bounce there reads as
+/// the page being loaded twice).
+fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+}
+
+/// Overshoot easing for the notification pop: arrives a touch past and settles back.
 fn ease_out_back(t: f32) -> f32 {
     let (c1, t) = (1.3, t.clamp(0.0, 1.0) - 1.0);
     1.0 + (c1 + 1.0) * t * t * t + c1 * t * t
@@ -1952,7 +1958,7 @@ impl Renderer {
                         let d = dir as f32 * 24.0 * s;
                         let (out_a, in_a) = page_fades(t);
                         draw_title(from, -d * t.min(1.0), out_a)?;
-                        draw_title(v.page, d * (1.0 - ease_out_back(t)), in_a)?;
+                        draw_title(v.page, d * (1.0 - ease_out(t)), in_a)?;
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
@@ -2584,7 +2590,7 @@ impl Renderer {
                         let d = dir as f32;
                         let (out_a, in_a) = page_fades(t);
                         draw_page(from, -d * span * t.min(1.0), out_a)?;
-                        draw_page(v.page, d * span * (1.0 - ease_out_back(t)), in_a)?;
+                        draw_page(v.page, d * span * (1.0 - ease_out(t)), in_a)?;
                     }
                     None => draw_page(v.page, 0.0, 1.0)?,
                 }
