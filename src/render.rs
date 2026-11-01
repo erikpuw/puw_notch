@@ -279,7 +279,7 @@ pub fn panel_size(page: Page) -> [f32; 2] {
     let [w, h, _] = target(Mode::Expanded, false);
     match page {
         // Four task cards instead of three.
-        Page::Todo | Page::Notify => [w, h + 40.0],
+        Page::Todo | Page::Notify | Page::Health => [w, h + 40.0],
         _ => [w, h],
     }
 }
@@ -324,7 +324,7 @@ const CLEAR_Y: f32 = 36.0;
 const CLEAR_PAD: f32 = 9.0;
 /// Health page cards.
 const CARD_TOP: f32 = 34.0;
-const CARD_BOTTOM: f32 = 158.0;
+const CARD_BOTTOM: f32 = 198.0;
 const CARD_W: f32 = 172.0;
 const CARD_GAP: f32 = 8.0;
 /// Which apps (bit per `usage::APPS` index) have a tab on the Limits page: those found on this PC.
@@ -2534,8 +2534,9 @@ impl Renderer {
                             for card in [Card::Water, Card::Sit] {
                                 let x = if card == Card::Water { cl } else { cl + (CARD_W + CARD_GAP) * s };
                                 let cb = rect(x, CARD_TOP * s, x + CARD_W * s, CARD_BOTTOM * s);
-                                rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(grey(0.11, a))?);
                                 let accent = if card == Card::Water { BLUE } else { ORANGE };
+                                // The card carries a wash of its own colour.
+                                rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(color(accent.0 * 0.14 + 0.04, accent.1 * 0.14 + 0.04, accent.2 * 0.14 + 0.04, a))?);
                                 // Title row: icon, name, gear.
                                 let ty = (CARD_TOP + 4.0) * s;
                                 let ib = rect(x + 10.0 * s, ty, x + 32.0 * s, ty + 22.0 * s);
@@ -2620,15 +2621,21 @@ impl Renderer {
                                         else { format!("{} {} {}", tr("Nhắc sau", "Reminder in"), (h.sit_every_min as i64 - sat).max(0), tr("phút", "min")) };
                                     (sat.to_string(), format!(" {}", tr("phút ngồi", "min sitting")), sat as f32 / h.sit_every_min.max(1) as f32, status, tr("Đã đứng dậy", "I stood up").to_string())
                                 };
-                                let by = 60.0 * s;
-                                let bw = width(&big, F_BIG);
-                                text(&big, F_BIG, rect(x + 12.0 * s, by, x + CARD_W * s - 8.0 * s, by + 28.0 * s), lead, grey(1.0, a))?;
-                                text(&unit, F_LABEL, rect(x + 12.0 * s + bw + 2.0 * s, by + 6.0 * s, x + CARD_W * s - 8.0 * s, by + 26.0 * s), lead, grey(0.6, a))?;
+                                // A ring of the day's progress with the card's own picture in it; the figure and
+                                // its unit beside it, the status line under both.
                                 let (bl, br_) = (x + 12.0 * s, x + CARD_W * s - 12.0 * s);
-                                let bar = |right: f32| rounded(rect(bl, 94.0 * s, right, 98.0 * s), 2.0 * s);
-                                rt.FillRoundedRectangle(&bar(br_), &self.brush(grey(0.25, a))?);
-                                rt.FillRoundedRectangle(&bar(bl + (br_ - bl) * frac.clamp(0.0, 1.0)), &self.brush(solid(accent, a))?);
-                                text(&status, F_LABEL, rect(bl, 101.0 * s, br_, 119.0 * s), lead, grey(0.65, a))?;
+                                let hub = (bl + 28.0 * s, (CARD_TOP + 58.0) * s);
+                                self.draw_ring(hub, 56.0 * s, 6.0 * s, frac, accent, a)?;
+                                if card == Card::Water {
+                                    let g = self.water_drop(hub.0, hub.1, 22.0 * s)?;
+                                    rt.FillGeometry(&g, &self.brush(solid(accent, a))?, None);
+                                } else {
+                                    text(ICON_WALK, F_ICON, rect(hub.0 - 14.0 * s, hub.1 - 14.0 * s, hub.0 + 14.0 * s, hub.1 + 14.0 * s), center, solid(accent, a))?;
+                                }
+                                let (tx, by) = (bl + 66.0 * s, (CARD_TOP + 34.0) * s);
+                                text(&big, F_BIG, rect(tx, by, br_, by + 28.0 * s), lead, grey(1.0, a))?;
+                                text(unit.trim(), F_LABEL, rect(tx, by + 28.0 * s, br_, by + 46.0 * s), lead, grey(0.6, a))?;
+                                text(&status, F_LABEL, rect(bl, (CARD_TOP + 94.0) * s, br_, (CARD_TOP + 112.0) * s), lead, grey(0.65, a))?;
                                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                                 if let Some(pb) = rect_of(ab) {
                                     let hot = hovered == Some(ab);
@@ -3525,6 +3532,10 @@ mod tests {
             for (name, mode, music, page, lyrics, wx, battery, time, date) in shots {
                 let live = music.is_some();
                 let mut size = target(mode, live);
+                if mode == Mode::Expanded {
+                    let [w, h] = panel_size(page);
+                    (size[0], size[1]) = (w, h);
+                }
                 if lyrics {
                     size[0] += LYRICS_EXTRA_W;
                 }
