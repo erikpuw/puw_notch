@@ -275,18 +275,24 @@ fn dots_y(h: f32) -> f32 {
 
 /// What the open panel measures (logical px) while `page` shows. One place decides it; the notch
 /// glides to it, and the layout and hit areas of the page read the same height.
-pub fn panel_size(_page: Page) -> [f32; 2] {
+pub fn panel_size(page: Page) -> [f32; 2] {
     let [w, h, _] = target(Mode::Expanded, false);
-    [w, h]
+    match page {
+        // Four task cards instead of three.
+        Page::Todo => [w, h + 40.0],
+        _ => [w, h],
+    }
 }
 /// Task list page.
 const INPUT_Y: f32 = 36.0;
 const INPUT_H: f32 = 26.0;
 const COUNT_Y: f32 = 66.0;
-const ROW_Y: f32 = 84.0;
-/// A task row is also its tick, edit and delete buttons: 26 px high, above macOS' 20 px minimum.
-const ROW_H: f32 = 26.0;
-pub const LIST_ROWS: usize = 3;
+const ROW_Y: f32 = 94.0;
+/// Under the counts: how much of today's list is done.
+const PROGRESS_Y: f32 = 85.0;
+/// A task row is also its tick, edit and delete buttons: 29 px high, drawn as a card.
+const ROW_H: f32 = 29.0;
+pub const LIST_ROWS: usize = 4;
 /// Weather page, logical px from the content's left / the panel's top. City line: the 24h and x
 /// buttons at its right end. Left block: the icon with the temperature beside it and the sky's
 /// words under that, the unit chips under the icon. Right block (from `STATS_X` to the content's
@@ -2255,6 +2261,16 @@ impl Renderer {
                             text(&format!("{} · {later}", tr("Sắp tới", "Upcoming")), F_LABEL, rect(cl, cy - 2.0 * s, cr - 26.0 * s, cy + 16.0 * s), trail,
                                 if later > 0 { solid(BLUE, a) } else { grey(0.6, a) })?;
                             let open_set = settings == Some(Card::Tasks);
+                            // Progress of the list: done over all, a thin bar that fills as ticks are made.
+                            if !open_set && !v.todos.is_empty() {
+                                let done = v.todos.iter().filter(|t| t.done.is_some()).count();
+                                let (bt, bh) = (PROGRESS_Y * s, 3.0 * s);
+                                rt.FillRoundedRectangle(&rounded(rect(cl, bt, cr, bt + bh), bh / 2.0), &self.brush(grey(0.16, a))?);
+                                let frac = done as f32 / v.todos.len() as f32;
+                                if frac > 0.0 {
+                                    rt.FillRoundedRectangle(&rounded(rect(cl, bt, cl + (cr - cl) * frac, bt + bh), bh / 2.0), &self.brush(solid(GREEN, a))?);
+                                }
+                            }
                             if let Some(gb) = rect_of(Button::Gear(Card::Tasks)) {
                                 let hot = hovered == Some(Button::Gear(Card::Tasks));
                                 let (icon, c) = if open_set { (ICON_CHECK, solid(GREEN, a)) } else { (ICON_GEAR, grey(if hot { 1.0 } else { 0.6 }, a)) };
@@ -2289,8 +2305,14 @@ impl Renderer {
                                     let Button::ListToggle(i) = *b else { continue };
                                     let Some(item) = v.todos.get(i) else { continue };
                                     let hot = row_hovered(i);
-                                    if hot {
-                                        rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &self.brush(grey(0.1, a))?);
+                                    // Each task is a card; the stripe on its left says how soon it is due.
+                                    let card = rect(br.left - 8.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 2.0 * s);
+                                    rt.FillRoundedRectangle(&rounded(card, 9.0 * s), &self.brush(grey(if hot { 0.13 } else { 0.07 }, a))?);
+                                    if let Some(at) = item.at.filter(|_| item.done.is_none()) {
+                                        let urgent = minutes(at) - minutes(lv.now) <= lv.remind_before.max(15) as i64;
+                                        if urgent {
+                                            rt.FillRoundedRectangle(&rounded(rect(card.left, card.top + 6.0 * s, card.left + 3.0 * s, card.bottom - 6.0 * s), 1.5 * s), &self.brush(time_color(at, false))?);
+                                        }
                                     }
                                     // Tick circle.
                                     let d = 14.0 * s;
@@ -2301,7 +2323,11 @@ impl Renderer {
                                         rt.FillEllipse(&circle, &self.brush(solid(GREEN, a))?);
                                         text(ICON_CHECK, F_TINY_ICON, rect(ccx - d / 2.0, ccy - d / 2.0, ccx + d / 2.0, ccy + d / 2.0), center, grey(0.0, a))?;
                                     } else {
-                                        rt.DrawEllipse(&circle, &self.brush(grey(if hot { 0.85 } else { 0.55 }, a))?, 1.5 * s, None);
+                                        let ring = match item.at {
+                                            Some(at) if minutes(at) - minutes(lv.now) <= lv.remind_before.max(15) as i64 => time_color(at, false),
+                                            _ => grey(if hot { 0.85 } else { 0.55 }, a),
+                                        };
+                                        rt.DrawEllipse(&circle, &self.brush(ring)?, 1.5 * s, None);
                                     }
                                     // When, on the right: "HH:MM" today, "Mai HH:MM", "dd/mm HH:MM" (red once past).
                                     let mut text_right = br.right;
@@ -3448,7 +3474,7 @@ mod tests {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let (w, h) = (900, 230);
+            let (w, h) = (900, 270);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("README shots"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let lines = [
                 // Made-up lines about the feature itself (no song's lyrics in the README pictures).
@@ -3560,7 +3586,7 @@ mod tests {
                 ];
                 for (name, style, mode, music, page, tab, banner) in extra {
                     let live = music.is_some();
-                    let size = match banner { Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None => target(mode, live) };
+                    let size = match banner { Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None if mode == Mode::Expanded => { let [w, h] = panel_size(page); [w, h, target(mode, live)[2]] } None => target(mode, live) };
                     let view = View { mode, size, time: "20:50", date: "T2, 26/10", battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hours: false, hovered: None, page,
                         leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C,
                         list: ListView { counts: if page == Page::Todo { (3, 1) } else { (0, 0) }, remind_before: 15, now: crate::todo::stamp(20261029, 2, 5), draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
