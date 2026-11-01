@@ -128,19 +128,15 @@ pub fn page_shown(page: Page) -> bool {
 }
 
 impl Page {
+    /// The name in the panel's header (and in the tray's list of pages).
     pub fn name(self) -> &'static str {
-        self.title().1
-    }
-
-    /// Header of the page: icon, name, accent colour.
-    fn title(self) -> (&'static str, &'static str, (f32, f32, f32)) {
         match self {
-            Page::Music => ("\u{E8D6}", tr("Nhạc", "Music"), (0.72, 0.52, 1.0)),
-            Page::Todo => ("\u{E9D5}", tr("Việc", "Tasks"), GREEN),
-            Page::Notify => (ICON_BELL, tr("Thông báo", "Notifications"), BLUE),
-            Page::Health => ("\u{E95E}", tr("Sức khỏe", "Health"), (1.0, 0.42, 0.5)),
-            Page::Weather => ("", tr("Thời tiết", "Weather"), (1.0, 0.78, 0.25)),
-            Page::Usage => ("\u{E9D9}", tr("Giới hạn", "Limits"), (0.45, 0.85, 0.95)),
+            Page::Music => tr("Nhạc", "Music"),
+            Page::Todo => tr("Việc", "Tasks"),
+            Page::Notify => tr("Thông báo", "Notifications"),
+            Page::Health => tr("Sức khỏe", "Health"),
+            Page::Weather => tr("Thời tiết", "Weather"),
+            Page::Usage => tr("Giới hạn", "Limits"),
         }
     }
 }
@@ -562,6 +558,10 @@ const BANNER_IMAGE_PX: (f32, f32) = (2.0 * BANNER_IMAGE_W, 2.0 * BANNER_IMAGE_H)
 const F_LYRIC: usize = 10;
 /// A banner's badge: the large plain number at its right end (a Bluetooth device's battery).
 const F_BADGE: usize = 11;
+/// The panel header: the page's name, and the date and time in the middle (the time bolder).
+const F_HEAD: usize = 12;
+const F_CLOCK: usize = 13;
+const F_CLOCK_BOLD: usize = 14;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
 /// of the thin divider after the player's controls, its right margin and its width. The margin
 /// stays wider than the pages' clip (PAGE_CLIP), with room for a last letter's ink past the box.
@@ -1173,6 +1173,9 @@ impl Renderer {
                     f
                 },
                 make(ui, 30.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+                make(ui, 18.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(ui, 14.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+                make(ui, 14.0, DWRITE_FONT_WEIGHT_BOLD)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -1982,21 +1985,15 @@ impl Renderer {
 
             let a = fade(110.0, 50.0);
             if a > 0.0 && v.mode != Mode::Alert {
-                let (hl, hr) = (l + PAD * s, r - PAD * s);
-                // Header: the page's icon and name on the left (they morph with the page),
-                // short date · time in the centre, battery on the right.
-                let (ht, hb) = (6.0 * s, 28.0 * s);
+                let hl = l + PAD * s;
+                // Header: the page's name on the left (it morphs with the page), the battery ring, the
+                // date and the time together in the middle.
+                let (ht, hb) = (4.0 * s, 28.0 * s);
                 let draw_title = |page: Page, dx: f32, ta: f32| -> Result<()> {
                     if ta <= 0.01 {
                         return Ok(());
                     }
-                    let (icon, name, c) = page.title();
-                    // Weather's icon is the same Lucide line sun as the page's, not a font glyph.
-                    match (&weather_empty, page) {
-                        (Some((ic, geoms)), Page::Weather) => draw_wx_icon(ic, geoms, hl + dx + 1.0 * s, (ht + hb) / 2.0 - 8.0 * s, 16.0 * s, Some((c, c)), a * ta, 9.0)?,
-                        _ => text(icon, F_SMALL_ICON, rect(hl + dx, ht, hl + dx + 18.0 * s, hb), center, color(c.0, c.1, c.2, a * ta))?,
-                    }
-                    text(name, F_SMALL, rect(hl + dx + 24.0 * s, ht, hl + dx + 170.0 * s, hb), lead, grey(1.0, a * ta))
+                    text(page.name(), F_HEAD, rect(hl + dx, ht, hl + dx + 170.0 * s, hb), lead, grey(1.0, a * ta))
                 };
                 match v.leaving {
                     Some((from, t, dir)) => {
@@ -2007,16 +2004,22 @@ impl Renderer {
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
-                // The same battery ring as the pill's, then its percentage.
-                if let Some(b) = &v.battery {
-                    let pct = format!("{}%", b.percent);
-                    let tx = hr - width(&pct, F_LABEL);
-                    text(&pct, F_LABEL, rect(tx, ht, hr, hb), trail, grey(0.85, a))?;
-                    let d = 20.0 * s;
-                    self.draw_battery_ring((tx - 3.0 * s - d / 2.0, (ht + hb) / 2.0), d, b, a)?;
+                // [ring] date time, as one group centred on the panel.
+                {
+                    let ring = v.battery.as_ref().map(|b| (b, 22.0 * s));
+                    let (date, time) = (v.date, v.time);
+                    let (dw, tw) = (width(date, F_CLOCK), width(time, F_CLOCK_BOLD));
+                    let gap = 9.0 * s;
+                    let total = ring.map_or(0.0, |(_, d)| d + gap) + dw + gap + tw;
+                    let mut x = cx - total / 2.0;
+                    let mid = (ht + hb) / 2.0;
+                    if let Some((b, d)) = ring {
+                        self.draw_battery_ring((x + d / 2.0, mid), d, b, a)?;
+                        x += d + gap;
+                    }
+                    text(date, F_CLOCK, rect(x, ht, x + dw + 2.0 * s, hb), lead, grey(0.75, a))?;
+                    text(time, F_CLOCK_BOLD, rect(x + dw + gap, ht, x + dw + gap + tw + 2.0 * s, hb), lead, grey(1.0, a))?;
                 }
-                // Date · time in the middle of the header.
-                text(&format!("{} · {}", v.date, v.time), F_LABEL, rect(cx - 80.0 * s, ht, cx + 80.0 * s, hb), center, grey(0.85, a))?;
                 // Page content sits between the side arrows.
                 let (cl, cr) = (l + SIDE * s, r - SIDE * s);
                 let lv = &v.list;
