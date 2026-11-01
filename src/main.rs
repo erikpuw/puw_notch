@@ -1376,7 +1376,6 @@ impl App {
                     None => self.click(x, y),
                 }
             }
-            WM_RBUTTONUP => self.menu(),
             WM_LOCKKEY => {
                 let (name, on) = status::lock_state(wp.0);
                 self.show_banner(status_toast(tr("Bàn phím", "Keyboard"), name.to_string(), on_off(on), None, render::ICON_KEYBOARD), STATUS_MS);
