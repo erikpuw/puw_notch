@@ -280,13 +280,14 @@ pub fn panel_size(page: Page) -> [f32; 2] {
 }
 /// Task list page.
 const INPUT_Y: f32 = 36.0;
-const INPUT_H: f32 = 26.0;
-const COUNT_Y: f32 = 66.0;
-const ROW_Y: f32 = 90.0;
-/// Under the counts: how much of today's list is done.
-const PROGRESS_Y: f32 = 83.0;
-/// A task row is also its tick, edit and delete buttons: 29 px high, drawn as a card.
-const ROW_H: f32 = 26.0;
+const INPUT_H: f32 = 24.0;
+/// The left column of the page (the ring of the day's progress and what it counts), then the
+/// right column (the add box and the list) from `LIST_X` on, as far as the content reaches.
+const HERO_W: f32 = 112.0;
+const LIST_X: f32 = HERO_W + 10.0;
+const ROW_Y: f32 = 66.0;
+/// A task is a plain row with a hairline under it, and its tick, edit and delete buttons: 28 px high.
+const ROW_H: f32 = 28.0;
 pub const LIST_ROWS: usize = 3;
 /// Weather page, logical px from the content's left / the panel's top. City line: the 24h and x
 /// buttons at its right end. Left block: the icon with the temperature beside it and the sky's
@@ -392,18 +393,20 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     match page {
         Page::Music => out.extend(buttons(cx, scale, wide)),
         Page::Todo => {
-            out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
-            out.push((Button::ListClear, r(cl + cw - 26.0, INPUT_Y, 26.0, INPUT_H)));
-            out.push((Button::Gear(Card::Tasks), r(cl + cw - 20.0, COUNT_Y - 2.0, 20.0, 18.0)));
+            let (x0, rw) = (cl + LIST_X, cw - LIST_X);
+            out.push((Button::ListInput, r(x0, INPUT_Y, rw, INPUT_H)));
+            out.push((Button::ListClear, r(x0 + rw - 26.0, INPUT_Y, 26.0, INPUT_H)));
+            // The settings gear, small, under the last row.
+            out.push((Button::Gear(Card::Tasks), r(x0 + rw - 20.0, ROW_Y + ROW_H * LIST_ROWS as f32 + 4.0, 20.0, 18.0)));
             if settings == Some(Card::Tasks) {
-                out.push((Button::RemindStep(-1), r(cl + cw - 112.0, ROW_Y, 22.0, 22.0)));
-                out.push((Button::RemindStep(1), r(cl + cw - 24.0, ROW_Y, 22.0, 22.0)));
+                out.push((Button::RemindStep(-1), r(x0 + rw - 112.0, ROW_Y, 22.0, 22.0)));
+                out.push((Button::RemindStep(1), r(x0 + rw - 24.0, ROW_Y, 22.0, 22.0)));
             } else {
                 for (row, i) in (scroll..rows.min(scroll + LIST_ROWS)).enumerate() {
                     let y = ROW_Y + row as f32 * ROW_H;
-                    out.push((Button::ListToggle(i), r(cl, y, cw - 56.0, ROW_H)));
-                    out.push((Button::ListEdit(i), r(cl + cw - 54.0, y, 26.0, ROW_H)));
-                    out.push((Button::ListDelete(i), r(cl + cw - 26.0, y, 26.0, ROW_H)));
+                    out.push((Button::ListToggle(i), r(x0, y, rw - 56.0, ROW_H)));
+                    out.push((Button::ListEdit(i), r(x0 + rw - 54.0, y, 26.0, ROW_H)));
+                    out.push((Button::ListDelete(i), r(x0 + rw - 26.0, y, 26.0, ROW_H)));
                 }
             }
         }
@@ -562,6 +565,8 @@ const F_BADGE: usize = 11;
 const F_HEAD: usize = 12;
 const F_CLOCK: usize = 13;
 const F_CLOCK_BOLD: usize = 14;
+/// A page's big figure: the number in its ring.
+const F_FIGURE: usize = 15;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
 /// of the thin divider after the player's controls, its right margin and its width. The margin
 /// stays wider than the pages' clip (PAGE_CLIP), with room for a last letter's ink past the box.
@@ -1184,6 +1189,7 @@ impl Renderer {
                 make(display, 18.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(display, 14.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(display, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(display, 30.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -2268,36 +2274,31 @@ impl Renderer {
                             }
                         }
                         Page::Todo => {
-                            draw_input(tr("Thêm việc… (vd: Họp 20:00, Khám răng 28/10 9h)", "Add a task… (e.g. Call 20:00, Dentist 28/10 9h)"))?;
+                            let (x0, xr) = (cl + LIST_X * s, cr);
+                            draw_input(tr("Thêm việc… (vd: Họp 20:00)", "Add a task… (e.g. Call 20:00)"))?;
                             let today = (lv.now / 10_000) as u32;
                             let (open, later) = if current { lv.counts } else { (0, 0) };
-                            let cy = COUNT_Y * s;
-                            text(&format!("{} · {open}", tr("Hôm nay", "Today")), F_LABEL, rect(cl, cy - 2.0 * s, cr, cy + 16.0 * s), lead, grey(0.6, a))?;
-                            text(&format!("{} · {later}", tr("Sắp tới", "Upcoming")), F_LABEL, rect(cl, cy - 2.0 * s, cr - 26.0 * s, cy + 16.0 * s), trail,
-                                if later > 0 { solid(BLUE, a) } else { grey(0.6, a) })?;
+                            // Left: the day's progress as a big ring with what is left in it.
+                            let hub = (cl + HERO_W / 2.0 * s, 80.0 * s);
+                            let done = v.todos.iter().filter(|t| t.done.is_some()).count();
+                            let frac = if v.todos.is_empty() { 0.0 } else { done as f32 / v.todos.len() as f32 };
+                            self.draw_ring_on(hub, 84.0 * s, 7.0 * s, frac, GREEN, color(GREEN.0 * 0.2, GREEN.1 * 0.2, GREEN.2 * 0.2, a), a)?;
+                            text(&open.to_string(), F_FIGURE, rect(hub.0 - 40.0 * s, hub.1 - 22.0 * s, hub.0 + 40.0 * s, hub.1 + 22.0 * s), center, grey(1.0, a))?;
+                            text(tr("việc còn lại", "tasks left"), F_LABEL, rect(cl, 126.0 * s, cl + HERO_W * s, 142.0 * s), center, grey(0.9, a))?;
+                            text(&format!("{later} {}", tr("sắp tới", "upcoming")), F_LABEL, rect(cl, 142.0 * s, cl + HERO_W * s, 158.0 * s), center, grey(0.5, a))?;
                             let open_set = settings == Some(Card::Tasks);
-                            // Progress of the list: done over all, a thin bar that fills as ticks are made.
-                            if !open_set && !v.todos.is_empty() {
-                                let done = v.todos.iter().filter(|t| t.done.is_some()).count();
-                                let (bt, bh) = (PROGRESS_Y * s, 3.0 * s);
-                                rt.FillRoundedRectangle(&rounded(rect(cl, bt, cr, bt + bh), bh / 2.0), &self.brush(grey(0.16, a))?);
-                                let frac = done as f32 / v.todos.len() as f32;
-                                if frac > 0.0 {
-                                    rt.FillRoundedRectangle(&rounded(rect(cl, bt, cl + (cr - cl) * frac, bt + bh), bh / 2.0), &self.brush(solid(GREEN, a))?);
-                                }
-                            }
                             if let Some(gb) = rect_of(Button::Gear(Card::Tasks)) {
                                 let hot = hovered == Some(Button::Gear(Card::Tasks));
-                                let (icon, c) = if open_set { (ICON_CHECK, solid(GREEN, a)) } else { (ICON_GEAR, grey(if hot { 1.0 } else { 0.6 }, a)) };
+                                let (icon, c) = if open_set { (ICON_CHECK, solid(GREEN, a)) } else { (ICON_GEAR, grey(if hot { 1.0 } else { 0.45 }, a)) };
                                 hover_disc(Button::Gear(Card::Tasks))?;
                                 micon("tasks-gear", icon, F_SMALL_ICON, gb, c)?;
                             }
                             if open_set {
-                                // Settings: the early reminder, stepped with − / +.
+                                // Settings: the early reminder, stepped with - / +.
                                 let y = ROW_Y * s;
-                                text(tr("Nhắc trước", "Remind before"), F_BODY, rect(cl, y, cr - 112.0 * s, y + 22.0 * s), lead, grey(0.9, a))?;
+                                text(tr("Nhắc trước", "Remind before"), F_BODY, rect(x0, y, xr - 112.0 * s, y + 22.0 * s), lead, grey(0.9, a))?;
                                 let value = if lv.remind_before == 0 { tr("Tắt", "Off").to_string() } else { format!("{} {}", lv.remind_before, tr("phút", "min")) };
-                                text(&value, F_BODY, rect(cr - 88.0 * s, y, cr - 26.0 * s, y + 22.0 * s), center, grey(1.0, a))?;
+                                text(&value, F_BODY, rect(xr - 88.0 * s, y, xr - 26.0 * s, y + 22.0 * s), center, grey(1.0, a))?;
                                 for (b, icon) in [(Button::RemindStep(-1), ICON_MINUS), (Button::RemindStep(1), ICON_PLUS)] {
                                     if let Some(sb) = rect_of(b) {
                                         rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: (sb.left + sb.right) / 2.0, Y: (sb.top + sb.bottom) / 2.0 }, radiusX: 11.0 * s, radiusY: 11.0 * s },
@@ -2306,25 +2307,30 @@ impl Renderer {
                                     }
                                 }
                                 text(tr("Việc có giờ còn được nhắc đúng giờ", "Timed tasks also ring on time"), F_LABEL,
-                                    rect(cl, y + 26.0 * s, cr, y + 44.0 * s), lead, grey(0.5, a))?;
+                                    rect(x0, y + 26.0 * s, xr, y + 44.0 * s), lead, grey(0.5, a))?;
                             } else {
                                 if v.todos.is_empty() {
-                                    let mid = (cl + cr) / 2.0;
-                                    let ring = D2D1_ELLIPSE { point: Vector2 { X: mid, Y: (ROW_Y + 12.0) * s }, radiusX: 11.0 * s, radiusY: 11.0 * s };
+                                    let mid = (x0 + xr) / 2.0;
+                                    let ring = D2D1_ELLIPSE { point: Vector2 { X: mid, Y: (ROW_Y + 16.0) * s }, radiusX: 11.0 * s, radiusY: 11.0 * s };
                                     rt.DrawEllipse(&ring, &self.brush(grey(0.3, a))?, 1.5 * s, None);
-                                    text(ICON_CHECK, F_TINY_ICON, rect(mid - 11.0 * s, (ROW_Y + 1.0) * s, mid + 11.0 * s, (ROW_Y + 23.0) * s), center, grey(0.3, a))?;
-                                    text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, rect(cl, (ROW_Y + 28.0) * s, cr, (ROW_Y + 46.0) * s), center, grey(0.7, a))?;
-                                    text(tr("Gõ vào ô trên rồi nhấn Enter", "Type above and press Enter"), F_LABEL, rect(cl, (ROW_Y + 46.0) * s, cr, (ROW_Y + 62.0) * s), center, grey(0.5, a))?;
+                                    text(ICON_CHECK, F_TINY_ICON, rect(mid - 11.0 * s, (ROW_Y + 5.0) * s, mid + 11.0 * s, (ROW_Y + 27.0) * s), center, grey(0.3, a))?;
+                                    text(tr("Chưa có việc nào", "No tasks yet"), F_BODY, rect(x0, (ROW_Y + 32.0) * s, xr, (ROW_Y + 50.0) * s), center, grey(0.7, a))?;
+                                    text(tr("Gõ vào ô trên rồi nhấn Enter", "Type above and press Enter"), F_LABEL, rect(x0, (ROW_Y + 50.0) * s, xr, (ROW_Y + 66.0) * s), center, grey(0.5, a))?;
                                 }
-                                for (b, br) in btns.iter() {
+                                let rows_on: Vec<_> = btns.iter().filter(|(b, _)| matches!(b, Button::ListToggle(_))).collect();
+                                for (n, (b, br)) in rows_on.iter().enumerate() {
                                     let Button::ListToggle(i) = *b else { continue };
                                     let Some(item) = v.todos.get(i) else { continue };
                                     let hot = row_hovered(i);
-                                    // Each task is a card; the colour of its tick and time says how soon it is due.
-                                    let card = rect(br.left - 8.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 2.0 * s);
-                                    rt.FillRoundedRectangle(&rounded(card, 9.0 * s), &self.brush(grey(if hot { 0.13 } else { 0.07 }, a))?);
-                                    // Tick circle.
-                                    let d = 14.0 * s;
+                                    // A plain row: a hairline under it (not the last), the row under the mouse a touch lighter.
+                                    if hot {
+                                        rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, xr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &self.brush(grey(0.08, a))?);
+                                    }
+                                    if n + 1 < rows_on.len() {
+                                        rt.FillRectangle(&rect(br.left, br.bottom - 1.0 * s, xr, br.bottom), &self.brush(grey(0.12, a))?);
+                                    }
+                                    // Tick circle, in the colour of how soon it is due.
+                                    let d = 13.0 * s;
                                     let (ccx, ccy) = (br.left + d / 2.0, (br.top + br.bottom) / 2.0);
                                     let circle = D2D1_ELLIPSE { point: Vector2 { X: ccx, Y: ccy }, radiusX: d / 2.0 - 0.75 * s, radiusY: d / 2.0 - 0.75 * s };
                                     let done = item.done.is_some();
@@ -2334,7 +2340,7 @@ impl Renderer {
                                     } else {
                                         let ring = match item.at {
                                             Some(at) if minutes(at) - minutes(lv.now) <= lv.remind_before.max(15) as i64 => time_color(at, false),
-                                            _ => grey(if hot { 0.85 } else { 0.55 }, a),
+                                            _ => grey(if hot { 0.85 } else { 0.5 }, a),
                                         };
                                         rt.DrawEllipse(&circle, &self.brush(ring)?, 1.5 * s, None);
                                     }
@@ -2348,6 +2354,8 @@ impl Renderer {
                                         // Urgency in words as well as colour: past due, or inside the early reminder.
                                         let left = minutes(at) - minutes(lv.now);
                                         let flag = if done { "" } else if left <= 0 { tr("Trễ", "Late") } else if left <= lv.remind_before.max(15) as i64 { tr("Sắp", "Soon") } else { "" };
+                                        // A task late from another day says the date only, so its words keep the room.
+                                        let when = if !flag.is_empty() && day != today { format!("{:02}/{:02}", day % 100, day / 100 % 100) } else { when };
                                         let label = if flag.is_empty() { when } else { format!("{flag} {when}") };
                                         let lw = width(&label, F_LABEL) + 4.0 * s;
                                         text(&label, F_LABEL, rect(br.right - lw, br.top, br.right - 2.0 * s, br.bottom), trail, time_color(at, done))?;
@@ -2361,7 +2369,10 @@ impl Renderer {
                                         let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
                                         rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &self.brush(grey(0.5, a))?);
                                     }
-                                    row_tools(i, hot)?;
+                                    // Edit and delete show only while the mouse is on the row.
+                                    if hot {
+                                        row_tools(i, hot)?;
+                                    }
                                 }
                                 scrollbar(v.todos.len(), LIST_ROWS, ROW_Y, ROW_H)?;
                             }
