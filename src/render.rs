@@ -1985,10 +1985,10 @@ impl Renderer {
 
             let a = fade(110.0, 50.0);
             if a > 0.0 && v.mode != Mode::Alert {
-                let hl = l + PAD * s;
-                // Header: the page's name on the left (it morphs with the page), the battery ring, the
-                // date and the time together in the middle.
-                let (ht, hb) = (4.0 * s, 28.0 * s);
+                let (hl, hr) = (l + PAD * s, r - PAD * s);
+                // Header: the page's name on the left (it morphs with the page), the date and the time
+                // in the middle, the battery ring and its percentage on the right.
+                let (ht, hb) = (6.0 * s, 28.0 * s);
                 let draw_title = |page: Page, dx: f32, ta: f32| -> Result<()> {
                     if ta <= 0.01 {
                         return Ok(());
@@ -2004,19 +2004,20 @@ impl Renderer {
                     }
                     None => draw_title(v.page, 0.0, 1.0)?,
                 }
-                // [ring] date time, as one group centred on the panel.
+                // The same battery ring as the pill's, then its percentage.
+                if let Some(b) = &v.battery {
+                    let pct = format!("{}%", b.percent);
+                    let tx = hr - width(&pct, F_LABEL);
+                    text(&pct, F_LABEL, rect(tx, ht, hr, hb), trail, grey(0.85, a))?;
+                    let d = 20.0 * s;
+                    self.draw_battery_ring((tx - 3.0 * s - d / 2.0, (ht + hb) / 2.0), d, b, a)?;
+                }
+                // Date and time in the middle, the time bolder.
                 {
-                    let ring = v.battery.as_ref().map(|b| (b, 22.0 * s));
                     let (date, time) = (v.date, v.time);
                     let (dw, tw) = (width(date, F_CLOCK), width(time, F_CLOCK_BOLD));
                     let gap = 9.0 * s;
-                    let total = ring.map_or(0.0, |(_, d)| d + gap) + dw + gap + tw;
-                    let mut x = cx - total / 2.0;
-                    let mid = (ht + hb) / 2.0;
-                    if let Some((b, d)) = ring {
-                        self.draw_battery_ring((x + d / 2.0, mid), d, b, a)?;
-                        x += d + gap;
-                    }
+                    let x = cx - (dw + gap + tw) / 2.0;
                     text(date, F_CLOCK, rect(x, ht, x + dw + 2.0 * s, hb), lead, grey(0.75, a))?;
                     text(time, F_CLOCK_BOLD, rect(x + dw + gap, ht, x + dw + gap + tw + 2.0 * s, hb), lead, grey(1.0, a))?;
                 }
