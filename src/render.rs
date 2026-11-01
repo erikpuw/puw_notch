@@ -302,7 +302,7 @@ const UNIT_H: f32 = 18.0;
 
 /// Notifications page: a narrow column on the left with the count and "Clear all"; on the right, from
 /// `NOTE_X` to the content's end, a row for each notification: its app's tile, then two lines.
-const NOTE_X: f32 = 84.0;
+const NOTE_X: f32 = 72.0;
 const NOTE_Y: f32 = 36.0;
 const NOTE_H: f32 = 38.0;
 pub const NOTE_ROWS: usize = 3;
