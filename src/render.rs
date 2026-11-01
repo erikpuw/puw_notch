@@ -2708,14 +2708,22 @@ impl Renderer {
                         text(icon, F_SMALL_ICON, *br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
                     }
                 }
-                let (dot, wide, gap) = (5.0 * s, 14.0 * s, 5.0 * s);
+                // The page dots: the long one is the page on show. On a page change the old one shrinks
+                // while the new one grows (the weights below), so the pill seems to travel and stretch.
+                let (dot, wide, gap) = (6.0 * s, 18.0 * s, 6.0 * s);
                 let kept = PAGES.iter().filter(|p| page_shown(**p)).count();
                 let total = wide + (kept as f32 - 1.0) * (dot + gap);
                 let mut dx = cx - total / 2.0;
+                let arriving = v.leaving.map_or(1.0, |(_, t, _)| ease_out(t));
                 for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
-                    let on = p == v.page;
-                    let dw = if on { wide } else { dot };
-                    rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(if on { grey(1.0, a) } else { grey(0.45, a) })?);
+                    let weight = match v.leaving {
+                        _ if p == v.page => arriving,
+                        Some((from, _, _)) if p == from => 1.0 - arriving,
+                        _ => 0.0,
+                    };
+                    let dw = dot + (wide - dot) * weight;
+                    let shade = 0.38 + 0.62 * weight;
+                    rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(grey(shade, a))?);
                     dx += dw + gap;
                 }
                 // The Weather page's source (Open-Meteo asks for the credit, CC BY 4.0) and when it was
