@@ -1196,7 +1196,8 @@ impl App {
                     }
                 }
                 MENU_QUIT => { let _ = DestroyWindow(self.hwnd); }
-                _ => {}
+                // Menu dismissed: frames missed while it was open start again, and a stale hover is let go.
+                _ => self.kick(),
             }
         }
     }
@@ -1204,7 +1205,7 @@ impl App {
     fn handle(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         match msg {
             WM_FRAME => {
-                self.vsync.pending.store(false, Ordering::Relaxed);
+                FRAME_PENDING.store(false, Ordering::Relaxed);
                 if self.frame_ms == VSYNC {
                     self.frame();
                 }
@@ -1603,17 +1604,20 @@ fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
 /// Paces animation frames to the display: a helper thread waits for each DWM composition and
 /// posts WM_FRAME while on. WM_TIMER ticks every 15.6 ms and gets coalesced (frames 3-36 ms
 /// apart measured), which made the spring stutter.
+/// A WM_FRAME is queued and not yet handled: never stack more than one. A message that finds the
+/// app borrowed (a menu or a message box is open) is not handled and must clear this, or the
+/// vsync thread waits for it for ever and nothing moves again.
+static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
+
 struct Vsync {
     on: Arc<AtomicBool>,
-    /// A WM_FRAME is queued and not yet handled: never stack more than one.
-    pending: Arc<AtomicBool>,
     thread: std::thread::Thread,
 }
 
 impl Vsync {
     fn start(hwnd: HWND) -> Self {
-        let (on, pending) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
-        let (on2, pending2, target) = (on.clone(), pending.clone(), hwnd.0 as isize);
+        let on = Arc::new(AtomicBool::new(false));
+        let (on2, target) = (on.clone(), hwnd.0 as isize);
         let thread = std::thread::spawn(move || {
             unsafe { let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL); }
             loop {
@@ -1624,14 +1628,14 @@ impl Vsync {
             if unsafe { DwmFlush() }.is_err() {
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
-            if on2.load(Ordering::Relaxed) && !pending2.swap(true, Ordering::Relaxed) {
+            if on2.load(Ordering::Relaxed) && !FRAME_PENDING.swap(true, Ordering::Relaxed) {
                 unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_FRAME, WPARAM(0), LPARAM(0)); }
             }
             }
         })
         .thread()
         .clone();
-        Vsync { on, pending, thread }
+        Vsync { on, thread }
     }
 
     fn set(&self, on: bool) {
@@ -1650,6 +1654,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     }
     // Win32 calls made while handling a message can re-enter here; those fall back to the default.
     let handled = APP.with(|a| a.try_borrow_mut().ok().and_then(|mut g| g.as_mut().and_then(|app| app.handle(msg, wp, lp))));
+    if handled.is_none() && msg == WM_FRAME {
+        FRAME_PENDING.store(false, Ordering::Relaxed);
+    }
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
