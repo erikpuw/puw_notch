@@ -1,9 +1,10 @@
 //! What is under / around the notch: fullscreen apps and busy content beside the pill.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::notch;
@@ -97,12 +98,32 @@ pub fn class_name(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n])
 }
 
+/// Pixels under the pill change slowly: once a sample agrees with the one before, the next few
+/// ticks (about 2 s) reuse it. A sample that differs is confirmed on the very next tick.
+const RESAMPLE_TICKS: u8 = 3;
+static SKIP: AtomicU8 = AtomicU8::new(0);
+static LAST_BUSY: AtomicBool = AtomicBool::new(false);
+
+fn settle(busy: bool) -> Check {
+    let agreed = LAST_BUSY.swap(busy, Ordering::Relaxed) == busy;
+    SKIP.store(if agreed { RESAMPLE_TICKS } else { 0 }, Ordering::Relaxed);
+    Check::Busy(busy)
+}
+
+/// A game in exclusive full screen or Presentation Mode: Windows says so, no window to measure.
+fn shell_says_fullscreen() -> bool {
+    unsafe { SHQueryUserNotificationState() }.is_ok_and(|s| s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE)
+}
+
 /// `own` = notch window, `center_x` = notch centre in screen px, `monitor` = notch monitor rect,
 /// `pill_w` = current resting pill width (logical px); the strips follow `strip_span`.
 /// `sample` = false skips the pixel strips: the capture includes our own window, so they are only
 /// meaningful while the notch rests at its pill size (not hovered, open, bannering or animating).
 /// `last` = foreground window and rect seen by the previous call; sampling waits until they repeat.
 pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, sample: bool, last: &mut Option<(isize, RECT)>) -> Check {
+    if shell_says_fullscreen() {
+        return Check::Fullscreen;
+    }
     unsafe {
         let fg = GetForegroundWindow();
         if fg.is_invalid() || fg == own || !IsWindowVisible(fg).as_bool() || IsIconic(fg).as_bool() {
@@ -126,14 +147,19 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
             return Check::Busy(false);
         }
         if !still {
+            SKIP.store(0, Ordering::Relaxed);
             return Check::Settling;
+        }
+        if SKIP.load(Ordering::Relaxed) > 0 {
+            SKIP.fetch_sub(1, Ordering::Relaxed);
+            return Check::Busy(LAST_BUSY.load(Ordering::Relaxed));
         }
         let half = (body_half(pill_w) * scale) as i32;
         let sh = (PILL_H * scale) as i32;
         let top = monitor.top;
         // Only sample where the foreground window actually is, so wallpaper never counts.
         if r.top > top + sh || r.bottom <= top {
-            return Check::Busy(false);
+            return settle(false);
         }
         let y = r.top.max(top);
         let h = top + sh - y;
@@ -141,7 +167,7 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         if !LEFT_OUT.load(Ordering::Relaxed) {
             return Check::Busy(false);
         }
-        Check::Busy(is_busy(under.map(|(from, to)| grab_edges(from, y, to - from, h))))
+        settle(is_busy(under.map(|(from, to)| grab_edges(from, y, to - from, h))))
     }
 }
 

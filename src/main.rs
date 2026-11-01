@@ -70,6 +70,9 @@ const PAGE_MORPH_S: f32 = 0.32;
 const NOTES_MAX: usize = 30;
 const CARET_MS: u32 = 530;
 const CHECK_MS: u32 = 500;
+/// A pill that has rested this long (30 s) gives its pages back to Windows: Task Manager then shows
+/// a few MB instead of what the last panel touched. They come back on demand.
+const TRIM_TICKS: u32 = 60;
 const MENU_MINIMAL: usize = 10;
 const MENU_AUTOSTART: usize = 11;
 const MENU_QUIT: usize = 12;
@@ -164,6 +167,8 @@ struct App {
     hovered_button: Option<Button>,
     /// Foreground window + rect at the last check: busy sampling waits for it to hold still.
     last_foreground: Option<(isize, RECT)>,
+    /// Ticks the pill has rested without a move; at `TRIM_TICKS` the working set is handed back.
+    rested: u32,
     page: Page,
     todo: todo::Todo,
     today: u32,
@@ -534,6 +539,10 @@ impl App {
 
         // The capture includes our own window: sample only while the pill rests, still and alone.
         let sample = self.notch.is_settled_rest();
+        self.rested = if sample { self.rested.saturating_add(1) } else { 0 };
+        if self.rested == TRIM_TICKS {
+            unsafe { let _ = windows::Win32::System::Threading::SetProcessWorkingSetSize(windows::Win32::System::Threading::GetCurrentProcess(), usize::MAX, usize::MAX); }
+        }
         let cx = self.win.0 + self.win.2 / 2;
         let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
         match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w, sample, &mut self.last_foreground) {
@@ -1619,6 +1628,7 @@ fn run() -> windows::core::Result<()> {
             vsync: Vsync::start(hwnd),
             hovered_button: None,
             last_foreground: None,
+            rested: 0,
             page: Page::Music,
             todo: todo::Todo::load(system::now_stamp()),
             today: system::today(),

@@ -22,6 +22,8 @@ pub const WM_WEATHER: u32 = WM_APP + 9;
 /// Open-Meteo's data moves by the hour here (its 15-minute models cover North America and
 /// Central Europe only): every half hour is fresh enough, ~48 calls a day.
 const REFRESH: Duration = Duration::from_secs(30 * 60);
+/// The first fetch waits, so the network stack is not loaded while the app starts.
+const FIRST: Duration = Duration::from_secs(30);
 /// A network or wake-up refresh sooner than this after the last fetch is skipped.
 const MIN_GAP: Duration = Duration::from_secs(2 * 60);
 /// Try again after this when a fetch failed.
@@ -190,9 +192,9 @@ impl Weather {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_WEATHER, WPARAM(0), LPARAM(0)); };
             let mut last: Option<Instant> = None;
-            let mut job = Some(Job::Refresh);
+            let mut job = None;
             // How long to wait for the next job: a failed fetch (no network yet) tries again sooner.
-            let mut wait = REFRESH;
+            let mut wait = FIRST;
             loop {
                 match job.take() {
                     Some(Job::Find(city)) => {
