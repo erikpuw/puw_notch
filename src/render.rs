@@ -1152,6 +1152,14 @@ impl Renderer {
                 Ok(f)
             };
             let ui = w!("Segoe UI");
+            // The header uses Windows 11's display cut of Segoe UI (drawn for large sizes, finer than the text
+            // cut at 18 px) when it is installed, else the plain one.
+            let display = unsafe {
+                let (mut collection, mut index, mut found) = (None, 0u32, false.into());
+                let has = self.dw.GetSystemFontCollection(&mut collection, false).is_ok()
+                    && collection.is_some_and(|c| c.FindFamilyName(w!("Segoe UI Variable Display"), &mut index, &mut found).is_ok() && found.as_bool());
+                if has { w!("Segoe UI Variable Display") } else { ui }
+            };
             let set = vec![
                 make(ui, 15.0, DWRITE_FONT_WEIGHT_BOLD)?,
                 make(ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
@@ -1173,9 +1181,9 @@ impl Renderer {
                     f
                 },
                 make(ui, 30.0, DWRITE_FONT_WEIGHT_NORMAL)?,
-                make(ui, 18.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
-                make(ui, 14.0, DWRITE_FONT_WEIGHT_NORMAL)?,
-                make(ui, 14.0, DWRITE_FONT_WEIGHT_BOLD)?,
+                make(display, 18.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(display, 14.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+                make(display, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
             ];
             self.fonts = Some((scale, set));
         }
