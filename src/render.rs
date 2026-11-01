@@ -2627,7 +2627,7 @@ impl Renderer {
                                 };
                                 // A ring of the day's progress with the card's own picture in it; the figure and
                                 // its unit beside it, the status line under both.
-                                let (bl, br_) = (x + 12.0 * s, x + card_w * s - 12.0 * s);
+                                let br_ = x + card_w * s - 12.0 * s;
                                 // The ring and the figures share one middle line, between the title and the button, and the
                                 // ring starts where the title does.
                                 let ring_d = 52.0;
