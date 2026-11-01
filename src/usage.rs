@@ -564,6 +564,10 @@ impl Monitor {
         std::thread::spawn(move || {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             loop {
+                // The Limits page switched off: nothing is read and no alert is made.
+                while !crate::render::page_shown(crate::render::Page::Usage) {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
                 let now = read_all();
                 if let Ok(mut s) = mine.lock() {
                     if *s != now {

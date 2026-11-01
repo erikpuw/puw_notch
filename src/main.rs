@@ -423,7 +423,7 @@ impl App {
     /// Pull the latest now-playing snapshot; music starting/stopping resizes the pill. A paused
     /// player keeps the pill for a few seconds (`music::shows_pill`); the panel's Music page keeps it.
     fn refresh_music(&mut self) {
-        self.track = self.music.snapshot();
+        self.track = self.music.snapshot().filter(|_| render::page_shown(Page::Music));
         if self.seek_drag.as_ref().is_some_and(|drag| !drag.current(self.track.as_ref())) {
             self.cancel_seek();
         }
@@ -570,7 +570,7 @@ impl App {
         self.usage_banner();
 
         // New ones get a banner; the Notifications page lists what Windows still keeps.
-        let new = self.notifications.as_mut().map(|r| r.poll()).unwrap_or_default();
+        let new = self.notifications.as_mut().filter(|_| render::page_shown(Page::Notify)).map(|r| r.poll()).unwrap_or_default();
         let showing_notes = self.notch.mode == Mode::Expanded && self.page == Page::Notify;
         if showing_notes && !self.hidden {
             self.refresh_notes();
@@ -652,6 +652,9 @@ impl App {
 
     /// The oldest waiting limit alert, as a banner when one can show now (else it waits for the next tick).
     fn usage_banner(&mut self) {
+        if !render::page_shown(Page::Usage) {
+            return;
+        }
         let Some(alert) = self.usage_alerts.first() else { return };
         let now = usage::now_secs();
         let (title, body) = alert.text(now);
@@ -667,7 +670,9 @@ impl App {
     fn remind(&mut self) {
         let now = system::now_stamp();
         let hhmm = |d: u64| format!("{:02}:{:02}", d / 100 % 100, d % 100);
-        for (i, ring) in self.todo.rings(now) {
+        // A page the user hid does nothing: no reminders, no water, no stand-up.
+        let (tasks, health) = (render::page_shown(Page::Todo), render::page_shown(Page::Health));
+        for (i, ring) in self.todo.rings(now).into_iter().filter(|_| tasks) {
             let Some(item) = self.todo.items.get(i) else { continue };
             let at = item.at.unwrap_or(now);
             let when = match ring {
@@ -686,6 +691,9 @@ impl App {
         let h = &self.health;
         let (cup, goal) = (h.cup_ml, h.goal_ml);
         let every = h.sit_every_min;
+        if !health {
+            return;
+        }
         for ring in self.health.tick(todo::minutes(now), minute_of_day(now), idle_seconds()) {
             let taken = self.health.taken_ml;
             let level = Some(taken as f32 / goal.max(1) as f32);
@@ -1061,6 +1069,14 @@ impl App {
                         self.page_since = Instant::now();
                         self.settings_open = None;
                     }
+                    // A page switched off leaves nothing waiting; one switched on starts fresh.
+                    if !render::page_shown(Page::Usage) {
+                        self.usage_alerts.clear();
+                    }
+                    if render::page_shown(Page::Weather) {
+                        self.weather.refresh();
+                    }
+                    self.refresh_music();
                     system::save_settings(self.settings());
                     self.kick();
                 }
@@ -1343,6 +1359,7 @@ impl App {
                 self.approve_next();
                 return Some(LRESULT(0));
             }
+            usage::WM_USAGE if !render::page_shown(Page::Usage) => return Some(LRESULT(0)),
             usage::WM_USAGE => {
                 let snap = self.usage.snapshot();
                 render::set_usage_apps(snap.mask());

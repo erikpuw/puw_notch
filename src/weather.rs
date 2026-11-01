@@ -213,6 +213,8 @@ impl Weather {
                             continue;
                         }
                     }
+                    // The Weather page switched off: no network.
+                    Some(Job::Refresh) if !crate::render::page_shown(crate::render::Page::Weather) => wait = REFRESH,
                     Some(Job::Refresh) if last.is_none_or(|t| t.elapsed() >= MIN_GAP) => {
                         let place = shared.lock().ok().and_then(|s| s.place.clone());
                         wait = REFRESH;

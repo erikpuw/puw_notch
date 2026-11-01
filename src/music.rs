@@ -219,6 +219,13 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
             Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => None,
         };
+        // The Music page switched off: no player is read, commands are dropped.
+        if !crate::render::page_shown(crate::render::Page::Music) {
+            if shared.lock().map(|mut g| g.take().is_some()).unwrap_or(false) {
+                notify();
+            }
+            continue;
+        }
         let detailed = page_open.load(Ordering::Relaxed);
         let pill = pill_visible.load(Ordering::Relaxed);
         let native_target = cmd.as_ref().is_some_and(|(_, t)| t.source_id == crate::itunes::SOURCE_ID);
