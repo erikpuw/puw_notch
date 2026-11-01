@@ -63,7 +63,7 @@ pub const LYRICS_EXTRA_W: f32 = 284.0;
 /// Window must fit the largest target plus the hover margin.
 /// Includes room for the spring overshoot and the ears.
 pub const MAX_W: f32 = 820.0;
-pub const MAX_H: f32 = 260.0;
+pub const MAX_H: f32 = 330.0;
 /// How long a notification banner stays.
 pub const ALERT_MS: u32 = 5000;
 /// How long a status banner (Caps Lock, brightness) stays.

@@ -279,9 +279,12 @@ pub fn panel_size(page: Page) -> [f32; 2] {
     let [w, h, _] = target(Mode::Expanded, false);
     match page {
         // Four task cards instead of three.
-        Page::Todo | Page::Notify | Page::Health => [w, h + 40.0],
-        // Wider: room for the sky's picture and a roomier grid of figures.
-        Page::Weather => [w + 40.0, h],
+        // Each page takes the room its content wants, both ways.
+        Page::Todo => [w + 60.0, h + 84.0],
+        Page::Notify => [w + 80.0, h + 84.0],
+        Page::Health => [w + 80.0, h + 64.0],
+        Page::Weather => [w + 140.0, h + 64.0],
+        Page::Usage => [w + 60.0, h + 50.0],
         _ => [w, h],
     }
 }
@@ -294,28 +297,28 @@ const ROW_Y: f32 = 94.0;
 const PROGRESS_Y: f32 = 85.0;
 /// A task row is also its tick, edit and delete buttons: 29 px high, drawn as a card.
 const ROW_H: f32 = 29.0;
-pub const LIST_ROWS: usize = 4;
+pub const LIST_ROWS: usize = 5;
 /// Weather page, logical px from the content's left / the panel's top. City line: the 24h and x
 /// buttons at its right end. Left block: the icon with the temperature beside it and the sky's
 /// words under that, the unit chips under the icon. Right block (from `STATS_X` to the content's
 /// right): a 3 x 2 grid of figures, or the 24-hour strip in its place.
 const CITY_Y: f32 = 62.0;
-const ICON_Y: f32 = 90.0;
-const WX_ICON: f32 = 44.0;
-const TEMP_X: f32 = 52.0;
+const ICON_Y: f32 = 94.0;
+const WX_ICON: f32 = 68.0;
+const TEMP_X: f32 = 78.0;
 const UNIT_X: f32 = 0.0;
-const UNIT_Y: f32 = 142.0;
+const UNIT_Y: f32 = 186.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 18.0;
-const STATS_X: f32 = 150.0;
+const STATS_X: f32 = 196.0;
 /// The grid's two rows (label on top); the 24h strip starts at the first.
-const STATS_Y: [f32; 2] = [90.0, 128.0];
+const STATS_Y: [f32; 2] = [96.0, 154.0];
 const HOURS_BTN_W: f32 = 38.0;
 
 /// Notifications page: rows of two lines.
-const NOTE_Y: f32 = 58.0;
+const NOTE_Y: f32 = 57.0;
 const NOTE_H: f32 = 38.0;
-pub const NOTE_ROWS: usize = 4;
+pub const NOTE_ROWS: usize = 5;
 /// "Clear all" under the rows, right-aligned with their times: a pill hugging its label (the click
 /// area is this wide), inside the pages' clip, which ends at dots_y - 3.
 const CLEAR_W: f32 = 64.0;
@@ -326,9 +329,11 @@ const CLEAR_Y: f32 = 36.0;
 const CLEAR_PAD: f32 = 9.0;
 /// Health page cards.
 const CARD_TOP: f32 = 34.0;
-const CARD_BOTTOM: f32 = 198.0;
-const CARD_W: f32 = 172.0;
+/// The cards share the content's width; they end 28 px above the panel's bottom.
 const CARD_GAP: f32 = 8.0;
+fn card_bottom(panel_h: f32) -> f32 {
+    panel_h - 28.0
+}
 /// Which apps (bit per `usage::APPS` index) have a tab on the Limits page: those found on this PC.
 static USAGE_APPS: AtomicU8 = AtomicU8::new(0b111);
 
@@ -442,23 +447,24 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             }
         }
         Page::Health => {
-            for (card, x) in [(Card::Water, cl), (Card::Sit, cl + CARD_W + CARD_GAP)] {
-                out.push((Button::Gear(card), r(x + CARD_W - 28.0, CARD_TOP + 4.0, 22.0, 22.0)));
+            let (card_w, bottom) = ((cw - CARD_GAP) / 2.0, card_bottom(panel_h));
+            for (card, x) in [(Card::Water, cl), (Card::Sit, cl + card_w + CARD_GAP)] {
+                out.push((Button::Gear(card), r(x + card_w - 28.0, CARD_TOP + 4.0, 22.0, 22.0)));
                 if settings == Some(card) {
                     for (k, &(set, switch)) in setting_rows(card).iter().enumerate() {
                         let y = SET_Y + k as f32 * SET_ROW;
                         if switch {
-                            out.push((Button::Toggle(set), r(x + CARD_W - 46.0, y + 1.0, 34.0, 16.0)));
+                            out.push((Button::Toggle(set), r(x + card_w - 46.0, y + 1.0, 34.0, 16.0)));
                         } else {
-                            out.push((Button::Step(set, -1), r(x + CARD_W - 90.0, y, 18.0, 18.0)));
-                            out.push((Button::Step(set, 1), r(x + CARD_W - 30.0, y, 18.0, 18.0)));
+                            out.push((Button::Step(set, -1), r(x + card_w - 90.0, y, 18.0, 18.0)));
+                            out.push((Button::Step(set, 1), r(x + card_w - 30.0, y, 18.0, 18.0)));
                         }
                     }
                 } else if card == Card::Water {
-                    out.push((Button::Drink, r(x + 12.0, CARD_BOTTOM - 32.0, CARD_W - 84.0, 24.0)));
-                    out.push((Button::Snooze, r(x + CARD_W - 68.0, CARD_BOTTOM - 32.0, 56.0, 24.0)));
+                    out.push((Button::Drink, r(x + 12.0, bottom - 32.0, card_w - 84.0, 24.0)));
+                    out.push((Button::Snooze, r(x + card_w - 68.0, bottom - 32.0, 56.0, 24.0)));
                 } else {
-                    out.push((Button::Stood, r(x + 12.0, CARD_BOTTOM - 32.0, CARD_W - 24.0, 24.0)));
+                    out.push((Button::Stood, r(x + 12.0, bottom - 32.0, card_w - 24.0, 24.0)));
                 }
             }
         }
@@ -2452,7 +2458,7 @@ impl Renderer {
                                     {
                                         let (sky, _) = weather::tints(n.sky, n.day);
                                         let hero = rect(cl - 8.0 * s, (ICON_Y - 8.0) * s, cl + (STATS_X - 10.0) * s, (UNIT_Y + UNIT_H + 6.0) * s);
-                                        rt.FillRoundedRectangle(&rounded(hero, 14.0 * s), &self.brush(color(sky.0 * 0.16 + 0.04, sky.1 * 0.16 + 0.04, sky.2 * 0.16 + 0.04, a * fade))?);
+                                        rt.FillRoundedRectangle(&rounded(hero, 14.0 * s), &self.brush(color(sky.0 * 0.30 + 0.05, sky.1 * 0.30 + 0.05, sky.2 * 0.30 + 0.05, a * fade))?);
                                     }
                                     draw_wx_icon(ic, geoms, cl, ICON_Y * s, WX_ICON * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
                                     // The big temperature, shrunk to fit before the right block when it is long
@@ -2539,12 +2545,15 @@ impl Renderer {
                         Page::Health => {
                             let hv = &v.health;
                             let h = hv.h;
+                            // The two cards share the content's width and end above the panel's bottom.
+                            let card_w = ((cr - cl) / s - CARD_GAP) / 2.0;
+                            let bottom = card_bottom(panel_size(Page::Health)[1]);
                             for card in [Card::Water, Card::Sit] {
-                                let x = if card == Card::Water { cl } else { cl + (CARD_W + CARD_GAP) * s };
-                                let cb = rect(x, CARD_TOP * s, x + CARD_W * s, CARD_BOTTOM * s);
+                                let x = if card == Card::Water { cl } else { cl + (card_w + CARD_GAP) * s };
+                                let cb = rect(x, CARD_TOP * s, x + card_w * s, bottom * s);
                                 let accent = if card == Card::Water { BLUE } else { ORANGE };
                                 // The card carries a wash of its own colour.
-                                rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(color(accent.0 * 0.14 + 0.04, accent.1 * 0.14 + 0.04, accent.2 * 0.14 + 0.04, a))?);
+                                rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(color(accent.0 * 0.26 + 0.04, accent.1 * 0.26 + 0.04, accent.2 * 0.26 + 0.04, a))?);
                                 // Title row: icon, name, gear.
                                 let ty = (CARD_TOP + 4.0) * s;
                                 let ib = rect(x + 10.0 * s, ty, x + 32.0 * s, ty + 22.0 * s);
@@ -2555,7 +2564,7 @@ impl Renderer {
                                     text(ICON_WALK, F_ICON, ib, center, solid(accent, a))?;
                                 }
                                 let title = if card == Card::Water { tr("Uống nước", "Water") } else { tr("Đứng dậy", "Stand up") };
-                                text(title, F_TITLE, rect(ib.right + 4.0 * s, ty, x + CARD_W * s - 30.0 * s, ty + 22.0 * s), lead, grey(1.0, a))?;
+                                text(title, F_TITLE, rect(ib.right + 4.0 * s, ty, x + card_w * s - 30.0 * s, ty + 22.0 * s), lead, grey(1.0, a))?;
                                 let open = settings == Some(card);
                                 if let Some(gb) = rect_of(Button::Gear(card)) {
                                     let hot = hovered == Some(Button::Gear(card));
@@ -2566,7 +2575,7 @@ impl Renderer {
                                 if open {
                                     for (k, &(set, switch)) in setting_rows(card).iter().enumerate() {
                                         let y = (SET_Y + k as f32 * SET_ROW) * s;
-                                        let row = rect(x + 12.0 * s, y, x + CARD_W * s - 12.0 * s, y + SET_ROW * s);
+                                        let row = rect(x + 12.0 * s, y, x + card_w * s - 12.0 * s, y + SET_ROW * s);
                                         let label = match set {
                                             Setting::WaterOn | Setting::SitOn => tr("Nhắc", "Remind"),
                                             Setting::Cup => tr("Mỗi lần", "Per drink"),
@@ -2606,7 +2615,7 @@ impl Renderer {
                                     }
                                     if card == Card::Sit {
                                         let y = (SET_Y + 2.0 * SET_ROW) * s;
-                                        text(tr("Rời máy ≥ 5 phút: tính lại", "Away ≥ 5 min: starts over"), F_LABEL, rect(x + 12.0 * s, y, x + CARD_W * s - 8.0 * s, y + SET_ROW * s), lead, grey(0.5, a))?;
+                                        text(tr("Rời máy ≥ 5 phút: tính lại", "Away ≥ 5 min: starts over"), F_LABEL, rect(x + 12.0 * s, y, x + card_w * s - 8.0 * s, y + SET_ROW * s), lead, grey(0.5, a))?;
                                     }
                                     continue;
                                 }
@@ -2631,19 +2640,19 @@ impl Renderer {
                                 };
                                 // A ring of the day's progress with the card's own picture in it; the figure and
                                 // its unit beside it, the status line under both.
-                                let (bl, br_) = (x + 12.0 * s, x + CARD_W * s - 12.0 * s);
-                                let hub = (bl + 28.0 * s, (CARD_TOP + 58.0) * s);
-                                self.draw_ring(hub, 56.0 * s, 6.0 * s, frac, accent, a)?;
+                                let (bl, br_) = (x + 12.0 * s, x + card_w * s - 12.0 * s);
+                                let hub = (bl + 43.0 * s, (CARD_TOP + 76.0) * s);
+                                self.draw_ring(hub, 86.0 * s, 9.0 * s, frac, accent, a)?;
                                 if card == Card::Water {
-                                    let g = self.water_drop(hub.0, hub.1, 22.0 * s)?;
+                                    let g = self.water_drop(hub.0, hub.1, 34.0 * s)?;
                                     rt.FillGeometry(&g, &self.brush(solid(accent, a))?, None);
                                 } else {
-                                    text(ICON_WALK, F_ICON, rect(hub.0 - 14.0 * s, hub.1 - 14.0 * s, hub.0 + 14.0 * s, hub.1 + 14.0 * s), center, solid(accent, a))?;
+                                    text(ICON_WALK, F_ICON, rect(hub.0 - 18.0 * s, hub.1 - 18.0 * s, hub.0 + 18.0 * s, hub.1 + 18.0 * s), center, solid(accent, a))?;
                                 }
-                                let (tx, by) = (bl + 66.0 * s, (CARD_TOP + 34.0) * s);
+                                let (tx, by) = (bl + 100.0 * s, (CARD_TOP + 46.0) * s);
                                 text(&big, F_BIG, rect(tx, by, br_, by + 28.0 * s), lead, grey(1.0, a))?;
                                 text(unit.trim(), F_LABEL, rect(tx, by + 28.0 * s, br_, by + 46.0 * s), lead, grey(0.6, a))?;
-                                text(&status, F_LABEL, rect(bl, (CARD_TOP + 94.0) * s, br_, (CARD_TOP + 112.0) * s), lead, grey(0.65, a))?;
+                                text(&status, F_LABEL, rect(bl, (CARD_TOP + 128.0) * s, br_, (CARD_TOP + 146.0) * s), lead, grey(0.65, a))?;
                                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                                 if let Some(pb) = rect_of(ab) {
                                     let hot = hovered == Some(ab);
@@ -3495,7 +3504,7 @@ mod tests {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let (w, h) = (900, 270);
+            let (w, h) = (900, 340);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("README shots"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let lines = [
                 // Made-up lines about the feature itself (no song's lyrics in the README pictures).

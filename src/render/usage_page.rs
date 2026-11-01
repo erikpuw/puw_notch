@@ -8,11 +8,11 @@ use crate::usage::{self, Bar, APPS};
 
 /// Logical px: the cards' top and height (the tabs end at 56), the gap between cards, their padding.
 const CARDS_TOP: f32 = 64.0;
-const CARDS_H: f32 = 92.0;
+const CARDS_H: f32 = 140.0;
 const GAP: f32 = 6.0;
 const PAD: f32 = 12.0;
 /// Widest a card gets, so one or two limits do not stretch over the whole page.
-const CARD_MAX_W: f32 = 172.0;
+const CARD_MAX_W: f32 = 236.0;
 const RED: (f32, f32, f32) = (1.0, 0.35, 0.35);
 
 /// Green while there is room, orange getting close, red nearly out.
@@ -108,7 +108,7 @@ impl Renderer {
             let card = |left: f32, width: f32| -> Result<D2D_RECT_F> {
                 let r = rect(left, top, left + width, top + CARDS_H * s);
                 let k = app_accent(APPS[tab]);
-                self.rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(color(k.0 * 0.12 + 0.05, k.1 * 0.12 + 0.05, k.2 * 0.12 + 0.05, a))?);
+                self.rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(color(k.0 * 0.22 + 0.05, k.1 * 0.22 + 0.05, k.2 * 0.22 + 0.05, a))?);
                 Ok(r)
             };
             let Some(bars) = self.usage.get(APPS[tab]) else {
@@ -123,7 +123,7 @@ impl Renderer {
                 let mut x = cl + ((cr - cl) - width * bars.len() as f32 - GAP * s * (bars.len() as f32 - 1.0)) / 2.0;
                 for bar in bars {
                     let r = card(x, width)?;
-                    let d = 56.0 * s;
+                    let d = 84.0 * s;
                     let mid = (r.top + r.bottom) / 2.0;
                     let ring_x = r.left + PAD * s + d / 2.0;
                     self.draw_ring((ring_x, mid), d, d * 0.15, shown(bar.used) / 100.0, ring_colour(bar.used), a)?;
@@ -156,9 +156,9 @@ impl Renderer {
             for (name, rows) in &list {
                 let r = card(x, width)?;
                 let inner = (r.left + PAD * s, r.right - PAD * s);
-                text(name, F_TITLE, rect(inner.0, r.top + 6.0 * s, inner.1, r.top + 26.0 * s), lead, grey(1.0, a))?;
+                text(name, F_TITLE, rect(inner.0, r.top + 10.0 * s, inner.1, r.top + 30.0 * s), lead, grey(1.0, a))?;
                 for (k, bar) in rows.iter().enumerate() {
-                    let y = r.top + (30.0 + k as f32 * 29.0) * s;
+                    let y = r.top + (38.0 + k as f32 * 44.0) * s;
                     let (_, window) = split_label(&bar.label);
                     text(window, F_LABEL, rect(inner.0, y, inner.1, y + 15.0 * s), lead, grey(0.7, a))?;
                     text(&format!("{}%", shown(bar.used).round()), F_LABEL, rect(inner.0, y, inner.1, y + 15.0 * s), trail, grey(1.0, a))?;
