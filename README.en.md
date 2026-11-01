@@ -34,7 +34,7 @@
 | **Notifications** | The ~30 latest Windows notifications with app icons; click to open the app; "Clear all" hides what is there (Windows keeps it). |
 | **Health** | Water and stand-up reminders with adjustable times and amounts. |
 | **Weather** | Type a city once: large icon, feels-like, humidity, wind, a 24-hour forecast (**24h** button), °C | °F. Open-Meteo data, refreshed every 30 min. |
-| **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity (a free plan: 30 days), a tab per app. Codex and Antigravity show what is left, Claude what is used. A banner warns at 80 %, 95 %, or 25 % of the limit in one day. |
+| **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity (a free plan: 30 days), a tab per app, only for the apps found on the PC. Codex and Antigravity show what is left, Claude what is used. A banner warns at 80 %, 95 %, or 25 % of the limit in one day. |
 
 The Limits page reads this PC only, nothing is sent:
 

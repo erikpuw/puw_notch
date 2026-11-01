@@ -95,6 +95,12 @@ impl Style {
         if self == Style::Pill { PILL_GAP } else { 0.0 }
     }
 
+    /// The gap for a notch `height` (logical px) tall: it closes as the pill shrinks to the thin
+    /// line, which sits right on the edge of the screen.
+    pub fn gap_at(self, height: f32) -> f32 {
+        self.gap() * ((height - 4.0) / 26.0).clamp(0.0, 1.0)
+    }
+
     pub fn tag(self) -> &'static str {
         if self == Style::Pill { "pill" } else { "ears" }
     }
@@ -412,6 +418,10 @@ mod tests {
         assert_eq!(Style::default(), Style::Ears, "the original look unless chosen");
         assert_eq!(Style::Ears.gap(), 0.0);
         assert!(Style::Pill.gap() > 0.0);
+        assert_eq!(Style::Pill.gap_at(30.0), Style::Pill.gap(), "the resting pill floats");
+        assert_eq!(Style::Pill.gap_at(4.0), 0.0, "the thin line sits on the edge");
+        assert!(Style::Pill.gap_at(17.0) > 0.0 && Style::Pill.gap_at(17.0) < Style::Pill.gap());
+        assert_eq!(Style::Ears.gap_at(30.0), 0.0);
     }
 
     #[test]

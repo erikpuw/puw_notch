@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
 use std::time::Instant;
 
 use crate::connectivity::DeviceKind;
@@ -285,6 +285,13 @@ const CARD_TOP: f32 = 34.0;
 const CARD_BOTTOM: f32 = 158.0;
 const CARD_W: f32 = 172.0;
 const CARD_GAP: f32 = 8.0;
+/// Which apps (bit per `usage::APPS` index) have a tab on the Limits page: those found on this PC.
+static USAGE_APPS: AtomicU8 = AtomicU8::new(0b111);
+
+pub fn set_usage_apps(mask: u8) {
+    USAGE_APPS.store(mask, Ordering::Relaxed);
+}
+
 /// The Limits page's app tabs: one segmented control.
 const USAGE_TAB_H: f32 = 22.0;
 const SET_ROW: f32 = 18.0;
@@ -382,9 +389,11 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             }
         }
         Page::Usage => {
-            let tab_w = (w - 2.0 * SIDE) / 3.0;
-            for i in 0..3 {
-                out.push((Button::UsageTab(i), r(SIDE + i as f32 * tab_w, CARD_TOP, tab_w, USAGE_TAB_H)));
+            // Only the apps found on this PC get a tab.
+            let shown: Vec<usize> = (0..3).filter(|i| USAGE_APPS.load(Ordering::Relaxed) >> i & 1 == 1).collect();
+            let tab_w = (w - 2.0 * SIDE) / shown.len().max(1) as f32;
+            for (place, &i) in shown.iter().enumerate() {
+                out.push((Button::UsageTab(i), r(SIDE + place as f32 * tab_w, CARD_TOP, tab_w, USAGE_TAB_H)));
             }
         }
         Page::Health => {
@@ -1680,7 +1689,7 @@ impl Renderer {
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
             // A floating pill is drawn lower in the window, on whole pixels so covers stay sharp.
-            let gy = (self.style.gap() * s).round();
+            let gy = (self.style.gap_at(v.size[1]) * s).round();
             rt.SetTransform(&Matrix3x2::translation(0.0, gy));
             let ear = if self.style == notch::Style::Pill { 0.0 } else { notch::ear(v.size[1]) * s };
             let shape = self.notch_shape(l, r, nh, nr, ear)?;
@@ -3217,6 +3226,19 @@ mod tests {
             std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/weather-preview.bmp"), bytes).unwrap();
             DestroyWindow(hwnd).unwrap();
         }
+    }
+
+    #[test]
+    fn only_the_apps_found_get_a_tab() {
+        let tabs = |mask| {
+            set_usage_apps(mask);
+            let found: Vec<Button> = page_buttons(410.0, 1.0, Page::Usage, 0, 0, None, false).into_iter().map(|(b, _)| b).filter(|b| matches!(b, Button::UsageTab(_))).collect();
+            set_usage_apps(0b111);
+            found
+        };
+        assert_eq!(tabs(0b101), vec![Button::UsageTab(0), Button::UsageTab(2)], "Claude and Antigravity, no Codex");
+        assert_eq!(tabs(0b010), vec![Button::UsageTab(1)]);
+        assert!(tabs(0).is_empty(), "none of them: no tab");
     }
 
     #[test]

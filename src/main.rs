@@ -430,7 +430,7 @@ impl App {
     /// Device px between the screen's top edge and the top of the drawn notch (a floating pill
     /// sits lower in the window): mouse y is measured from the notch, not from the window.
     fn top_px(&self) -> f32 {
-        (self.style.gap() * self.scale).round()
+        (self.style.gap_at(self.notch.size()[1]) * self.scale).round()
     }
 
     /// Is the cursor over the area that reacts to the mouse right now (`notch::hover_area`)?
@@ -1306,8 +1306,11 @@ impl App {
             }
             usage::WM_USAGE => {
                 let snap = self.usage.snapshot();
-                if !self.usage_tab_chosen {
-                    self.usage_tab = usage::APPS.iter().position(|a| snap.get(*a).is_some()).unwrap_or(0);
+                render::set_usage_apps(snap.mask());
+                // The tab: the user's choice while that app is still on the PC, else the first with a reading.
+                if !self.usage_tab_chosen || !snap.shown(usage::APPS[self.usage_tab]) {
+                    self.usage_tab = (0..usage::APPS.len()).find(|&i| snap.get(usage::APPS[i]).is_some())
+                        .or_else(|| (0..usage::APPS.len()).find(|&i| snap.shown(usage::APPS[i]))).unwrap_or(0);
                     self.renderer.usage_tab = self.usage_tab;
                 }
                 let day = (usage::now_secs() + system::utc_offset_min() * 60).div_euclid(86_400);

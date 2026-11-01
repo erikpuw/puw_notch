@@ -34,7 +34,7 @@
 | **Thông báo** | ~30 thông báo Windows gần nhất kèm icon app; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy, chỉnh giờ và mức. |
 | **Thời tiết** | Gõ tên thành phố một lần: icon lớn, cảm giác, độ ẩm, gió, dự báo 24 giờ (nút **24h**), °C | °F. Dữ liệu Open-Meteo, làm mới 30 phút. |
-| **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab. Codex và Antigravity hiện phần còn lại, Claude phần đã dùng. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
+| **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab, chỉ hiện app tìm thấy trên máy. Codex và Antigravity hiện phần còn lại, Claude phần đã dùng. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
 
 Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:
 

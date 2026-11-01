@@ -59,17 +59,23 @@ impl Renderer {
         let rt = &self.rt;
         let (center, lead, trail) = (DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING);
         let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
-        let tab = self.usage_tab.min(APPS.len() - 1);
+        let segment = |i: usize| tabs.iter().find(|(x, _)| *x == Button::UsageTab(i)).map(|(_, b)| *b);
+        // The chosen app, or the first one that has a tab.
+        let tab = if segment(self.usage_tab).is_some() { self.usage_tab } else { (0..APPS.len()).find(|&i| segment(i).is_some()).unwrap_or(0) };
         let now = usage::now_secs();
         // What is shown (the app's own way: the part left, or the part used) and how full it looks.
         let shown = |used: f32| if APPS[tab].counts_down() { 100.0 - used } else { used }.clamp(0.0, 100.0);
         unsafe {
             // The segmented control: one dark track, the chosen app lifted on it.
-            let segment = |i: usize| tabs.iter().find(|(x, _)| *x == Button::UsageTab(i)).map(|(_, b)| *b);
-            if let (Some(first), Some(last)) = (segment(0), segment(APPS.len() - 1)) {
-                let track = rect(first.left, first.top, last.right, first.bottom);
-                rt.FillRoundedRectangle(&rounded(track, 11.0 * s), &self.brush(grey(0.11, a))?);
-            }
+            let ends = (0..APPS.len()).filter_map(segment).fold(None, |ends: Option<(D2D_RECT_F, D2D_RECT_F)>, b| Some(ends.map_or((b, b), |(first, _)| (first, b))));
+            let Some((first, last)) = ends else {
+                // None of the three is on this PC.
+                let r = rect(cl, CARDS_TOP * s, cr, (CARDS_TOP + CARDS_H) * s);
+                rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(grey(0.11, a))?);
+                text(crate::i18n::tr("Chưa thấy Claude, Codex hay Antigravity trên máy này", "No Claude, Codex or Antigravity found on this PC"), F_LABEL, r, center, grey(0.6, a))?;
+                return Ok(());
+            };
+            rt.FillRoundedRectangle(&rounded(rect(first.left, first.top, last.right, first.bottom), 11.0 * s), &self.brush(grey(0.11, a))?);
             for (i, app) in APPS.iter().enumerate() {
                 let Some(b) = segment(i) else { continue };
                 let inner = rect(b.left + 2.0 * s, b.top + 2.0 * s, b.right - 2.0 * s, b.bottom - 2.0 * s);

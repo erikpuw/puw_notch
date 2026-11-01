@@ -20,6 +20,8 @@ use crate::usage;
 const POLL: Duration = Duration::from_secs(2);
 /// While Antigravity is not running, looking for it is a wasted process listing: less often.
 const POLL_CLOSED: Duration = Duration::from_secs(10);
+/// ... and while it is not installed at all.
+const POLL_ABSENT: Duration = Duration::from_secs(120);
 
 /// What a waiting step asks.
 #[derive(Debug, PartialEq)]
@@ -151,6 +153,12 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
         // The steps asked about so far, each with the request that is up for it (while it waits).
         let mut seen: HashMap<(String, i64), Option<u64>> = HashMap::new();
         loop {
+            // Not on this PC: nothing to look for (checked now and then, in case it is installed later).
+            if !usage::installed(usage::App::Antigravity) {
+                seen.clear();
+                std::thread::sleep(POLL_ABSENT);
+                continue;
+            }
             let server = if enabled.load(Ordering::Relaxed) { usage::antigravity_server() } else { None };
             let Some(server) = server else {
                 seen.clear();

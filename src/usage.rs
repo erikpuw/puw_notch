@@ -96,11 +96,23 @@ pub struct Snapshot {
     /// When the reading was made by the app, Unix seconds, for the apps that only write it now
     /// and then (Codex writes it with each turn of its own agent, so it can lag what the app shows).
     pub updated: [Option<i64>; 3],
+    /// Which apps are on this PC (found on disk), whether or not they run now.
+    pub present: [bool; 3],
 }
 
 impl Snapshot {
     pub fn plan(&self, app: App) -> Option<&str> {
         self.plans[app as usize].as_deref()
+    }
+
+    /// Does the app get a tab: it is on this PC, or it has a reading.
+    pub fn shown(&self, app: App) -> bool {
+        self.present[app as usize] || self.apps[app as usize].is_some()
+    }
+
+    /// The tabs as a bit per app, for the page's buttons.
+    pub fn mask(&self) -> u8 {
+        APPS.iter().enumerate().fold(0, |m, (i, app)| m | (u8::from(self.shown(*app)) << i))
     }
 
     pub fn updated(&self, app: App) -> Option<i64> {
@@ -512,12 +524,26 @@ fn post_local(port: u16, path: &str, token: &str, body: &str) -> Option<String> 
     }
 }
 
+/// Is the app on this PC (a folder of it exists)? Apps that are not are not read at all.
+pub fn installed(app: App) -> bool {
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let roaming = std::env::var_os("APPDATA").map(PathBuf::from);
+    match app {
+        App::Claude => claude_data_dirs().iter().any(|d| d.is_dir()) || home.is_some_and(|h| h.join(".claude").is_dir()),
+        App::Codex => home.is_some_and(|h| h.join(".codex").is_dir()),
+        App::Antigravity => local.is_some_and(|l| l.join("Programs").join("antigravity").is_dir()) || roaming.is_some_and(|r| r.join("Antigravity").is_dir()),
+    }
+}
+
 fn read_all() -> Snapshot {
     let now = now_secs();
-    let codex = read_codex();
-    let claude = read_claude();
+    let present = APPS.map(installed);
+    let codex = if present[App::Codex as usize] { read_codex() } else { None };
+    let claude = if present[App::Claude as usize] { read_claude() } else { None };
     Snapshot {
-        apps: [claude.as_ref().map(|(bars, _)| bars.clone()), codex.as_ref().map(|(bars, _, _)| rolled(bars.clone(), now)), read_antigravity()],
+        apps: [claude.as_ref().map(|(bars, _)| bars.clone()), codex.as_ref().map(|(bars, _, _)| rolled(bars.clone(), now)), if present[App::Antigravity as usize] { read_antigravity() } else { None }],
+        present,
         plans: [None, codex.as_ref().and_then(|(_, plan, _)| plan.clone()), None],
         updated: [claude.map(|(_, at)| at), codex.map(|(_, _, at)| at), None],
     }
