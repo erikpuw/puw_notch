@@ -17,6 +17,8 @@ use crate::i18n::tr;
 use crate::usage;
 
 const POLL: Duration = Duration::from_secs(2);
+/// While Antigravity is not running, looking for it is a wasted process listing: less often.
+const POLL_CLOSED: Duration = Duration::from_secs(10);
 
 /// What a waiting step asks.
 #[derive(Debug, PartialEq)]
@@ -147,11 +149,12 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, hwnd: HWND) {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
         let mut seen: HashSet<(String, i64)> = HashSet::new();
         loop {
-            std::thread::sleep(POLL);
             let Some(server) = usage::antigravity_server() else {
                 seen.clear();
+                std::thread::sleep(POLL_CLOSED);
                 continue;
             };
+            std::thread::sleep(POLL);
             for waiting in waiting_now(&server) {
                 if !seen.insert((waiting.cascade.clone(), waiting.step)) {
                     continue;

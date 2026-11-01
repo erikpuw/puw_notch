@@ -696,6 +696,24 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "timing: prints what one round of the background polls costs on this PC"]
+    fn poll_costs() {
+        use std::time::Instant;
+        let t = Instant::now();
+        for _ in 0..20 {
+            let _ = antigravity_server();
+        }
+        println!("antigravity_server (every 2 s): {:.2} ms per call", t.elapsed().as_secs_f64() * 1000.0 / 20.0);
+        for (name, f) in [("claude", (|| { read_claude(); }) as fn()), ("codex", || { read_codex(); }), ("antigravity", || { read_antigravity(); })] {
+            let t = Instant::now();
+            for _ in 0..5 {
+                f();
+            }
+            println!("{name} read (every 60 s): {:.2} ms per call", t.elapsed().as_secs_f64() * 1000.0 / 5.0);
+        }
+    }
+
+    #[test]
     fn a_passed_reset_reads_zero() {
         let bar = |at| Bar { label: String::new(), weekly: true, used: 80.0, resets_at: at };
         assert_eq!(rolled(vec![bar(100)], 200)[0].used, 0.0);
