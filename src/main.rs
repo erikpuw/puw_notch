@@ -85,6 +85,8 @@ const MENU_VOLUME_KEYS: usize = 17;
 const MENU_STYLE_EARS: usize = 18;
 const MENU_STYLE_PILL: usize = 19;
 const MENU_APPROVE: usize = 20;
+/// The page choices of the "Pages" submenu: this + the page's index in `PAGES`.
+const MENU_PAGE: usize = 30;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
 struct SeekDrag {
@@ -337,7 +339,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
+        system::Settings { pages: render::pages_on(), minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -677,7 +679,9 @@ impl App {
                 return;
             }
             self.todo.mark(i, ring);
-            self.page = Page::Todo;
+            if render::page_shown(Page::Todo) {
+                self.page = Page::Todo;
+            }
         }
         let h = &self.health;
         let (cup, goal) = (h.cup_ml, h.goal_ml);
@@ -690,7 +694,7 @@ impl App {
                 health::Ring::GoalReached => status_toast(tr("Uống nước", "Water"), if i18n::english() { format!("Goal of {:.1} L reached today", goal as f32 / 1000.0) } else { format!("Đạt mục tiêu {:.1} L hôm nay", goal as f32 / 1000.0) }, "", Some(1.0), render::ICON_DROP),
                 health::Ring::StandUp => status_toast(tr("Đứng dậy đi lại", "Stand up and move"), if i18n::english() { format!("You have been sitting for {every} min") } else { format!("Bạn đã ngồi {every} phút liền") }, tr("Vận động vài phút nhé", "Walk around for a few minutes"), None, render::ICON_WALK),
             };
-            if self.show_banner(toast, ALERT_MS) {
+            if self.show_banner(toast, ALERT_MS) && render::page_shown(Page::Health) {
                 self.page = Page::Health;
             }
         }
@@ -768,8 +772,14 @@ impl App {
                 self.cancel_task_edit();
                 self.end_edit();
                 let dir = if button == Button::PageNext { 1 } else { -1 };
-                let i = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as i32;
-                let next = PAGES[(i + dir).rem_euclid(PAGES.len() as i32) as usize];
+                let mut i = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as i32;
+                // The pages the user keeps (there is always one).
+                let next = loop {
+                    i = (i + dir).rem_euclid(PAGES.len() as i32);
+                    if render::page_shown(PAGES[i as usize]) {
+                        break PAGES[i as usize];
+                    }
+                };
                 self.page_anim = Some((self.page, Instant::now(), dir));
                 self.page = next;
                 self.page_since = Instant::now();
@@ -1005,6 +1015,15 @@ impl App {
                 let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Pill), MENU_STYLE_PILL, &text(tr("Viên thuốc", "Pill")));
                 let _ = AppendMenuW(menu, MF_POPUP, styles.0 as usize, &text(tr("Kiểu notch", "Notch style")));
             }
+            if let Ok(pages) = CreatePopupMenu() {
+                let mask = render::pages_on();
+                for (i, p) in PAGES.iter().enumerate() {
+                    // The last page kept cannot be switched off.
+                    let last = mask == 1 << i;
+                    let _ = AppendMenuW(pages, MF_STRING | check(mask >> i & 1 == 1) | if last { MF_GRAYED } else { MF_ENABLED }, MENU_PAGE + i, &text(p.name()));
+                }
+                let _ = AppendMenuW(menu, MF_POPUP, pages.0 as usize, &text(tr("Trang hiển thị", "Pages shown")));
+            }
             let _ = AppendMenuW(menu, MF_STRING | check(self.approve.is_enabled()), MENU_APPROVE, &text(tr("Duyệt ngay trên notch", "Approve on the notch")));
             let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
             let _ = AppendMenuW(menu, MF_STRING | check(status::taking_volume_keys()), MENU_VOLUME_KEYS, &text(tr("Ẩn bảng âm lượng của Windows", "Hide Windows volume popup")));
@@ -1032,6 +1051,16 @@ impl App {
                 MENU_STYLE_EARS | MENU_STYLE_PILL => {
                     self.style = if cmd == MENU_STYLE_PILL { notch::Style::Pill } else { notch::Style::Ears };
                     self.renderer.style = self.style;
+                    system::save_settings(self.settings());
+                    self.kick();
+                }
+                c if (MENU_PAGE..MENU_PAGE + PAGES.len()).contains(&c) => {
+                    render::set_pages_on(render::pages_on() ^ (1 << (c - MENU_PAGE)));
+                    if !render::page_shown(self.page) {
+                        self.page = PAGES.into_iter().find(|p| render::page_shown(*p)).unwrap_or(Page::Music);
+                        self.page_since = Instant::now();
+                        self.settings_open = None;
+                    }
                     system::save_settings(self.settings());
                     self.kick();
                 }
@@ -1577,6 +1606,7 @@ fn run() -> windows::core::Result<()> {
         screen::leave_out_of_capture(hwnd);
 
         let settings = system::load_settings();
+        render::set_pages_on(settings.pages);
         i18n::set_english(settings.english);
         let (time, date) = system::clock();
         let mut app = App {

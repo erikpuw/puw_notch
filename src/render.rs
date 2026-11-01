@@ -109,7 +109,29 @@ pub enum Page {
 
 pub const PAGES: [Page; 6] = [Page::Music, Page::Todo, Page::Notify, Page::Health, Page::Weather, Page::Usage];
 
+/// Which pages (bit per `PAGES` index) the user keeps: the arrows and dots only go through those.
+/// Never empty.
+static PAGES_ON: AtomicU8 = AtomicU8::new(ALL_PAGES);
+const ALL_PAGES: u8 = (1 << PAGES.len()) - 1;
+
+pub fn set_pages_on(mask: u8) {
+    let mask = mask & ALL_PAGES;
+    PAGES_ON.store(if mask == 0 { ALL_PAGES } else { mask }, Ordering::Relaxed);
+}
+
+pub fn pages_on() -> u8 {
+    PAGES_ON.load(Ordering::Relaxed)
+}
+
+pub fn page_shown(page: Page) -> bool {
+    PAGES.iter().position(|p| *p == page).is_some_and(|i| pages_on() >> i & 1 == 1)
+}
+
 impl Page {
+    pub fn name(self) -> &'static str {
+        self.title().1
+    }
+
     /// Header of the page: icon, name, accent colour.
     fn title(self) -> (&'static str, &'static str, (f32, f32, f32)) {
         match self {
@@ -2594,9 +2616,10 @@ impl Renderer {
                     }
                 }
                 let (dot, wide, gap) = (5.0 * s, 14.0 * s, 5.0 * s);
-                let total = wide + (PAGES.len() as f32 - 1.0) * (dot + gap);
+                let kept = PAGES.iter().filter(|p| page_shown(**p)).count();
+                let total = wide + (kept as f32 - 1.0) * (dot + gap);
                 let mut dx = cx - total / 2.0;
-                for p in PAGES {
+                for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
                     let on = p == v.page;
                     let dw = if on { wide } else { dot };
                     rt.FillRoundedRectangle(&rounded(rect(dx, DOTS_Y * s, dx + dw, DOTS_Y * s + dot), dot / 2.0), &self.brush(if on { grey(1.0, a) } else { grey(0.45, a) })?);
