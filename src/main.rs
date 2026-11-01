@@ -205,6 +205,8 @@ struct App {
     logged_open: bool,
     last_gap_log: Option<Instant>,
     last_slow_tick: Option<Instant>,
+    /// The row of page icons is open under the page dots.
+    nav_open: bool,
     page: Page,
     todo: todo::Todo,
     today: u32,
@@ -425,7 +427,13 @@ impl App {
             self.lyrics_open = false;
         }
         self.notch.set_wide(self.lyrics_wide());
-        self.notch.set_panel(render::panel_size(self.page));
+        // The row of page icons only lives while the panel is open; it makes the panel a little taller.
+        if self.nav_open && self.notch.mode != Mode::Expanded {
+            self.nav_open = false;
+            render::set_nav_open(false);
+        }
+        let [pw, ph] = render::panel_size(self.page);
+        self.notch.set_panel([pw, ph + if self.nav_open { render::NAV_EXTRA } else { 0.0 }]);
         let mut moving = self.notch.step(dt);
         if self.hidden && self.notch.is_hidden() {
             unsafe { let _ = ShowWindow(self.hwnd, SW_HIDE); }
@@ -853,6 +861,25 @@ impl App {
             Button::UsageTab(i) => {
                 (self.usage_tab, self.usage_tab_chosen) = (i, true);
                 self.renderer.usage_tab = i;
+                self.kick();
+            }
+            Button::Dots => {
+                self.nav_open = !self.nav_open;
+                render::set_nav_open(self.nav_open);
+                self.kick();
+            }
+            Button::GoPage(target) => {
+                self.cancel_task_edit();
+                self.end_edit();
+                self.nav_open = false;
+                render::set_nav_open(false);
+                if target != self.page {
+                    let from = PAGES.iter().position(|p| *p == self.page).unwrap_or(0);
+                    let to = PAGES.iter().position(|p| *p == target).unwrap_or(0);
+                    self.page_anim = Some((self.page, Instant::now(), if to > from { 1 } else { -1 }));
+                    self.page = target;
+                    self.settings_open = None;
+                }
                 self.kick();
             }
             Button::PagePrev | Button::PageNext => {
@@ -1774,6 +1801,7 @@ fn run() -> windows::core::Result<()> {
             logged_open: false,
             last_gap_log: None,
             last_slow_tick: None,
+            nav_open: false,
             page: Page::Music,
             todo: todo::Todo::load(system::now_stamp()),
             today: system::today(),

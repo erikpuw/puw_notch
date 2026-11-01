@@ -189,6 +189,10 @@ pub enum Button {
     /// Show / hide the 24-hour forecast beside the weather.
     PagePrev,
     PageNext,
+    /// The page dots: open the row of page icons under them.
+    Dots,
+    /// An icon of that row: go to the page.
+    GoPage(Page),
     ListInput,
     /// Tick / untick task at this index (the whole row, text included). To-do only.
     ListToggle(usize),
@@ -318,6 +322,42 @@ const CARD_GAP: f32 = 8.0;
 fn card_bottom(panel_h: f32) -> f32 {
     panel_h - 28.0
 }
+/// The row of page icons is open under the page dots (the panel is `NAV_EXTRA` taller meanwhile).
+static NAV_OPEN: AtomicBool = AtomicBool::new(false);
+pub const NAV_EXTRA: f32 = 18.0;
+
+pub fn set_nav_open(open: bool) {
+    NAV_OPEN.store(open, Ordering::Relaxed);
+}
+
+pub fn nav_open() -> bool {
+    NAV_OPEN.load(Ordering::Relaxed)
+}
+
+/// The icon of a page in the row.
+fn nav_icon(page: Page) -> &'static str {
+    match page {
+        Page::Music => "\u{E8D6}",
+        Page::Todo => "\u{E9D5}",
+        Page::Notify => ICON_BELL,
+        Page::Health => "\u{E95E}",
+        // The Weather page draws its own line sun (see `draw`); this is only a stand-in.
+        Page::Weather => "\u{E706}",
+        Page::Usage => "\u{E9D9}",
+    }
+}
+
+/// The cells of the row (window px) for a panel `cx` is the middle of: 40 px apart, centred, just
+/// below the panel's resting height `ph`.
+fn nav_cells(cx: f32, scale: f32, ph: f32) -> Vec<(Page, D2D_RECT_F)> {
+    let shown: Vec<Page> = PAGES.into_iter().filter(|p| page_shown(*p)).collect();
+    let n = shown.len() as f32;
+    shown.into_iter().enumerate().map(|(i, p)| {
+        let x = cx + (i as f32 - (n - 1.0) / 2.0) * 40.0 * scale;
+        (p, rect(x - 17.0 * scale, (ph + 4.0 - 11.0) * scale, x + 17.0 * scale, (ph + 4.0 + 11.0) * scale))
+    }).collect()
+}
+
 /// Which apps (bit per `usage::APPS` index) have a tab on the Limits page: those found on this PC.
 static USAGE_APPS: AtomicU8 = AtomicU8::new(0b111);
 
@@ -455,6 +495,12 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
                 }
             }
         }
+    }
+    if nav_open() {
+        out.extend(nav_cells(cx, scale, panel_h).into_iter().map(|(p, b)| (Button::GoPage(p), b)));
+    } else {
+        // Under the last row, over the dots.
+        out.push((Button::Dots, r(w / 2.0 - 40.0, dots_y(panel_h) - 2.0, 80.0, 14.0)));
     }
     out
 }
@@ -2722,6 +2768,8 @@ impl Renderer {
                 let total = wide + (kept as f32 - 1.0) * (dot + gap);
                 let mut dx = cx - total / 2.0;
                 let arriving = v.leaving.map_or(1.0, |(_, t, _)| ease_out(t));
+                // The row of page icons comes as the panel grows by NAV_EXTRA, the dots give way to it.
+                let nav_fade = ((nh - ph * s) / (NAV_EXTRA * s)).clamp(0.0, 1.0);
                 for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
                     let weight = match v.leaving {
                         _ if p == v.page => arriving,
@@ -2730,8 +2778,25 @@ impl Renderer {
                     };
                     let dw = dot + (wide - dot) * weight;
                     let shade = 0.38 + 0.62 * weight;
-                    rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(grey(shade, a))?);
+                    rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(grey(shade, a * (1.0 - nav_fade)))?);
                     dx += dw + gap;
+                }
+                if nav_fade > 0.01 {
+                    for (p, cell) in nav_cells(cx, s, ph) {
+                        let (on, hot) = (p == v.page, v.hovered == Some(Button::GoPage(p)));
+                        if on || hot {
+                            rt.FillRoundedRectangle(&rounded(cell, 8.0 * s), &self.brush(grey(if on { 0.17 } else { 0.1 }, a * nav_fade))?);
+                        }
+                        let ink = grey(if on || hot { 1.0 } else { 0.6 }, a * nav_fade);
+                        match (&weather_empty, p) {
+                            (Some((ic, geoms)), Page::Weather) => {
+                                let (mx, my) = ((cell.left + cell.right) / 2.0, (cell.top + cell.bottom) / 2.0);
+                                let tint = if on || hot { (1.0, 1.0, 1.0) } else { (0.6, 0.6, 0.6) };
+                                draw_wx_icon(ic, geoms, mx - 8.0 * s, my - 8.0 * s, 16.0 * s, Some((tint, tint)), a * nav_fade, 9.0)?;
+                            }
+                            _ => text(nav_icon(p), F_ICON, cell, center, ink)?,
+                        }
+                    }
                 }
                 // The Weather page's source (Open-Meteo asks for the credit, CC BY 4.0) and when it was
                 // fetched, "old" when stale: quiet in the bottom-right corner, level with the dots, clear
