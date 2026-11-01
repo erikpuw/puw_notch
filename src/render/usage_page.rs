@@ -10,7 +10,7 @@ use crate::usage::{self, Bar, APPS};
 const CARDS_TOP: f32 = 64.0;
 const CARDS_H: f32 = 92.0;
 const GAP: f32 = 6.0;
-const PAD: f32 = 12.0;
+const PAD: f32 = 14.0;
 /// Widest a card gets, so one or two limits do not stretch over the whole page.
 const CARD_MAX_W: f32 = 200.0;
 const RED: (f32, f32, f32) = (1.0, 0.35, 0.35);
@@ -108,7 +108,7 @@ impl Renderer {
             let card = |left: f32, width: f32| -> Result<D2D_RECT_F> {
                 let r = rect(left, top, left + width, top + CARDS_H * s);
                 let k = app_accent(APPS[tab]);
-                self.rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(color(k.0 * 0.22 + 0.05, k.1 * 0.22 + 0.05, k.2 * 0.22 + 0.05, a))?);
+                self.rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(color(k.0 * 0.17 + 0.05, k.1 * 0.17 + 0.05, k.2 * 0.17 + 0.05, a))?);
                 Ok(r)
             };
             let Some(bars) = self.usage.get(APPS[tab]) else {
@@ -119,26 +119,30 @@ impl Renderer {
 
             if bars.len() <= 2 {
                 // A card per limit: the ring with its percent, the window and the time left beside it.
-                let width = (((cr - cl) - GAP * s) / 2.0).min(CARD_MAX_W * s);
+                // One limit gets a wider card, so its name never has to be cut.
+                let cap = if bars.len() == 1 { CARD_MAX_W * 1.4 } else { CARD_MAX_W };
+                let room = if bars.len() == 1 { cr - cl } else { ((cr - cl) - GAP * s) / 2.0 };
+                let width = room.min(cap * s);
                 let mut x = cl + ((cr - cl) - width * bars.len() as f32 - GAP * s * (bars.len() as f32 - 1.0)) / 2.0;
                 for bar in bars {
                     let r = card(x, width)?;
-                    let d = 56.0 * s;
+                    let d = 72.0 * s;
                     let mid = (r.top + r.bottom) / 2.0;
                     let ring_x = r.left + PAD * s + d / 2.0;
-                    self.draw_ring((ring_x, mid), d, d * 0.15, shown(bar.used) / 100.0, ring_colour(bar.used), a)?;
+                    self.draw_ring((ring_x, mid), d, d * 0.12, shown(bar.used) / 100.0, ring_colour(bar.used), a)?;
                     text(&format!("{}%", shown(bar.used).round()), F_TITLE, rect(ring_x - d / 2.0, mid - d / 2.0, ring_x + d / 2.0, mid + d / 2.0), center, grey(1.0, a))?;
-                    let tx = ring_x + d / 2.0 + 10.0 * s;
+                    let tx = ring_x + d / 2.0 + 12.0 * s;
                     let (_, window) = split_label(&bar.label);
-                    let line = 17.0 * s;
+                    let line = 22.0 * s;
                     // A reading the app made a while ago says so: what it shows now may be further on.
                     let stale = self.usage.updated(APPS[tab]).filter(|&at| now - at > APPS[tab].stale_after());
                     let up = if stale.is_some() { 8.0 * s } else { 0.0 };
                     let (y0, y1) = if bar.resets_at > 0 { (mid - line - up, mid - up) } else { (mid - line / 2.0 - up, mid + line / 2.0 - up) };
-                    text(window, F_TITLE, rect(tx, y0, r.right - PAD * s, y1), lead, grey(1.0, a))?;
+                    // Taller than its line, so the tail of a g or a y is not cut.
+                    text(window, F_BIG, rect(tx, y0 - 8.0 * s, r.right - PAD * s, y1 + 4.0 * s), lead, grey(1.0, a))?;
                     if bar.resets_at > 0 {
                         let left = format!("{} {}", crate::i18n::tr("Còn", "In"), usage::in_words(bar.resets_at, now));
-                        text(&left, F_LABEL, rect(tx, mid + 1.0 * s - up, r.right - PAD * s, mid + line - up), lead, grey(0.6, a))?;
+                        text(&left, F_LABEL, rect(tx, mid + 5.0 * s - up, r.right - PAD * s, mid + line + 4.0 * s - up), lead, grey(0.6, a))?;
                     }
                     if let Some(at) = stale {
                         let ago = format!("{} {}", crate::i18n::tr("Số cũ", "Old"), usage::in_words(now, at));
