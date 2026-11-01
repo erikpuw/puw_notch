@@ -205,6 +205,7 @@ struct App {
     /// Whether the log last said the panel is open (so it says it once per change).
     logged_open: bool,
     last_gap_log: Option<Instant>,
+    last_slow_tick: Option<Instant>,
     page: Page,
     todo: todo::Todo,
     today: u32,
@@ -581,10 +582,17 @@ impl App {
             self.end_edit();
         }
         self.beat();
+        let mut lap = Instant::now();
+        let mut laps = [0u32; 6];
+        let mut mark = |i: usize, lap: &mut Instant| {
+            laps[i] = lap.elapsed().as_micros() as u32;
+            *lap = Instant::now();
+        };
         self.keep_on_top();
         self.release_stale_hover();
         let (time, date) = system::clock();
         let battery = system::battery();
+        mark(0, &mut lap);
         let mut changed = (&time, &date, battery) != (&self.time, &self.date, self.battery);
         if let (Some(old), Some(new)) = (self.battery, battery) {
             for e in system::power_events(old, new) {
@@ -600,8 +608,10 @@ impl App {
             self.clamp_scroll();
         }
         self.refresh_audio();
+        mark(1, &mut lap);
         self.refresh_music();
         self.refresh_robot();
+        mark(2, &mut lap);
         // Progress bar and lyric line move on their own while the panel is open.
         changed |= self.notch.mode == Mode::Expanded && self.track.as_ref().is_some_and(|t| t.playing);
 
@@ -631,8 +641,10 @@ impl App {
             }
         }
 
+        mark(3, &mut lap);
         self.remind();
         self.usage_banner();
+        mark(4, &mut lap);
 
         // New ones get a banner; the Notifications page lists what Windows still keeps.
         let new = self.notifications.as_mut().filter(|_| render::page_shown(Page::Notify)).map(|r| r.poll()).unwrap_or_default();
@@ -647,6 +659,13 @@ impl App {
             self.show_banner(t, ALERT_MS);
         }
 
+        mark(5, &mut lap);
+        // A tick that holds the window up for long is a stutter while something moves: say which part.
+        let total: u32 = laps.iter().sum();
+        if total > 30_000 && self.last_slow_tick.is_none_or(|t| t.elapsed().as_secs() >= 10) {
+            self.last_slow_tick = Some(Instant::now());
+            system::log(&format!("slow tick: {} ms (clock+battery {}, audio {}, music+robot {}, screen {}, reminders {}, notifications {} us)", total / 1000, laps[0], laps[1], laps[2], laps[3], laps[4], laps[5]));
+        }
         if changed && !self.animating {
             self.redraw();
         }
@@ -1752,6 +1771,7 @@ fn run() -> windows::core::Result<()> {
             rested: 0,
             logged_open: false,
             last_gap_log: None,
+            last_slow_tick: None,
             page: Page::Music,
             todo: todo::Todo::load(system::now_stamp()),
             today: system::today(),
