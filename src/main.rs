@@ -35,7 +35,7 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Power::{RegisterPowerSettingNotification, POWERBROADCAST_SETTING};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, GetCurrentProcess, GetCurrentThread, ProcessPowerThrottling, SetProcessInformation, SetThreadPriority, PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE, THREAD_PRIORITY_ABOVE_NORMAL};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
@@ -204,6 +204,7 @@ struct App {
     rested: u32,
     /// Whether the log last said the panel is open (so it says it once per change).
     logged_open: bool,
+    last_gap_log: Option<Instant>,
     page: Page,
     todo: todo::Todo,
     today: u32,
@@ -411,8 +412,15 @@ impl App {
 
     fn frame(&mut self) {
         let now = Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32().min(0.05);
+        let gap = (now - self.last_frame).as_secs_f32();
+        let dt = gap.min(0.05);
         self.last_frame = now;
+        // A frame that came this late while moving is what the eye reads as a stutter: leave a line
+        // (at most one every 10 s) so a report of one says how late and in which mode.
+        if gap > 0.08 && self.animating && self.last_gap_log.is_none_or(|t| t.elapsed().as_secs() >= 10) {
+            self.last_gap_log = Some(now);
+            system::log(&format!("late frame: {:.0} ms (mode {:?}, page {})", gap * 1000.0, self.notch.mode, self.page.name()));
+        }
         // The lyrics and the 24-hour forecast belong to one visit of the open panel.
         if self.notch.mode != Mode::Expanded {
             self.lyrics_open = false;
@@ -601,7 +609,7 @@ impl App {
         let sample = self.notch.is_settled_rest();
         self.rested = if sample { self.rested.saturating_add(1) } else { 0 };
         if self.rested == TRIM_TICKS {
-            unsafe { let _ = windows::Win32::System::Threading::SetProcessWorkingSetSize(windows::Win32::System::Threading::GetCurrentProcess(), usize::MAX, usize::MAX); }
+            unsafe { let _ = windows::Win32::System::Threading::SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX); }
         }
         let cx = self.win.0 + self.win.2 / 2;
         let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
@@ -1588,7 +1596,9 @@ impl Vsync {
     fn start(hwnd: HWND) -> Self {
         let (on, pending) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
         let (on2, pending2, target) = (on.clone(), pending.clone(), hwnd.0 as isize);
-        let thread = std::thread::spawn(move || loop {
+        let thread = std::thread::spawn(move || {
+            unsafe { let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL); }
+            loop {
             if !on2.load(Ordering::Relaxed) {
                 std::thread::park();
                 continue;
@@ -1598,6 +1608,7 @@ impl Vsync {
             }
             if on2.load(Ordering::Relaxed) && !pending2.swap(true, Ordering::Relaxed) {
                 unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_FRAME, WPARAM(0), LPARAM(0)); }
+            }
             }
         })
         .thread()
@@ -1649,6 +1660,10 @@ fn run() -> windows::core::Result<()> {
         }
         system::refresh_autostart();
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        // Never run at Windows' "efficiency" speed (EcoQoS): battery saver slows what it takes for
+        // background work, and a topmost window that is not the foreground one looks like that.
+        let eco = PROCESS_POWER_THROTTLING_STATE { Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION, ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED, StateMask: 0 };
+        let _ = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &eco as *const _ as *const std::ffi::c_void, size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
         let instance: HINSTANCE = GetModuleHandleW(None)?.into();
@@ -1736,6 +1751,7 @@ fn run() -> windows::core::Result<()> {
             last_foreground: None,
             rested: 0,
             logged_open: false,
+            last_gap_log: None,
             page: Page::Music,
             todo: todo::Todo::load(system::now_stamp()),
             today: system::today(),
