@@ -280,6 +280,8 @@ pub fn panel_size(page: Page) -> [f32; 2] {
     match page {
         // Four task cards instead of three.
         Page::Todo | Page::Notify | Page::Health => [w, h + 40.0],
+        // Wider: room for the sky's picture and a roomier grid of figures.
+        Page::Weather => [w + 40.0, h],
         _ => [w, h],
     }
 }
@@ -305,7 +307,7 @@ const UNIT_X: f32 = 0.0;
 const UNIT_Y: f32 = 142.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 18.0;
-const STATS_X: f32 = 134.0;
+const STATS_X: f32 = 150.0;
 /// The grid's two rows (label on top); the 24h strip starts at the first.
 const STATS_Y: [f32; 2] = [90.0, 128.0];
 const HOURS_BTN_W: f32 = 38.0;
@@ -382,7 +384,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     let panel_h = panel_size(page)[1];
     // Only the Music page can be wide.
     let wide = wide && page == Page::Music;
-    let w = panel_w(wide);
+    let w = panel_size(page)[0] + if wide { LYRICS_EXTRA_W } else { 0.0 };
     let left = cx / scale - w / 2.0;
     let r = |x: f32, y: f32, bw: f32, bh: f32| rect((left + x) * scale, y * scale, (left + x + bw) * scale, (y + bh) * scale);
     let mut out = Vec::new();
@@ -2446,7 +2448,12 @@ impl Renderer {
                                         text("24h", F_LABEL, hb, center, grey(if open { 1.0 } else { 0.75 }, a))?;
                                     }
                                     // Left block: the icon, the temperature beside it, the sky's words under it, the
-                                    // unit chips under the icon.
+                                    // unit chips under the icon, on a card washed with the sky's colour.
+                                    {
+                                        let (sky, _) = weather::tints(n.sky, n.day);
+                                        let hero = rect(cl - 8.0 * s, (ICON_Y - 8.0) * s, cl + (STATS_X - 10.0) * s, (UNIT_Y + UNIT_H + 6.0) * s);
+                                        rt.FillRoundedRectangle(&rounded(hero, 14.0 * s), &self.brush(color(sky.0 * 0.16 + 0.04, sky.1 * 0.16 + 0.04, sky.2 * 0.16 + 0.04, a * fade))?);
+                                    }
                                     draw_wx_icon(ic, geoms, cl, ICON_Y * s, WX_ICON * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
                                     // The big temperature, shrunk to fit before the right block when it is long
                                     // ("−128°"), turning about its left end.
@@ -2503,8 +2510,9 @@ impl Renderer {
                                         let shown = if wx.hours.is_empty() { 3 } else { 6 };
                                         for (k, (label, value, ink)) in cells.iter().enumerate().take(shown) {
                                             let (x, y) = (bl + (k % 3) as f32 * col, STATS_Y[k / 3] * s);
-                                            text(label, F_LABEL, rect(x, y, x + col - 4.0 * s, y + 15.0 * s), lead, grey(0.55, a))?;
-                                            text(value, F_BODY, rect(x, y + 15.0 * s, x + col - 4.0 * s, y + 33.0 * s), lead, *ink)?;
+                                            rt.FillRoundedRectangle(&rounded(rect(x, y - 4.0 * s, x + col - 6.0 * s, y + 35.0 * s), 10.0 * s), &self.brush(grey(0.07, a))?);
+                                            text(label, F_LABEL, rect(x + 8.0 * s, y, x + col - 8.0 * s, y + 15.0 * s), lead, grey(0.55, a))?;
+                                            text(value, F_BODY, rect(x + 8.0 * s, y + 15.0 * s, x + col - 8.0 * s, y + 33.0 * s), lead, *ink)?;
                                         }
                                     }
                                 }
