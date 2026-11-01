@@ -300,18 +300,15 @@ const FIGURES_Y: f32 = 152.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 18.0;
 
-/// Notifications page: rows of two lines.
-const NOTE_Y: f32 = 57.0;
+/// Notifications page: on the left the stack of the apps' tiles, the count and "Clear all" (in
+/// the same left column as the Tasks page's ring); on the right rows of two lines from `LIST_X` on.
+const NOTE_Y: f32 = 36.0;
 const NOTE_H: f32 = 38.0;
 pub const NOTE_ROWS: usize = 3;
-/// "Clear all" under the rows, right-aligned with their times: a pill hugging its label (the click
-/// area is this wide), inside the pages' clip, which ends at dots_y - 3.
+/// "Clear all" under the count, in the left column (the click area).
 const CLEAR_W: f32 = 64.0;
 const CLEAR_H: f32 = 18.0;
-/// The count of notifications and the clear button share the line above the list.
-const CLEAR_Y: f32 = 36.0;
-/// Room between the label and the pill's edge on each side.
-const CLEAR_PAD: f32 = 9.0;
+const CLEAR_Y: f32 = 134.0;
 /// Health page cards.
 const CARD_TOP: f32 = 34.0;
 /// The cards share the content's width; they end 28 px above the panel's bottom.
@@ -420,10 +417,10 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
         }
         Page::Notify => {
             for (row, i) in (scroll..rows.min(scroll + NOTE_ROWS)).enumerate() {
-                out.push((Button::NoteOpen(i), r(cl, NOTE_Y + row as f32 * NOTE_H, cw, NOTE_H - 4.0)));
+                out.push((Button::NoteOpen(i), r(cl + LIST_X, NOTE_Y + row as f32 * NOTE_H, cw - LIST_X, NOTE_H - 2.0)));
             }
             if rows > 0 {
-                out.push((Button::NotesClear, r(cl + cw - CLEAR_W, CLEAR_Y, CLEAR_W, CLEAR_H)));
+                out.push((Button::NotesClear, r(cl, CLEAR_Y, CLEAR_W, CLEAR_H)));
             }
         }
         Page::Usage => {
@@ -2379,65 +2376,68 @@ impl Renderer {
                             }
                         }
                         Page::Notify => {
-                            if v.notes.is_empty() {
-                                let area = rect(cl, NOTE_Y * s, cr, (NOTE_Y + NOTE_H * NOTE_ROWS as f32) * s);
-                                text(tr("Chưa có thông báo", "No notifications"), F_BODY, area, center, grey(0.55, a))?;
-                            }
+                            let (x0, xr) = (cl + LIST_X * s, cr);
                             let today = (lv.now / 10_000) as u32;
-                            if !v.notes.is_empty() {
-                                let count = format!("{} {}", v.notes.len(), tr("thông báo", "notifications"));
-                                text(&count, F_LABEL, rect(cl, CLEAR_Y * s, cr - (CLEAR_W + 8.0) * s, (CLEAR_Y + CLEAR_H) * s), lead, grey(0.6, a))?;
-                            }
-                            // Rows glide to their place after a wheel step: drawn from the fractional
-                            // position, inside the list's own clip.
-                            let pos = if current { lv.note_pos } else { 0.0 };
-                            let first = pos.floor().max(0.0) as usize;
-                            rt.PushAxisAlignedClip(&rect(cl - 8.0 * s, NOTE_Y * s, cr + 10.0 * s, (NOTE_Y + NOTE_H * NOTE_ROWS as f32 - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
-                            for (row, n) in v.notes.iter().enumerate().skip(first).take(NOTE_ROWS + 1) {
-                                let y = (NOTE_Y + (row as f32 - pos) * NOTE_H) * s;
-                                // Each notification is a card; the one under the mouse
-                                // lights up: clicking it opens the notification.
-                                let hot = hovered == Some(Button::NoteOpen(row));
-                                let card = rect(cl - 8.0 * s, y - 2.0 * s, cr + 2.0 * s, y + (NOTE_H - 3.0) * s);
-                                rt.FillRoundedRectangle(&rounded(card, 10.0 * s), &self.brush(grey(if hot { 0.13 } else { 0.07 }, a))?);
-                                // Line 1: title, time on the right. Line 2: app · text.
-                                let day = (n.at / 10_000) as u32;
-                                let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
-                                    else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }
-                                    else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
-                                // App tile: its initial on a colour taken from its name.
-                                let tile = rect(cl, y + 3.0 * s, cl + 30.0 * s, y + 33.0 * s);
+                            // An app's tile: its own icon on a light-grey tile, or its initial on a colour taken from its name.
+                            let note_tile = |row: usize, tile: D2D_RECT_F| -> Result<()> {
+                                let Some(n) = v.notes.get(row) else { return Ok(()) };
                                 match note_icons.get(row).and_then(|i| i.as_ref()) {
-                                    // The app's own icon on a light-grey tile, so dark logos show on black.
                                     Some(icon) => {
-                                        rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &self.brush(grey(0.16, a))?);
+                                        rt.FillRoundedRectangle(&rounded(tile, 9.0 * s), &self.brush(grey(0.16, a))?);
                                         rt.DrawBitmap(icon, Some(&rect(tile.left + 3.0 * s, tile.top + 3.0 * s, tile.right - 3.0 * s, tile.bottom - 3.0 * s)), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                                     }
                                     None => {
                                         let (tr_, tg, tb) = app_tint(&n.app);
-                                        rt.FillRoundedRectangle(&rounded(tile, 8.0 * s), &self.brush(color(tr_, tg, tb, a))?);
+                                        rt.FillRoundedRectangle(&rounded(tile, 9.0 * s), &self.brush(color(tr_, tg, tb, a))?);
                                         text(&app_initial(&n.app), F_TITLE, tile, center, grey(1.0, a))?;
                                     }
                                 }
-                                let tx = cl + 38.0 * s;
-                                text(&when, F_LABEL, rect(cr - 64.0 * s, y, cr, y + 20.0 * s), trail, grey(0.55, a))?;
-                                text(&n.title, F_TITLE, rect(tx, y, cr - 68.0 * s, y + 20.0 * s), lead, grey(1.0, a))?;
+                                Ok(())
+                            };
+                            // Left: the newest apps' tiles stacked (the newest on top), how many notifications, Clear all.
+                            let stack = v.notes.len().min(3);
+                            for j in 0..stack {
+                                let row = stack - 1 - j;
+                                let tile = rect(cl + j as f32 * 20.0 * s, 38.0 * s, cl + (j as f32 * 20.0 + 30.0) * s, 68.0 * s);
+                                rt.FillRoundedRectangle(&rounded(rect(tile.left - 2.0 * s, tile.top - 2.0 * s, tile.right + 2.0 * s, tile.bottom + 2.0 * s), 11.0 * s), &self.brush(grey(0.0, a))?);
+                                note_tile(row, tile)?;
+                            }
+                            text(&v.notes.len().to_string(), F_FIGURE, rect(cl, 74.0 * s, cl + HERO_W * s, 108.0 * s), lead, grey(1.0, a))?;
+                            text(tr("thông báo", "notifications"), F_LABEL, rect(cl, 108.0 * s, cl + HERO_W * s, 126.0 * s), lead, grey(0.9, a))?;
+                            if let Some(cb) = rect_of(Button::NotesClear) {
+                                let hot = hovered == Some(Button::NotesClear);
+                                text(tr("Xóa hết", "Clear all"), F_LABEL, cb, lead, if hot { color(0.75, 0.85, 1.0, a) } else { solid(BLUE, a) })?;
+                            }
+                            if v.notes.is_empty() {
+                                let area = rect(x0, NOTE_Y * s, xr, (NOTE_Y + NOTE_H * NOTE_ROWS as f32) * s);
+                                text(tr("Chưa có thông báo", "No notifications"), F_BODY, area, center, grey(0.55, a))?;
+                            }
+                            // Right: the same two lines for every notification (the title and its time, then the app and
+                            // the text, cut with "..." when long). Rows glide to their place after a wheel step: drawn
+                            // from the fractional position, inside the list's own clip.
+                            let pos = if current { lv.note_pos } else { 0.0 };
+                            let first = pos.floor().max(0.0) as usize;
+                            rt.PushAxisAlignedClip(&rect(x0 - 8.0 * s, NOTE_Y * s, xr + 10.0 * s, (NOTE_Y + NOTE_H * NOTE_ROWS as f32 - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
+                            for (row, n) in v.notes.iter().enumerate().skip(first).take(NOTE_ROWS + 1) {
+                                let y = (NOTE_Y + (row as f32 - pos) * NOTE_H) * s;
+                                // The row under the mouse lights up: clicking it opens the notification.
+                                if hovered == Some(Button::NoteOpen(row)) {
+                                    rt.FillRoundedRectangle(&rounded(rect(x0 - 6.0 * s, y - 1.0 * s, xr + 2.0 * s, y + (NOTE_H - 3.0) * s), 8.0 * s), &self.brush(grey(0.08, a))?);
+                                }
+                                if row + 1 < v.notes.len() {
+                                    rt.FillRectangle(&rect(x0, y + (NOTE_H - 2.0) * s, xr, y + (NOTE_H - 1.0) * s), &self.brush(grey(0.11, a))?);
+                                }
+                                let day = (n.at / 10_000) as u32;
+                                let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
+                                    else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }
+                                    else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
+                                text(&when, F_LABEL, rect(xr - 64.0 * s, y, xr, y + 20.0 * s), trail, grey(0.55, a))?;
+                                text(&n.title, F_TITLE, rect(x0, y, xr - 68.0 * s, y + 20.0 * s), lead, grey(1.0, a))?;
                                 let line2 = if n.body.is_empty() { n.app.clone() } else { format!("{} · {}", n.app, n.body) };
-                                text(&line2, F_BODY, rect(tx, y + 19.0 * s, cr, y + 37.0 * s), lead, grey(0.65, a))?;
+                                text(&line2, F_BODY, rect(x0, y + 19.0 * s, xr, y + 37.0 * s), lead, grey(0.65, a))?;
                             }
                             rt.PopAxisAlignedClip();
                             scrollbar(v.notes.len(), NOTE_ROWS, NOTE_Y, NOTE_H)?;
-                            if let Some(cb) = rect_of(Button::NotesClear) {
-                                let hot = hovered == Some(Button::NotesClear);
-                                let label = tr("Xóa hết", "Clear all");
-                                let pw = (width(label, F_LABEL) + 2.0 * CLEAR_PAD * s).min(cb.right - cb.left);
-                                let pb = rect((cb.right - pw).round(), cb.top.round(), cb.right.round(), cb.bottom.round());
-                                let radius = (pb.bottom - pb.top) / 2.0;
-                                rt.FillRoundedRectangle(&rounded(pb, radius), &self.brush(grey(if hot { 0.28 } else { 0.16 }, a))?);
-                                let edge = rect(pb.left + 0.5, pb.top + 0.5, pb.right - 0.5, pb.bottom - 0.5);
-                                rt.DrawRoundedRectangle(&rounded(edge, radius - 0.5), &self.brush(grey(1.0, a * if hot { 0.35 } else { 0.22 }))?, 1.0, None);
-                                text(label, F_LABEL, pb, center, grey(if hot { 1.0 } else { 0.85 }, a))?;
-                            }
                         }
                         Page::Usage => self.draw_usage(&text, &width, &btns, (cl, cr), s, a, hovered)?,
                         Page::Weather => {
@@ -2513,7 +2513,7 @@ impl Renderer {
                                     let gap = ((cr - cl) - widths.iter().sum::<f32>()).max(0.0) / (figures.len().max(2) - 1) as f32;
                                     let mut fx = cl;
                                     for (label, fw) in figures.iter().zip(&widths) {
-                                        text(label, F_LABEL, rect(fx, FIGURES_Y * s, fx + fw, (FIGURES_Y + 14.0) * s), lead, grey(0.65, a * fade))?;
+                                        text(label, F_LABEL, rect(fx, (FIGURES_Y - 2.0) * s, fx + fw, (FIGURES_Y + 16.0) * s), lead, grey(0.65, a * fade))?;
                                         fx += fw + gap;
                                     }
                                 }
@@ -3079,13 +3079,14 @@ mod tests {
     }
 
     #[test]
-    fn clear_all_sits_above_the_rows_and_the_rows_fit_the_panel() {
+    fn clear_all_sits_in_the_left_column_and_the_rows_fit_the_panel() {
         let ph = panel_size(Page::Notify)[1];
-        assert!(CLEAR_Y + CLEAR_H <= NOTE_Y, "above the first row");
+        assert!(CLEAR_W <= HERO_W && CLEAR_Y + CLEAR_H <= dots_y(ph) - 3.0, "Clear all stays in the left column, above the dots");
         assert!(NOTE_Y + NOTE_H * NOTE_ROWS as f32 <= dots_y(ph) - 3.0, "the rows end inside the pages' clip");
         for scale in [1.0, 1.5] {
             let cx = 265.0 * scale;
-            let (x, y) = (cx + (220.0 - SIDE - 10.0) * scale, (CLEAR_Y + CLEAR_H / 2.0) * scale);
+            // The left column starts one SIDE in from the panel's left edge (it is 480 wide).
+            let (x, y) = (cx + (-240.0 + SIDE + CLEAR_W / 2.0) * scale, (CLEAR_Y + CLEAR_H / 2.0) * scale);
             assert_eq!(hit_button(cx, scale, x, y, None, Page::Notify, 2, 0, None, false), Some(Button::NotesClear));
             assert_eq!(hit_button(cx, scale, x, y, None, Page::Notify, 0, 0, None, false), None, "nothing to clear: no button");
         }
