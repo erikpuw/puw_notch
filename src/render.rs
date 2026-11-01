@@ -299,12 +299,12 @@ pub const LIST_ROWS: usize = 3;
 const CITY_Y: f32 = 62.0;
 const ICON_Y: f32 = 92.0;
 const WX_ICON: f32 = 56.0;
-const TEMP_X: f32 = 68.0;
+const TEMP_X: f32 = 64.0;
 const UNIT_X: f32 = 0.0;
 const UNIT_Y: f32 = 148.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 16.0;
-const STATS_X: f32 = 160.0;
+const STATS_X: f32 = 142.0;
 /// The grid's two rows (label on top); the 24h strip starts at the first.
 const STATS_Y: [f32; 2] = [92.0, 132.0];
 const HOURS_BTN_W: f32 = 38.0;
@@ -2308,15 +2308,9 @@ impl Renderer {
                                     let Button::ListToggle(i) = *b else { continue };
                                     let Some(item) = v.todos.get(i) else { continue };
                                     let hot = row_hovered(i);
-                                    // Each task is a card; the stripe on its left says how soon it is due.
+                                    // Each task is a card; the colour of its tick and time says how soon it is due.
                                     let card = rect(br.left - 8.0 * s, br.top + 1.0 * s, cr + 2.0 * s, br.bottom - 2.0 * s);
                                     rt.FillRoundedRectangle(&rounded(card, 9.0 * s), &self.brush(grey(if hot { 0.13 } else { 0.07 }, a))?);
-                                    if let Some(at) = item.at.filter(|_| item.done.is_none()) {
-                                        let urgent = minutes(at) - minutes(lv.now) <= lv.remind_before.max(15) as i64;
-                                        if urgent {
-                                            rt.FillRoundedRectangle(&rounded(rect(card.left, card.top + 6.0 * s, card.left + 3.0 * s, card.bottom - 6.0 * s), 1.5 * s), &self.brush(time_color(at, false))?);
-                                        }
-                                    }
                                     // Tick circle.
                                     let d = 14.0 * s;
                                     let (ccx, ccy) = (br.left + d / 2.0, (br.top + br.bottom) / 2.0);
@@ -2377,13 +2371,11 @@ impl Renderer {
                             rt.PushAxisAlignedClip(&rect(cl - 8.0 * s, NOTE_Y * s, cr + 10.0 * s, (NOTE_Y + NOTE_H * NOTE_ROWS as f32 - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
                             for (row, n) in v.notes.iter().enumerate().skip(first).take(NOTE_ROWS + 1) {
                                 let y = (NOTE_Y + (row as f32 - pos) * NOTE_H) * s;
-                                // Each notification is a card in its app's colour; the one under the mouse
+                                // Each notification is a card; the one under the mouse
                                 // lights up: clicking it opens the notification.
                                 let hot = hovered == Some(Button::NoteOpen(row));
                                 let card = rect(cl - 8.0 * s, y - 2.0 * s, cr + 2.0 * s, y + (NOTE_H - 3.0) * s);
                                 rt.FillRoundedRectangle(&rounded(card, 10.0 * s), &self.brush(grey(if hot { 0.13 } else { 0.07 }, a))?);
-                                let (sr, sg, sb) = app_tint(&n.app);
-                                rt.FillRoundedRectangle(&rounded(rect(card.left, card.top + 7.0 * s, card.left + 3.0 * s, card.bottom - 7.0 * s), 1.5 * s), &self.brush(color(sr, sg, sb, a))?);
                                 // Line 1: title, time on the right. Line 2: app · text.
                                 let day = (n.at / 10_000) as u32;
                                 let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
