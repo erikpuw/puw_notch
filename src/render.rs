@@ -279,7 +279,7 @@ pub fn panel_size(page: Page) -> [f32; 2] {
     let [w, h, _] = target(Mode::Expanded, false);
     match page {
         // Four task cards instead of three.
-        Page::Todo => [w, h + 40.0],
+        Page::Todo | Page::Notify => [w, h + 40.0],
         _ => [w, h],
     }
 }
@@ -311,14 +311,15 @@ const STATS_Y: [f32; 2] = [90.0, 128.0];
 const HOURS_BTN_W: f32 = 38.0;
 
 /// Notifications page: rows of two lines.
-const NOTE_Y: f32 = 36.0;
+const NOTE_Y: f32 = 58.0;
 const NOTE_H: f32 = 38.0;
-pub const NOTE_ROWS: usize = 3;
+pub const NOTE_ROWS: usize = 4;
 /// "Clear all" under the rows, right-aligned with their times: a pill hugging its label (the click
 /// area is this wide), inside the pages' clip, which ends at dots_y - 3.
 const CLEAR_W: f32 = 64.0;
 const CLEAR_H: f32 = 18.0;
-const CLEAR_Y: f32 = NOTE_Y + NOTE_H * NOTE_ROWS as f32 + 1.0;
+/// The count of notifications and the clear button share the line above the list.
+const CLEAR_Y: f32 = 36.0;
 /// Room between the label and the pill's edge on each side.
 const CLEAR_PAD: f32 = 9.0;
 /// Health page cards.
@@ -2363,6 +2364,10 @@ impl Renderer {
                                 text(tr("Chưa có thông báo", "No notifications"), F_BODY, area, center, grey(0.55, a))?;
                             }
                             let today = (lv.now / 10_000) as u32;
+                            if !v.notes.is_empty() {
+                                let count = format!("{} {}", v.notes.len(), tr("thông báo", "notifications"));
+                                text(&count, F_LABEL, rect(cl, CLEAR_Y * s, cr - (CLEAR_W + 8.0) * s, (CLEAR_Y + CLEAR_H) * s), lead, grey(0.6, a))?;
+                            }
                             // Rows glide to their place after a wheel step: drawn from the fractional
                             // position, inside the list's own clip.
                             let pos = if current { lv.note_pos } else { 0.0 };
@@ -2370,11 +2375,13 @@ impl Renderer {
                             rt.PushAxisAlignedClip(&rect(cl - 8.0 * s, NOTE_Y * s, cr + 10.0 * s, (NOTE_Y + NOTE_H * NOTE_ROWS as f32 - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
                             for (row, n) in v.notes.iter().enumerate().skip(first).take(NOTE_ROWS + 1) {
                                 let y = (NOTE_Y + (row as f32 - pos) * NOTE_H) * s;
-                                // The row under the mouse lights up: clicking it opens the notification.
-                                if hovered == Some(Button::NoteOpen(row)) {
-                                    let hb = rect(cl - 6.0 * s, y - 1.0 * s, cr + 2.0 * s, y + (NOTE_H - 3.0) * s);
-                                    rt.FillRoundedRectangle(&rounded(hb, 8.0 * s), &self.brush(grey(0.1, a))?);
-                                }
+                                // Each notification is a card in its app's colour; the one under the mouse
+                                // lights up: clicking it opens the notification.
+                                let hot = hovered == Some(Button::NoteOpen(row));
+                                let card = rect(cl - 8.0 * s, y - 2.0 * s, cr + 2.0 * s, y + (NOTE_H - 3.0) * s);
+                                rt.FillRoundedRectangle(&rounded(card, 10.0 * s), &self.brush(grey(if hot { 0.13 } else { 0.07 }, a))?);
+                                let (sr, sg, sb) = app_tint(&n.app);
+                                rt.FillRoundedRectangle(&rounded(rect(card.left, card.top + 7.0 * s, card.left + 3.0 * s, card.bottom - 7.0 * s), 1.5 * s), &self.brush(color(sr, sg, sb, a))?);
                                 // Line 1: title, time on the right. Line 2: app · text.
                                 let day = (n.at / 10_000) as u32;
                                 let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
@@ -3038,11 +3045,10 @@ mod tests {
     }
 
     #[test]
-    fn clear_all_sits_under_the_rows_clear_of_the_bottom_edge() {
-        let [_, panel_h, _] = target(Mode::Expanded, false);
-        assert!(CLEAR_Y >= NOTE_Y + NOTE_H * NOTE_ROWS as f32, "below the last row");
-        assert!(panel_h - (CLEAR_Y + CLEAR_H) >= 12.0, "well inside the panel's bottom edge");
-        assert!(CLEAR_Y + CLEAR_H + 1.0 <= dots_y(186.0) - 3.0, "whole, border included, inside the pages' clip");
+    fn clear_all_sits_above_the_rows_and_the_rows_fit_the_panel() {
+        let ph = panel_size(Page::Notify)[1];
+        assert!(CLEAR_Y + CLEAR_H <= NOTE_Y, "above the first row");
+        assert!(NOTE_Y + NOTE_H * NOTE_ROWS as f32 <= dots_y(ph) - 3.0, "the rows end inside the pages' clip");
         for scale in [1.0, 1.5] {
             let cx = 265.0 * scale;
             let (x, y) = (cx + (220.0 - SIDE - 10.0) * scale, (CLEAR_Y + CLEAR_H / 2.0) * scale);
