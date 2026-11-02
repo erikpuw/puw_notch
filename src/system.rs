@@ -115,6 +115,12 @@ pub fn battery() -> Option<Battery> {
     Some(Battery { percent: s.BatteryLifePercent.min(100), charging: s.ACLineStatus == 1, saver: saver_on(s.SystemStatusFlag, effective_overlay()) })
 }
 
+/// A background thread with a name: a profiler, a debugger or `GetThreadDescription` then tell which one
+/// is busy.
+pub fn spawn<T: Send + 'static>(name: &str, f: impl FnOnce() -> T + Send + 'static) -> std::thread::JoinHandle<T> {
+    std::thread::Builder::new().name(name.into()).spawn(f).expect("a thread")
+}
+
 type BatteryCache = (std::sync::Arc<std::sync::Mutex<Option<Battery>>>, std::thread::Thread);
 static BATTERY: std::sync::OnceLock<BatteryCache> = std::sync::OnceLock::new();
 
@@ -126,7 +132,7 @@ pub fn battery_cached() -> Option<Battery> {
     let (cell, _) = BATTERY.get_or_init(|| {
         let cell = std::sync::Arc::new(std::sync::Mutex::new(battery()));
         let mine = cell.clone();
-        let thread = std::thread::spawn(move || loop {
+        let thread = crate::system::spawn("battery", move || loop {
             std::thread::park_timeout(std::time::Duration::from_secs(5));
             let now = battery();
             if let Ok(mut b) = mine.lock() {

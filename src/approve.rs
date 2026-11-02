@@ -79,7 +79,7 @@ impl Server {
     pub fn start(hwnd: HWND) -> Server {
         let queue = Arc::new(Mutex::new(VecDeque::new()));
         let (shared, target) = (queue.clone(), hwnd.0 as isize);
-        std::thread::spawn(move || loop {
+        crate::system::spawn("approve-accept", move || loop {
             let pipe = unsafe {
                 CreateNamedPipeW(w!("\\\\.\\pipe\\puw-notch-approve"), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                     PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, None)
@@ -94,7 +94,7 @@ impl Server {
                 continue;
             }
             let (shared, pipe) = (shared.clone(), pipe.0 as isize);
-            std::thread::spawn(move || serve(HANDLE(pipe as _), &shared, target));
+            crate::system::spawn("approve-serve", move || serve(HANDLE(pipe as _), &shared, target));
         });
         Server { queue, cancelled: Arc::default(), enabled: Arc::new(AtomicBool::new(true)) }
     }

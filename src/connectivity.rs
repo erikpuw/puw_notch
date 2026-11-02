@@ -190,7 +190,7 @@ fn wait(period: Duration) -> bool {
 
 pub fn watch(hwnd: HWND) {
     let target = hwnd.0 as isize;
-    std::thread::spawn(move || {
+    crate::system::spawn("connectivity", move || {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
         let _ = Radio::RequestAccessAsync().and_then(|op| op.get());
         // Class lookups are a round trip each; remember them per device id.

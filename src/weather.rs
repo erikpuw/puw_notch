@@ -187,7 +187,7 @@ impl Weather {
         let state = Arc::new(Mutex::new(State { place, ..State::default() }));
         let (jobs, rx) = channel();
         let (shared, target) = (state.clone(), hwnd.0 as isize);
-        std::thread::spawn(move || {
+        crate::system::spawn("weather", move || {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_WEATHER, WPARAM(0), LPARAM(0)); };
             let mut last: Option<Instant> = None;

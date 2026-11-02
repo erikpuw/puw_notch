@@ -561,7 +561,7 @@ impl Monitor {
         let shared = Arc::new(Mutex::new(Snapshot::default()));
         let open = Arc::new(AtomicBool::new(false));
         let (mine, target, watching) = (shared.clone(), hwnd.0 as isize, open.clone());
-        std::thread::spawn(move || {
+        crate::system::spawn("usage", move || {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             loop {
                 // The Limits page switched off: nothing is read and no alert is made.

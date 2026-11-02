@@ -869,7 +869,7 @@ impl IconLoader {
         let page_open = Arc::new(AtomicBool::new(false));
         let hwnd = Arc::new(AtomicIsize::new(0));
         let (open, target) = (page_open.clone(), hwnd.clone());
-        std::thread::spawn(move || unsafe {
+        crate::system::spawn("covers", move || unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let wic: Option<IWICImagingFactory> = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
             for id in asked {

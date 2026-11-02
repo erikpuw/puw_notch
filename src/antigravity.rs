@@ -148,7 +148,7 @@ fn waiting_now(server: &usage::LocalServer) -> Vec<Waiting> {
 /// Start watching: a request for every new waiting step goes to the approval queue.
 pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<u64>>>, enabled: Arc<AtomicBool>, hwnd: HWND) {
     let target = hwnd.0 as isize;
-    std::thread::spawn(move || {
+    crate::system::spawn("antigravity", move || {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
         // The steps asked about so far, each with the request that is up for it (while it waits).
         let mut seen: HashMap<(String, i64), Option<u64>> = HashMap::new();
@@ -188,7 +188,7 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
                 let (id, rx) = approve::enqueue(&queue, target, "Antigravity".into(), title, detail, options);
                 seen.insert(key, Some(id));
                 // One thread per request: it waits for the click, then answers.
-                std::thread::spawn(move || {
+                crate::system::spawn("antigravity-answer", move || {
                     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
                     let answer = rx.recv_timeout(approve::TIMEOUT + Duration::from_secs(5)).unwrap_or(Answer::Ask);
                     if let (Some(body), Some(server)) = (answer_body(&waiting, answer), usage::antigravity_server()) {

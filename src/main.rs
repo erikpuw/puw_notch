@@ -85,7 +85,7 @@ fn unix_ms() -> u64 {
 }
 
 fn watchdog() {
-    std::thread::spawn(|| {
+    crate::system::spawn("watchdog", || {
         let mut said = false;
         loop {
             std::thread::sleep(Duration::from_secs(2));
@@ -1684,7 +1684,7 @@ impl Vsync {
     fn start(hwnd: HWND) -> Self {
         let on = Arc::new(AtomicBool::new(false));
         let (on2, target) = (on.clone(), hwnd.0 as isize);
-        let thread = std::thread::spawn(move || {
+        let thread = crate::system::spawn("vsync", move || {
             unsafe { let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL); }
             loop {
             if !on2.load(Ordering::Relaxed) {

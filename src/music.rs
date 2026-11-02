@@ -129,7 +129,7 @@ impl Music {
         let pill_visible = Arc::new(AtomicBool::new(false));
         let pill_demand = pill_visible.clone();
         let target = hwnd.0 as isize;
-        std::thread::spawn(move || worker(shared, rx, target, demand, pill_demand));
+        crate::system::spawn("music", move || worker(shared, rx, target, demand, pill_demand));
         Music { now, cmds, page_open, pill_visible }
     }
 
@@ -226,7 +226,7 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
     let asset_shared = shared.clone();
     let asset_demand = page_open.clone();
     let asset_pill = pill_visible.clone();
-    std::thread::spawn(move || asset_worker(asset_shared, jobs, target, asset_demand, asset_pill));
+    crate::system::spawn("music-assets", move || asset_worker(asset_shared, jobs, target, asset_demand, asset_pill));
     let mut requested = None;
     loop {
         let mut resync = false;
