@@ -1951,7 +1951,8 @@ impl Renderer {
                     // bell, are line icons whose parts move for a moment after the banner appears
                     // (icons.rs); the water drop hops.
                     let d = 36.0 * s;
-                    let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + 2.0 * s);
+                    let status = t.icon.is_some() && t.choices.is_empty();
+                    let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + if status { 0.0 } else { 2.0 * s });
                     let icon = t.icon.unwrap_or(ICON_BELL);
                     let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
                     let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
@@ -2029,7 +2030,6 @@ impl Renderer {
                     }
                     // A status banner (the icon says what it is) is just its lines, centred on the
                     // icon; a notification names its app above the title.
-                    let status = t.icon.is_some() && t.choices.is_empty();
                     let mid = nh / 2.0;
                     let (title_top, body_top, bar_y) = if t.level.is_some() {
                         (mid - 15.0 * s, 0.0, mid + 9.0 * s)
