@@ -4,6 +4,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
@@ -67,11 +68,13 @@ pub fn edge_pixels(px: &[u8], w: usize) -> usize {
     n
 }
 
-/// The part of a window to read: its rect on screen, and the region under the pill in the window's own
-/// pixels (`x`, `y` from its top left, `w` x `h`).
+/// The part of a window to read: its rect on screen, its title (a browser's or a terminal's title says which
+/// tab is on and how many there are, so a new title is a window to read again), and the region under the pill
+/// in the window's own pixels (`x`, `y` from its top left, `w` x `h`).
 struct Job {
     hwnd: isize,
     rect: RECT,
+    title: u64,
     x: i32,
     y: i32,
     w: i32,
@@ -82,7 +85,11 @@ struct Job {
 struct Verdict {
     hwnd: isize,
     rect: RECT,
+    title: u64,
     busy: bool,
+    /// How many times this window (place and title) has been read, and when last.
+    reads: u32,
+    at: Instant,
 }
 
 static VERDICT: Mutex<Option<Verdict>> = Mutex::new(None);
@@ -100,8 +107,9 @@ fn reader() -> &'static mpsc::Sender<Job> {
                 if let Ok(mut v) = VERDICT.lock() {
                     // A picture that did not come (the window would not draw, or drew nothing) says nothing:
                     // the verdict before it for this window stands.
-                    let before = v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect).map(|v| v.busy);
-                    *v = Some(Verdict { hwnd: job.hwnd, rect: job.rect, busy: found.or(before).unwrap_or(false) });
+                    let same = v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect && v.title == job.title);
+                    let (before, reads) = (same.map(|v| v.busy), same.map_or(0, |v| v.reads));
+                    *v = Some(Verdict { hwnd: job.hwnd, rect: job.rect, title: job.title, busy: found.or(before).unwrap_or(false), reads: reads + 1, at: Instant::now() });
                 }
                 PENDING.store(false, Ordering::Relaxed);
             }
@@ -150,14 +158,32 @@ unsafe fn read_band(job: &Job) -> Option<bool> {
     busy
 }
 
-/// The verdict for this window where it stands now (false until the read is back). A window is read once,
-/// when it is the foreground window or its place changes, as Nusa does; nothing reads it again meanwhile.
+/// Read the window now? When it has no verdict yet (new window, new place, new title), and, while the verdict
+/// says "not busy", twice more in its first seconds: a window that has just opened has not drawn its tabs yet.
+/// `known` = (busy, reads so far, time since the last read) of the verdict for this very window.
+fn should_read(known: Option<(bool, u32, Duration)>) -> bool {
+    known.is_none_or(|(busy, reads, age)| !busy && reads < 3 && age >= Duration::from_millis(1500))
+}
+
+/// The verdict for this window where it stands now, with this title (false until the first read is back).
+/// Windows are read when they come to the front, move, or change title (a tab opened, closed or switched),
+/// not on a timer.
 fn busy_under(job: Job) -> bool {
-    let known = VERDICT.lock().ok().and_then(|v| v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect).map(|v| v.busy));
-    if known.is_none() && !PENDING.swap(true, Ordering::Relaxed) && reader().send(job).is_err() {
+    let known = VERDICT
+        .lock()
+        .ok()
+        .and_then(|v| v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect && v.title == job.title).map(|v| (v.busy, v.reads, v.at.elapsed())));
+    if should_read(known) && !PENDING.swap(true, Ordering::Relaxed) && reader().send(job).is_err() {
         PENDING.store(false, Ordering::Relaxed);
     }
-    known.unwrap_or(false)
+    known.is_some_and(|(busy, ..)| busy)
+}
+
+/// The window's title as a number (not kept as text): equal titles, equal numbers.
+fn title_of(hwnd: HWND) -> u64 {
+    let mut buf = [0u16; 256];
+    let n = unsafe { GetWindowTextW(hwnd, &mut buf) }.max(0) as usize;
+    buf[..n].iter().fold(0u64, |h, c| h.wrapping_mul(31).wrapping_add(u64::from(*c)))
 }
 
 /// Is an ordinary (not topmost) visible window stacked above `own`? A topmost window is never
@@ -246,7 +272,7 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         let Some((from, to)) = clip_span(center_x - half, center_x + half, r.left, r.right).filter(|_| h > 3) else {
             return Check::Busy(false);
         };
-        Check::Busy(busy_under(Job { hwnd: fg.0 as isize, rect: r, x: from - r.left, y: y - r.top, w: to - from, h }))
+        Check::Busy(busy_under(Job { hwnd: fg.0 as isize, rect: r, title: title_of(fg), x: from - r.left, y: y - r.top, w: to - from, h }))
     }
 }
 
@@ -259,11 +285,23 @@ fn reaches_pill(r: RECT, center_x: i32, top: i32, scale: f32, pill_w: f32) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::{body_half, clip_span, edge_pixels, is_busy, reaches_pill};
+    use super::{body_half, clip_span, edge_pixels, is_busy, reaches_pill, should_read};
+    use std::time::Duration;
     use windows::Win32::Foundation::RECT;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
         RECT { left, top, right, bottom }
+    }
+
+    #[test]
+    fn a_window_is_read_when_new_and_twice_more_while_not_busy() {
+        let ms = Duration::from_millis;
+        assert!(should_read(None), "no verdict yet: a new window, place or title");
+        assert!(!should_read(Some((false, 1, ms(500)))), "just read");
+        assert!(should_read(Some((false, 1, ms(1600)))), "not busy: look again, its tabs may not be drawn yet");
+        assert!(should_read(Some((false, 2, ms(1600)))), "and once more");
+        assert!(!should_read(Some((false, 3, ms(60_000)))), "then it is left alone");
+        assert!(!should_read(Some((true, 1, ms(60_000)))), "busy stays busy until the window, place or title changes");
     }
 
     #[test]
