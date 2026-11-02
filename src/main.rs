@@ -591,16 +591,17 @@ impl App {
         }
     }
 
-    /// What is under the pill, and the verdict: hide for a fullscreen app, thin line or pill. Returns true while
-    /// the foreground window is still moving (no verdict yet).
-    fn check_screen(&mut self, sample: bool) -> bool {
+    /// What is under the pill, and the verdict: hide for a fullscreen app, thin line or pill. While the window is
+    /// still moving (no verdict yet), or the notch is on its way back to the pill (it takes two quiet checks), the
+    /// next look is soon (`T_SETTLE`) instead of at the next tick.
+    fn check_screen(&mut self, sample: bool) {
         let cx = self.win.0 + self.win.2 / 2;
         let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
         match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w, sample, &mut self.last_foreground) {
             screen::Check::Fullscreen => self.set_hidden(true),
             screen::Check::Settling => {
                 self.set_hidden(false);
-                return true;
+                unsafe { SetTimer(Some(self.hwnd), T_SETTLE, SETTLE_MS, None) };
             }
             screen::Check::Busy(busy) => {
                 self.set_hidden(false);
@@ -613,10 +614,12 @@ impl App {
                         system::log(&if busy { format!("thin line: content under the pill, foreground {fg}") } else { "back to the pill".to_string() });
                         self.kick();
                     }
+                    if !busy && self.notch.obstructed() {
+                        unsafe { SetTimer(Some(self.hwnd), T_SETTLE, SETTLE_MS, None) };
+                    }
                 }
             }
         }
-        false
     }
 
     fn tick(&mut self) {
@@ -1265,13 +1268,11 @@ impl App {
                     self.notch.on_dwell(inside);
                     self.kick();
                 }
-                // After a foreground change: look, and again in a moment while the window is still moving.
+                // After a foreground change: look, and again in a moment while the window is still moving or the notch is coming back.
                 T_SETTLE => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_SETTLE); }
                     let sample = self.notch.is_settled_rest();
-                    if self.check_screen(sample) {
-                        unsafe { SetTimer(Some(self.hwnd), T_SETTLE, SETTLE_MS, None) };
-                    }
+                    self.check_screen(sample);
                 }
                 T_CARET => {
                     self.caret = !self.caret;

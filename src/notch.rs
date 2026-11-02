@@ -326,6 +326,11 @@ impl Notch {
         }
     }
 
+    /// Resting as the thin line because something is under the pill (until two quiet checks bring it back).
+    pub fn obstructed(&self) -> bool {
+        self.obstructed
+    }
+
     /// Result of one obstruction check. A busy one shrinks the notch at once (`screen::check` only says so for a
     /// window that holds still, and a picture that shows tabs is believed straight away); bringing it back takes
     /// two quiet ones in a row, so one odd frame (a tooltip) does not.

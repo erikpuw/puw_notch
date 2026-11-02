@@ -194,7 +194,7 @@ unsafe fn read_band(job: &Job) -> Option<bool> {
 type Known = (bool, u32, u32, Duration, u32);
 
 /// Read the window now? When it has no verdict yet (new window, new place, new title); while the verdict says
-/// "not busy", twice more in its first seconds (a window that has just opened has not drawn its tabs yet); and
+/// "not busy", four more times in its first seconds, soon after each other (a window that has just opened has not drawn its tabs yet); and
 /// once after the user has touched the keyboard or mouse since the last read and stopped for a moment (closing
 /// a tab leaves the title as it was, but it takes a click or a key); and soon again when a busy window's last
 /// read found nothing (one empty picture is not believed alone). `input` = tick counts of the last input and
@@ -202,7 +202,8 @@ type Known = (bool, u32, u32, Duration, u32);
 fn should_read(known: Option<Known>, input: (u32, u32)) -> bool {
     let Some((busy, quiet, reads, age, tick)) = known else { return true };
     let touched = (input.0.wrapping_sub(tick) as i32) > 0 && input.1.wrapping_sub(input.0) >= 600;
-    (busy && quiet > 0 && age >= Duration::from_millis(400)) || (age >= Duration::from_millis(1500) && (touched || (!busy && reads < 3)))
+    let soon = Duration::from_millis(400);
+    (busy && quiet > 0 && age >= soon) || (!busy && reads < 5 && age >= soon) || (touched && age >= Duration::from_millis(1500))
 }
 
 /// The tick counts of the last keyboard or mouse input and of now.
@@ -361,9 +362,9 @@ mod tests {
         let quiet = (0, 10_000); // no input for a long time
         // known = (busy, quiet reads in a row, reads, time since, tick of the read)
         assert!(should_read(None, quiet), "no verdict yet: a new window, place or title");
-        assert!(!should_read(Some((false, 1, 1, ms(500), 5_000)), quiet), "just read");
-        assert!(should_read(Some((false, 1, 1, ms(1600), 5_000)), quiet), "not busy: look again, its tabs may not be drawn yet");
-        assert!(!should_read(Some((false, 3, 3, ms(60_000), 5_000)), quiet), "then it is left alone");
+                assert!(should_read(Some((false, 1, 1, ms(450), 5_000)), quiet), "not busy: look again soon, its tabs may not be drawn yet");
+        assert!(!should_read(Some((false, 1, 1, ms(200), 5_000)), quiet), "but not in a hurry");
+        assert!(!should_read(Some((false, 5, 5, ms(60_000), 5_000)), quiet), "then it is left alone");
         assert!(!should_read(Some((true, 0, 1, ms(60_000), 5_000)), quiet), "busy stays busy while nobody touches it");
         // a click after the read, and the user has stopped for 600 ms: a tab may have gone
         assert!(should_read(Some((true, 0, 1, ms(5_000), 5_000)), (6_000, 6_700)), "touched since the read and quiet again");
