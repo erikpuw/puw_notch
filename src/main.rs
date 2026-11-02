@@ -199,6 +199,9 @@ struct App {
     frame_ms: u32,
     vsync: Vsync,
     hovered_button: Option<Button>,
+    /// The pill's equaliser: the speaker's peak, read every `PEAK_EVERY` while the pill plays.
+    eq: audio::Level,
+    eq_read: Instant,
     /// Foreground window + rect at the last check: busy sampling waits for it to hold still.
     last_foreground: Option<(isize, RECT)>,
     /// Ticks the pill has rested without a move; at `TRIM_TICKS` the working set is handed back.
@@ -255,6 +258,8 @@ struct App {
 /// `frame_ms` value for frames paced by the display (see `Vsync`).
 const VSYNC: u32 = 1;
 const BARS_FRAME_MS: u32 = 50;
+/// How often the speaker's peak is read for the equaliser (the bars move smoothly between readings).
+const PEAK_EVERY: Duration = Duration::from_millis(100);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -426,6 +431,20 @@ impl App {
             self.last_gap_log = Some(now);
             system::log(&format!("late frame: {:.0} ms (mode {:?}, page {})", gap * 1000.0, self.notch.mode, self.page.name()));
         }
+        // The equaliser follows what the speaker plays while the pill shows it.
+        let bars_on = !self.hidden && self.notch.live && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek) && self.track.as_ref().is_some_and(|t| t.playing);
+        if bars_on {
+            if self.eq_read.elapsed() >= PEAK_EVERY {
+                self.eq_read = now;
+                match self.audio.as_mut().and_then(|a| a.peak()) {
+                    Some(peak) => self.eq.feed(peak),
+                    None => self.eq.steady(),
+                }
+            }
+        } else {
+            self.eq.hush();
+        }
+        self.renderer.eq_level = self.eq.step(dt);
         // The lyrics and the 24-hour forecast belong to one visit of the open panel.
         if self.notch.mode != Mode::Expanded {
             self.lyrics_open = false;
@@ -1841,6 +1860,8 @@ fn run() -> windows::core::Result<()> {
             frame_ms: 0,
             vsync: Vsync::start(hwnd),
             hovered_button: None,
+            eq: audio::Level::default(),
+            eq_read: Instant::now(),
             last_foreground: None,
             rested: 0,
             logged_open: false,

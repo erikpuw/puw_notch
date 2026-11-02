@@ -945,6 +945,8 @@ pub struct Renderer {
     pub usage_tab: usize,
     /// The mouse is over the x of a notification banner (a soft disc shows behind it).
     pub close_hot: bool,
+    /// The height of the pill's equaliser, 0..1 (the window sets it from the speaker's peak).
+    pub eq_level: f32,
     /// Ears (v1) or floating pill (v2).
     pub style: notch::Style,
     /// Copy each frame back to `grabbed` (preview tests only).
@@ -1076,7 +1078,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, eq_level: 0.75, style: notch::Style::Ears,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
@@ -1955,7 +1957,7 @@ impl Renderer {
                     let bw = 2.0 * s;
                     for i in 0..4 {
                         let k = i as f32;
-                        let amp = bars_level * (0.5 + 0.5 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin());
+                        let amp = bars_level * (self.eq_level * (0.72 + 0.28 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin())).min(1.0);
                         let bh = (4.0 + 10.0 * amp) * s;
                         let bx = r - 14.0 * s - (4.0 - k) * (bw + 2.0 * s);
                         let my = nh / 2.0;
@@ -3496,6 +3498,7 @@ mod tests {
             DestroyWindow(hwnd).unwrap();
         }
     }
+
 
     #[test]
     fn only_the_apps_found_get_a_tab() {
