@@ -492,7 +492,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
                         if switch {
                             out.push((Button::Toggle(set), r(x + card_w - 46.0, y + 1.0, 34.0, 16.0)));
                         } else {
-                            out.push((Button::Step(set, -1), r(x + card_w - 90.0, y, 18.0, 18.0)));
+                            out.push((Button::Step(set, -1), r(x + card_w - 100.0, y, 18.0, 18.0)));
                             out.push((Button::Step(set, 1), r(x + card_w - 30.0, y, 18.0, 18.0)));
                         }
                     }
