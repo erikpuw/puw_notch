@@ -385,7 +385,7 @@ impl App {
     /// fullscreen game), from the time since the last key or mouse input.
     fn refresh_robot(&mut self) {
         let allowed = self.robot_on && !self.hidden && self.notch.mode == Mode::Collapsed && !self.notch.live;
-        if self.robot.update(idle_seconds(), allowed) || self.robot.visible() {
+        if self.robot.update(idle_seconds(), allowed) || (self.robot.visible() && !self.animating) {
             self.kick();
         }
     }
@@ -484,7 +484,9 @@ impl App {
         let playing = self.track.as_ref().is_some_and(|t| t.playing);
         self.paused_since = if self.track.is_some() && !playing { Some(self.paused_since.unwrap_or_else(Instant::now)) } else { None };
         let live = music::shows_pill(playing, self.paused_since.map(|t| t.elapsed()));
-        if self.notch.set_live(live) || self.bars_active() {
+        // Frames already coming (the equaliser's timer) need no kick: it would switch them to the screen's
+        // rhythm and back, and restart their timer, at every tick.
+        if self.notch.set_live(live) || (self.bars_active() && !self.animating) {
             self.kick();
         }
     }
