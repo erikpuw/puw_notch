@@ -623,12 +623,15 @@ const F_MARK: usize = 16;
 /// The temperature on the Weather page.
 const F_TEMP: usize = 17;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
-/// of the thin divider after the player's controls, its right margin and its width. The margin
-/// stays wider than the pages' clip (PAGE_CLIP), with room for a last letter's ink past the box.
+/// of the thin divider after the player's controls, its right margin and its width. The right
+/// margin equals the gap at the divider; the pages' clip gives way on that side while the lyrics
+/// show (`LYRIC_CLIP`), leaving room for a last letter's ink past the box.
 const LYRIC_TOP: f32 = 30.0;
 const LYRIC_BOTTOM: f32 = 168.0;
 const LYRIC_GAP: f32 = 14.0;
-const LYRIC_RIGHT: f32 = PAGE_CLIP + 6.0;
+const LYRIC_RIGHT: f32 = LYRIC_GAP;
+/// How far in from the panel's right edge the pages are clipped while the lyrics show (else `PAGE_CLIP`).
+const LYRIC_CLIP: f32 = 8.0;
 const LYRIC_W: f32 = LYRICS_EXTRA_W + SIDE - 2.0 * LYRIC_GAP - LYRIC_RIGHT;
 
 pub const ICON_VOLUME: &str = "\u{E767}";
@@ -2792,7 +2795,8 @@ impl Renderer {
 
                 // Pages slide inside the space between the arrows.
                 let ph = panel_size(v.page)[1];
-                rt.PushAxisAlignedClip(&rect(l + PAGE_CLIP * s, 30.0 * s, r - PAGE_CLIP * s, (dots_y(ph) - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
+                let clip_r = if v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 { LYRIC_CLIP } else { PAGE_CLIP };
+                rt.PushAxisAlignedClip(&rect(l + PAGE_CLIP * s, 30.0 * s, r - clip_r * s, (dots_y(ph) - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
                 match v.leaving {
                     Some((from, t, dir)) => {
                         let span = (cr - cl) * 0.55;
@@ -3096,7 +3100,7 @@ mod tests {
         // Right edge of the lyrics box, from the panel's left: past the controls, the divider gaps
         // and the column. A last letter's ink may run a few px further and must not be clipped.
         let right = target(Mode::Expanded, false)[0] - SIDE + 2.0 * LYRIC_GAP + LYRIC_W;
-        assert!(right + 4.0 <= panel_w(true) - PAGE_CLIP, "{right} vs {}", panel_w(true) - PAGE_CLIP);
+        assert!(right + 4.0 <= panel_w(true) - LYRIC_CLIP, "{right} vs {}", panel_w(true) - LYRIC_CLIP);
     }
 
     #[test]
