@@ -175,7 +175,16 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         }
         let half = (body_half(pill_w) * scale) as i32;
         let y = monitor.top + (PILL_H * scale / 2.0) as i32;
-        covers_something(fg, center_x, half, y).map_or(Check::Unknown, Check::Busy)
+        let asked = std::time::Instant::now();
+        let answer = covers_something(fg, center_x, half, y);
+        // The window answers in about 1 ms; one that took long holds the notch's window up that long.
+        static SAID: AtomicIsize = AtomicIsize::new(0);
+        let now = crate::unix_ms() as isize;
+        if asked.elapsed().as_millis() > 15 && now - SAID.load(Ordering::Relaxed) > 10_000 {
+            SAID.store(now, Ordering::Relaxed);
+            crate::system::log(&format!("slow hit test: {} ms, {} ({})", asked.elapsed().as_millis(), class_name(fg), if answer.is_some() { "answered" } else { "timed out" }));
+        }
+        answer.map_or(Check::Unknown, Check::Busy)
     }
 }
 
