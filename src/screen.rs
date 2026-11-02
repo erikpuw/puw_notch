@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Foundation::{GetLastError, ERROR_ACCESS_DENIED, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -74,7 +74,8 @@ fn is_empty_title(answer: isize, drag_bar: Option<RECT>, x: i32) -> bool {
 }
 
 /// Is the pill's body over a tab or a button of `hwnd`? Asks at 5 points across the body, half way down
-/// the pill (`y`). `None` = the window did not answer in time (busy or hung): no verdict.
+/// the pill (`y`). `None` = the window did not answer in time (busy or hung): no verdict. A window that runs
+/// as administrator is not allowed to be asked (Windows refuses at once): it counts as covered, the safe side.
 fn covers_something(hwnd: HWND, center_x: i32, half: i32, y: i32) -> Option<bool> {
     let drag_bar = unsafe { FindWindowExW(Some(hwnd), None, w!("DRAG_BAR_WINDOW_CLASS"), None) }.ok().and_then(|bar| {
         let mut r = RECT::default();
@@ -86,7 +87,7 @@ fn covers_something(hwnd: HWND, center_x: i32, half: i32, y: i32) -> Option<bool
         let mut answer = 0usize;
         let sent = unsafe { SendMessageTimeoutW(hwnd, WM_NCHITTEST, WPARAM(0), LPARAM(point), SMTO_ABORTIFHUNG, 20, Some(&mut answer)) };
         if sent.0 == 0 {
-            return None;
+            return if unsafe { GetLastError() } == ERROR_ACCESS_DENIED { Some(true) } else { None };
         }
         if !is_empty_title(answer as i16 as isize, drag_bar, x) {
             return Some(true);
