@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicU8, Ordering};
 use std::time::Instant;
 
+use crate::approve;
 use crate::connectivity::DeviceKind;
 use crate::icons::{self, Seg};
 use crate::lyrics;
@@ -2039,6 +2040,16 @@ impl Renderer {
                         let ink = self.brush(grey(if self.close_hot { 0.95 } else { 0.55 }, a))?;
                         rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
                         rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
+                    }
+                    // An approval waits `approve::BANNER`: a bright line along the bottom edge runs
+                    // down meanwhile, and when it is gone the question goes back to its app.
+                    if !t.choices.is_empty() {
+                        let left = (1.0 - age / approve::BANNER.as_secs_f32()).clamp(0.0, 1.0);
+                        icon_busy |= left > 0.0;
+                        let (x0, x1, y) = (l + 26.0 * s, r - 26.0 * s, nh - 4.0 * s);
+                        if left > 0.0 && x1 > x0 {
+                            rt.FillRoundedRectangle(&rounded(rect(x0, y - 1.0 * s, x0 + (x1 - x0) * left, y + 1.0 * s), 1.0 * s), &self.brush(grey(0.9, a))?);
+                        }
                     }
                     if !t.choices.is_empty() {
                         for (k, (b, label)) in approve_buttons(cx, s, v.size[0], v.size[1], &t.choices).into_iter().zip(&t.choices).enumerate() {
