@@ -703,9 +703,9 @@ impl App {
             return false;
         }
         let lines = if !t.choices.is_empty() {
-            self.renderer.banner_lines(&t.body, self.scale, false).clamp(1, 3) as u8
+            self.renderer.banner_lines(&t.body, self.scale, false, true).clamp(1, 3) as u8
         } else if t.icon.is_none() && !t.body.is_empty() {
-            self.renderer.banner_lines(&t.body, self.scale, t.image.is_some()).min(notch::BANNER_MAX_LINES) as u8
+            self.renderer.banner_lines(&t.body, self.scale, t.image.is_some(), false).min(notch::BANNER_MAX_LINES) as u8
         } else {
             0
         };

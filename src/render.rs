@@ -1609,11 +1609,12 @@ impl Renderer {
     }
 
     /// Lines `text` wraps to in a notification banner (its body font and width, at `scale`).
-    pub fn banner_lines(&mut self, text: &str, scale: f32, with_image: bool) -> u32 {
+    pub fn banner_lines(&mut self, text: &str, scale: f32, with_image: bool, choice: bool) -> u32 {
         let Ok(fonts) = self.fonts(scale) else { return 1 };
         let u: Vec<u16> = text.encode_utf16().collect();
         let mut m = DWRITE_TEXT_METRICS::default();
-        let width = BANNER_TEXT_W - if with_image { BANNER_IMAGE_W + BANNER_IMAGE_GAP } else { 0.0 };
+        // A question with buttons is wider than a notification; its text has that room.
+        let width = BANNER_TEXT_W + if choice { notch::alert_size_choice(1)[0] - notch::alert_size(1)[0] } else { 0.0 } - if with_image { BANNER_IMAGE_W + BANNER_IMAGE_GAP } else { 0.0 };
         unsafe {
             match self.dw.CreateTextLayout(&u, &fonts[F_BODY_WRAP], width * scale, 10_000.0) {
                 Ok(layout) if layout.GetMetrics(&mut m).is_ok() => m.lineCount.max(1),
@@ -1972,7 +1973,10 @@ impl Renderer {
                     // (icons.rs); the water drop hops.
                     let d = 36.0 * s;
                     let status = t.icon.is_some() && t.choices.is_empty();
-                    let (ix, iy) = (l + 18.0 * s, nh / 2.0 - d / 2.0 + if status { 0.0 } else { 2.0 * s });
+                    // A question's icon sits level with its text (app name down to the last line), not the
+                    // banner with its buttons.
+                    let icon_mid = if t.choices.is_empty() { nh / 2.0 + if status { 0.0 } else { 2.0 * s } } else { (10.0 + v.size[1] - 38.0) / 2.0 * s };
+                    let (ix, iy) = (l + 18.0 * s, icon_mid - d / 2.0);
                     let icon = t.icon.unwrap_or(ICON_BELL);
                     let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
                     let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
@@ -2048,7 +2052,10 @@ impl Renderer {
                         icon_busy |= left > 0.0;
                         let (x0, x1, y) = (l + 26.0 * s, r - 26.0 * s, nh - 4.0 * s);
                         if left > 0.0 && x1 > x0 {
-                            rt.FillRoundedRectangle(&rounded(rect(x0, y - 1.0 * s, x0 + (x1 - x0) * left, y + 1.0 * s), 1.0 * s), &self.brush(grey(0.9, a))?);
+                            // Green, then yellow and red as the time runs out.
+                            let mix = |p: (f32, f32, f32), q: (f32, f32, f32), k: f32| (p.0 + (q.0 - p.0) * k, p.1 + (q.1 - p.1) * k, p.2 + (q.2 - p.2) * k);
+                            let c = if left > 0.45 { GREEN } else if left > 0.25 { mix(YELLOW, GREEN, (left - 0.25) / 0.2) } else { mix((1.0, 0.3, 0.25), YELLOW, (left / 0.25).min(1.0)) };
+                            rt.FillRoundedRectangle(&rounded(rect(x0, y - 1.0 * s, x0 + (x1 - x0) * left, y + 1.0 * s), 1.0 * s), &self.brush(color(c.0, c.1, c.2, a))?);
                         }
                     }
                     if !t.choices.is_empty() {
@@ -3920,7 +3927,7 @@ mod tests {
                     notch.on_leave();
                 }
                 if at(19.6) {
-                    let lines = renderer.banner_lines(&toast.body, scale, false).min(notch::BANNER_MAX_LINES) as u8;
+                    let lines = renderer.banner_lines(&toast.body, scale, false, false).min(notch::BANNER_MAX_LINES) as u8;
                     notch.on_alert(lines);
                 }
                 if at(23.2) {
