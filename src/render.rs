@@ -2713,12 +2713,15 @@ impl Renderer {
                                                     let c = D2D1_ELLIPSE { point: Vector2 { X: (bb.left + bb.right) / 2.0, Y: (bb.top + bb.bottom) / 2.0 }, radiusX: 8.0 * s, radiusY: 8.0 * s };
                                                     rt.FillEllipse(&c, &self.brush(grey(if hot { 0.32 } else { 0.2 }, a))?);
                                                     // The sign is drawn as lines, so it sits exactly in the circle's middle (the
-                                                    // icon font's minus rides about a pixel high).
-                                                    let (mx, my, k) = (c.point.X, c.point.Y, 3.5 * s);
+                                                    // icon font's minus rides about a pixel high). Whole-pixel stroke, centred on a
+                                                    // pixel edge (even width) or a pixel's middle (odd), so it stays crisp.
+                                                    let w = (1.75 * s).round().max(1.0);
+                                                    let snap = |v: f32| if w % 2.0 == 0.0 { v.round() } else { v.floor() + 0.5 };
+                                                    let (mx, my, k) = (snap(c.point.X), snap(c.point.Y), 3.0 * s);
                                                     let ink = self.brush(grey(1.0, a))?;
-                                                    rt.DrawLine(Vector2 { X: mx - k, Y: my }, Vector2 { X: mx + k, Y: my }, &ink, 1.5 * s, &self.round);
+                                                    rt.DrawLine(Vector2 { X: mx - k, Y: my }, Vector2 { X: mx + k, Y: my }, &ink, w, &self.round);
                                                     if icon == ICON_PLUS {
-                                                        rt.DrawLine(Vector2 { X: mx, Y: my - k }, Vector2 { X: mx, Y: my + k }, &ink, 1.5 * s, &self.round);
+                                                        rt.DrawLine(Vector2 { X: mx, Y: my - k }, Vector2 { X: mx, Y: my + k }, &ink, w, &self.round);
                                                     }
                                                 }
                                                 text(&value, F_LABEL, rect(mb.right, mb.top, pb.left, pb.bottom), center, grey(1.0, a))?;
