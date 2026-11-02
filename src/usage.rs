@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Data::Json::{JsonArray, JsonObject};
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS};
@@ -287,7 +287,21 @@ fn read_claude_status_line() -> Option<(i64, Vec<Bar>)> {
 
 /// The folders the Claude desktop app may keep its data in: the Store build's own folder (its name
 /// carries the package id), a packaged build's roaming copy, and the installer build's `%APPDATA%\Claude`.
+///
+/// Listing `Packages` (every app of the user) is the costly part and the answer hardly changes: it is
+/// kept for ten minutes.
 fn claude_data_dirs() -> Vec<PathBuf> {
+    static KEPT: Mutex<Option<(Instant, Vec<PathBuf>)>> = Mutex::new(None);
+    let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, dirs)) = kept.as_ref().filter(|(at, _)| at.elapsed() < Duration::from_secs(600)) {
+        return dirs.clone();
+    }
+    let dirs = find_claude_data_dirs();
+    *kept = Some((Instant::now(), dirs.clone()));
+    dirs
+}
+
+fn find_claude_data_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
         dirs.extend(children(&local.join("Claude-Data")));
@@ -554,6 +568,8 @@ pub struct Monitor {
     shared: Arc<Mutex<Snapshot>>,
     /// The Limits page is open: read more often.
     open: Arc<AtomicBool>,
+    /// The worker sleeps in one piece between readings; opening the page wakes it.
+    thread: std::thread::Thread,
 }
 
 impl Monitor {
@@ -561,12 +577,12 @@ impl Monitor {
         let shared = Arc::new(Mutex::new(Snapshot::default()));
         let open = Arc::new(AtomicBool::new(false));
         let (mine, target, watching) = (shared.clone(), hwnd.0 as isize, open.clone());
-        crate::system::spawn("usage", move || {
+        let thread = crate::system::spawn("usage", move || {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             loop {
                 // The Limits page switched off: nothing is read and no alert is made.
                 while !crate::render::page_shown(crate::render::Page::Usage) {
-                    std::thread::sleep(Duration::from_secs(1));
+                    std::thread::park_timeout(Duration::from_secs(5));
                 }
                 let now = read_all();
                 if let Ok(mut s) = mine.lock() {
@@ -575,19 +591,26 @@ impl Monitor {
                         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_USAGE, WPARAM(0), LPARAM(0)); }
                     }
                 }
-                // Second by second, so opening the page does not wait out a minute.
-                let mut waited = Duration::ZERO;
-                while waited < if watching.load(Ordering::Relaxed) { POLL_OPEN } else { POLL } {
-                    std::thread::sleep(Duration::from_secs(1));
-                    waited += Duration::from_secs(1);
+                // Opening the page wakes the worker (`set_page_open`) so it does not wait out a minute.
+                let started = Instant::now();
+                loop {
+                    let limit = if watching.load(Ordering::Relaxed) { POLL_OPEN } else { POLL };
+                    match limit.checked_sub(started.elapsed()) {
+                        Some(left) if !left.is_zero() => std::thread::park_timeout(left),
+                        _ => break,
+                    }
                 }
             }
-        });
-        Monitor { shared, open }
+        })
+        .thread()
+        .clone();
+        Monitor { shared, open, thread }
     }
 
     pub fn set_page_open(&self, open: bool) {
-        self.open.store(open, Ordering::Relaxed);
+        if self.open.swap(open, Ordering::Relaxed) != open {
+            self.thread.unpark();
+        }
     }
 
     pub fn snapshot(&self) -> Snapshot {
