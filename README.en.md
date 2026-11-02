@@ -48,7 +48,7 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 ## Screenshots
 
-| | |
+| Screenshot | Screenshot |
 |---|---|
 | ![Music](assets/screenshots/page-music.png)<br>**Music**: cover, title, lyrics, background and aurora line in the cover's colours | ![Music, nothing playing](assets/screenshots/page-music-empty.png)<br>**Music** with nothing playing |
 | ![Notes](assets/screenshots/page-tasks.png)<br>**Notes**: notes and appointments in one list | ![Notifications](assets/screenshots/page-notifications.png)<br>**Notifications**: each with its app's icon |
