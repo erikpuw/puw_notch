@@ -2712,7 +2712,14 @@ impl Renderer {
                                                     let hot = hovered == Some(Button::Step(set, dir));
                                                     let c = D2D1_ELLIPSE { point: Vector2 { X: (bb.left + bb.right) / 2.0, Y: (bb.top + bb.bottom) / 2.0 }, radiusX: 8.0 * s, radiusY: 8.0 * s };
                                                     rt.FillEllipse(&c, &self.brush(grey(if hot { 0.32 } else { 0.2 }, a))?);
-                                                    text(icon, F_TINY_ICON, bb, center, grey(1.0, a))?;
+                                                    // The sign is drawn as lines, so it sits exactly in the circle's middle (the
+                                                    // icon font's minus rides about a pixel high).
+                                                    let (mx, my, k) = (c.point.X, c.point.Y, 3.5 * s);
+                                                    let ink = self.brush(grey(1.0, a))?;
+                                                    rt.DrawLine(Vector2 { X: mx - k, Y: my }, Vector2 { X: mx + k, Y: my }, &ink, 1.5 * s, &self.round);
+                                                    if icon == ICON_PLUS {
+                                                        rt.DrawLine(Vector2 { X: mx, Y: my - k }, Vector2 { X: mx, Y: my + k }, &ink, 1.5 * s, &self.round);
+                                                    }
                                                 }
                                                 text(&value, F_LABEL, rect(mb.right, mb.top, pb.left, pb.bottom), center, grey(1.0, a))?;
                                             }
