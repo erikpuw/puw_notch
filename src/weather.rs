@@ -24,8 +24,9 @@ pub const WM_WEATHER: u32 = WM_APP + 9;
 const REFRESH: Duration = Duration::from_secs(30 * 60);
 /// A network or wake-up refresh sooner than this after the last fetch is skipped.
 const MIN_GAP: Duration = Duration::from_secs(2 * 60);
-/// Try again after this when a fetch failed.
-const RETRY: Duration = Duration::from_secs(60);
+/// Try again after this when a fetch failed: no hammering (Open-Meteo blocks a client that does), the next
+/// half hour comes and the network or wake-up refreshes wait for it too.
+const RETRY: Duration = REFRESH;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Place {
@@ -190,7 +191,10 @@ impl Weather {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_WEATHER, WPARAM(0), LPARAM(0)); };
             let mut last: Option<Instant> = None;
-            // Fetched at once, then every REFRESH; a failed fetch (no network yet) tries again sooner.
+            // How long after `last` a network or wake-up refresh is skipped: MIN_GAP after a good fetch, a whole
+            // REFRESH after a failed one.
+            let mut gap = MIN_GAP;
+            // Fetched at once, then every REFRESH; a failed fetch (no network yet) waits for the next one.
             let mut job = Some(Job::Refresh);
             let mut wait = REFRESH;
             loop {
@@ -213,13 +217,15 @@ impl Weather {
                     }
                     // The Weather page switched off: no network.
                     Some(Job::Refresh) if !crate::render::page_shown(crate::render::Page::Weather) => wait = REFRESH,
-                    Some(Job::Refresh) if last.is_none_or(|t| t.elapsed() >= MIN_GAP) => {
+                    Some(Job::Refresh) if last.is_none_or(|t| t.elapsed() >= gap) => {
                         let place = shared.lock().ok().and_then(|s| s.place.clone());
                         wait = REFRESH;
                         if let Some(p) = place {
+                            // Every try counts, good or not, so a flapping network cannot repeat it.
+                            last = Some(Instant::now());
                             match current(&p) {
                                 Some((now, hours)) => {
-                                    last = Some(Instant::now());
+                                    gap = MIN_GAP;
                                     if let Ok(mut s) = shared.lock() {
                                         // The city may have been switched or switched off while this was fetched.
                                         if s.place.as_ref() == Some(&p) {
@@ -228,7 +234,7 @@ impl Weather {
                                     }
                                     notify();
                                 }
-                                None => wait = RETRY,
+                                None => (wait, gap) = (RETRY, REFRESH),
                             }
                         }
                     }
@@ -323,11 +329,18 @@ pub fn query_name(typed: &str) -> String {
 /// roots, make WinHTTP (behind the WinRT HttpClient) fail with 0x80072F8F on a PC whose root list is
 /// not up to date, measured on this one. Certificate checks stay fully on. The WinRT client is the
 /// fallback (it follows the WinHTTP proxy setting, WinINet the user's).
+/// One request when the server answers (even with an error: asking again at once would be the hammering);
+/// the second way only when the first could not reach it at all.
 fn fetch(url: &str) -> Option<String> {
-    wininet_get(url).or_else(|| http_get(url))
+    match wininet_get(url) {
+        Ok(body) => Some(body),
+        Err(true) => None,
+        Err(false) => http_get(url),
+    }
 }
 
-fn wininet_get(url: &str) -> Option<String> {
+/// The body, or `Err(answered)`: whether the server answered (with an error status) or was not reached.
+fn wininet_get(url: &str) -> Result<String, bool> {
     use std::ffi::c_void;
     use windows::core::{w, PCWSTR};
     use windows::Win32::Networking::WinInet::*;
@@ -343,7 +356,7 @@ fn wininet_get(url: &str) -> Option<String> {
     unsafe {
         let session = InternetOpenW(w!("PUW-Notch/1.0 (Windows)"), INTERNET_OPEN_TYPE_PRECONFIG.0, PCWSTR::null(), PCWSTR::null(), 0);
         if session.is_null() {
-            return None;
+            return Err(false);
         }
         let session = Handle(session);
         // 15 s to connect and to receive, so a dead network does not hold the worker for minutes.
@@ -355,25 +368,25 @@ fn wininet_get(url: &str) -> Option<String> {
         let wide: Vec<u16> = url.encode_utf16().chain([0]).collect();
         let request = InternetOpenUrlW(session.0, PCWSTR(wide.as_ptr()), None, flags, None);
         if request.is_null() {
-            return None;
+            return Err(false);
         }
         let request = Handle(request);
         let (mut status, mut size) = (0u32, 4u32);
-        HttpQueryInfoW(request.0, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, Some(&mut status as *mut u32 as *mut c_void), &mut size, None).ok()?;
+        HttpQueryInfoW(request.0, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, Some(&mut status as *mut u32 as *mut c_void), &mut size, None).map_err(|_| false)?;
         if status != 200 {
-            return None;
+            return Err(true);
         }
         let mut body = Vec::new();
         let mut chunk = [0u8; 8192];
         loop {
             let mut read = 0u32;
-            InternetReadFile(request.0, chunk.as_mut_ptr() as *mut c_void, chunk.len() as u32, &mut read).ok()?;
+            InternetReadFile(request.0, chunk.as_mut_ptr() as *mut c_void, chunk.len() as u32, &mut read).map_err(|_| false)?;
             if read == 0 || body.len() + read as usize > MAX {
                 break;
             }
             body.extend_from_slice(&chunk[..read as usize]);
         }
-        String::from_utf8(body).ok()
+        String::from_utf8(body).map_err(|_| true)
     }
 }
 
