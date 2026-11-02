@@ -18,7 +18,7 @@
 | | |
 |---|---|
 | **Notch** | Clock, battery ring (green while charging, yellow in battery saver, red at 20 %), music waves. Hover to open the panel. Two looks, chosen in the tray: ears or a floating pill. |
-| **Stays clear** | Shrinks when it would cover text underneath (many tabs, as in Edge or Terminal), hides during fullscreen games and videos. It reads the picture of the window beneath it, not the screen, so it never has to hide from capture: it still shows in recordings, screen shares and remote desktop. |
+| **Stays clear** | Shrinks when it would cover text underneath (many tabs, as in Edge or Terminal), hides during fullscreen games and videos. It asks the window beneath it (a bare bit of title bar, or a tab or button?) instead of capturing the screen, so it never has to hide from capture: it still shows in recordings, screen shares and remote desktop. |
 | **Banners** | Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth (with the device's battery), network, battery, battery saver, USB. An × closes one early; a screenshot banner shows a thumbnail, click to open. |
 | **Approve on the notch** | Questions from Claude Code and Antigravity (permission to use a tool, multiple-choice questions) show as banners; click **Allow** / **Deny** or pick an answer. No auto-approve; the banner closes by itself after 20 s (the app asks as usual) and at once when you answer in the app, and the tray switch turns it off. Setup [below](#setting-up-claude-code-optional). |
 | **Robot** | After 30 s without input an LED face replaces the clock, after 5 min it sleeps. Toggle in the tray. |

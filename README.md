@@ -18,7 +18,7 @@
 | | |
 |---|---|
 | **Notch** | Giờ, vòng pin (xanh khi sạc, vàng khi tiết kiệm pin, đỏ từ 20%), sóng nhạc. Rê chuột để mở bảng. Hai kiểu chọn ở tray: tai thỏ hoặc viên thuốc nổi. |
-| **Tự né** | Thu mini khi đè lên chữ bên dưới (nhiều tab như Edge, Terminal), ẩn khi chơi game hoặc xem phim toàn màn hình. Nó đọc ảnh của chính cửa sổ phía dưới chứ không chụp màn hình, nên không phải giấu mình khỏi chụp: vẫn hiện khi quay, chia sẻ màn hình và điều khiển từ xa. |
+| **Tự né** | Thu mini khi đè lên chữ bên dưới (nhiều tab như Edge, Terminal), ẩn khi chơi game hoặc xem phim toàn màn hình. Nó hỏi thẳng cửa sổ phía dưới (chỗ trống của thanh tiêu đề hay tab, nút) chứ không chụp màn hình, nên không phải giấu mình khỏi chụp: vẫn hiện khi quay, chia sẻ màn hình và điều khiển từ xa. |
 | **Banner** | Thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth (kèm % pin thiết bị), mạng, pin, tiết kiệm pin, USB. Nút × tắt sớm; ảnh chụp màn hình có ảnh thu nhỏ, bấm để mở. |
 | **Duyệt trên notch** | Câu hỏi của Claude Code và Antigravity (xin quyền dùng công cụ, câu hỏi chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt; banner tự đóng sau 20 giây (app hỏi lại như thường) và đóng ngay khi bạn trả lời trong app, tắt hẳn ở tray. Cách thiết lập ở [dưới](#thiết-lập-cho-claude-code-tuỳ-chọn). |
 | **Robot** | 30 giây không đụng máy thì mặt LED thay đồng hồ, 5 phút thì ngủ. Bật / tắt ở tray. |
