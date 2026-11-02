@@ -2787,8 +2787,21 @@ impl Renderer {
                                     let k = if hovered == Some(ab) { 1.0 } else { 0.9 };
                                     let c = D2D1_ELLIPSE { point: Vector2 { X: (pb.left + pb.right) / 2.0, Y: (pb.top + pb.bottom) / 2.0 }, radiusX: (pb.right - pb.left) / 2.0, radiusY: (pb.bottom - pb.top) / 2.0 };
                                     rt.FillEllipse(&c, &self.brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
-                                    // Dark on both: white on the orange is only 3.1:1.
-                                    text(if card == Card::Water { ICON_PLUS } else { ICON_CHECK }, F_SMALL_ICON, pb, center, grey(0.06, a))?;
+                                    // Dark on both: white on the orange is only 3.1:1. The sign is drawn as strokes of
+                                    // whole pixels (2 px at 100%) so it is bold, centred and crisp; the icon font's
+                                    // glyph was one thin pixel and half a pixel off.
+                                    let w = (2.0 * s).round().max(2.0);
+                                    let snap = |v: f32| if w % 2.0 == 0.0 { v.round() } else { v.floor() + 0.5 };
+                                    let (mx, my) = (snap(c.point.X), snap(c.point.Y));
+                                    let ink = self.brush(grey(0.06, a))?;
+                                    let at = |dx: f32, dy: f32| Vector2 { X: mx + dx * s, Y: my + dy * s };
+                                    if card == Card::Water {
+                                        rt.DrawLine(at(-6.0, 0.0), at(6.0, 0.0), &ink, w, &self.round);
+                                        rt.DrawLine(at(0.0, -6.0), at(0.0, 6.0), &ink, w, &self.round);
+                                    } else {
+                                        rt.DrawLine(at(-6.0, 0.5), at(-2.0, 4.5), &ink, w, &self.round);
+                                        rt.DrawLine(at(-2.0, 4.5), at(6.5, -4.5), &ink, w, &self.round);
+                                    }
                                 }
                                 if let Some(sb) = rect_of(Button::Snooze) {
                                     if card == Card::Water {
