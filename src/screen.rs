@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
+use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -87,9 +89,12 @@ struct Verdict {
     rect: RECT,
     title: u64,
     busy: bool,
-    /// How many times this window (place and title) has been read, and when last.
+    /// How many reads in a row found nothing busy since it was last busy.
+    quiet: u32,
+    /// How many times this window (place and title) has been read, when last, and the tick count then.
     reads: u32,
     at: Instant,
+    tick: u32,
 }
 
 static VERDICT: Mutex<Option<Verdict>> = Mutex::new(None);
@@ -108,8 +113,15 @@ fn reader() -> &'static mpsc::Sender<Job> {
                     // A picture that did not come (the window would not draw, or drew nothing) says nothing:
                     // the verdict before it for this window stands.
                     let same = v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect && v.title == job.title);
-                    let (before, reads) = (same.map(|v| v.busy), same.map_or(0, |v| v.reads));
-                    *v = Some(Verdict { hwnd: job.hwnd, rect: job.rect, title: job.title, busy: found.or(before).unwrap_or(false), reads: reads + 1, at: Instant::now() });
+                    let (before, quiet, reads) = (same.map(|v| v.busy), same.map_or(0, |v| v.quiet), same.map_or(0, |v| v.reads));
+                    // A picture that shows tabs is trusted at once; one that shows none, only when the one after it
+                    // says so too: a window that draws itself (Notepad) gives an empty picture now and then.
+                    let (busy, quiet) = match found {
+                        Some(true) => (true, 0),
+                        Some(false) => (before.unwrap_or(false) && quiet < 1, quiet + 1),
+                        None => (before.unwrap_or(false), quiet),
+                    };
+                    *v = Some(Verdict { hwnd: job.hwnd, rect: job.rect, title: job.title, busy, quiet, reads: reads + 1, at: Instant::now(), tick: unsafe { GetTickCount() } });
                 }
                 PENDING.store(false, Ordering::Relaxed);
             }
@@ -158,22 +170,40 @@ unsafe fn read_band(job: &Job) -> Option<bool> {
     busy
 }
 
-/// Read the window now? When it has no verdict yet (new window, new place, new title), and, while the verdict
-/// says "not busy", twice more in its first seconds: a window that has just opened has not drawn its tabs yet.
-/// `known` = (busy, reads so far, time since the last read) of the verdict for this very window.
-fn should_read(known: Option<(bool, u32, Duration)>) -> bool {
-    known.is_none_or(|(busy, reads, age)| !busy && reads < 3 && age >= Duration::from_millis(1500))
+/// What is known of a window's last read: busy, quiet reads in a row, reads so far, time since, and the tick
+/// count of it.
+type Known = (bool, u32, u32, Duration, u32);
+
+/// Read the window now? When it has no verdict yet (new window, new place, new title); while the verdict says
+/// "not busy", twice more in its first seconds (a window that has just opened has not drawn its tabs yet); and
+/// once after the user has touched the keyboard or mouse since the last read and stopped for a moment (closing
+/// a tab leaves the title as it was, but it takes a click or a key); and soon again when a busy window's last
+/// read found nothing (one empty picture is not believed alone). `input` = tick counts of the last input and
+/// of now.
+fn should_read(known: Option<Known>, input: (u32, u32)) -> bool {
+    let Some((busy, quiet, reads, age, tick)) = known else { return true };
+    let touched = (input.0.wrapping_sub(tick) as i32) > 0 && input.1.wrapping_sub(input.0) >= 600;
+    (busy && quiet > 0 && age >= Duration::from_millis(400)) || (age >= Duration::from_millis(1500) && (touched || (!busy && reads < 3)))
+}
+
+/// The tick counts of the last keyboard or mouse input and of now.
+fn last_input() -> (u32, u32) {
+    let mut info = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    unsafe {
+        let _ = GetLastInputInfo(&mut info);
+        (info.dwTime, GetTickCount())
+    }
 }
 
 /// The verdict for this window where it stands now, with this title (false until the first read is back).
-/// Windows are read when they come to the front, move, or change title (a tab opened, closed or switched),
-/// not on a timer.
+/// A window is read when it comes to the front, moves, or changes title, and after the user has used it and
+/// stopped (a tab opened, closed or switched); never on a timer, so at rest it costs nothing.
 fn busy_under(job: Job) -> bool {
     let known = VERDICT
         .lock()
         .ok()
-        .and_then(|v| v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect && v.title == job.title).map(|v| (v.busy, v.reads, v.at.elapsed())));
-    if should_read(known) && !PENDING.swap(true, Ordering::Relaxed) && reader().send(job).is_err() {
+        .and_then(|v| v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect && v.title == job.title).map(|v| (v.busy, v.quiet, v.reads, v.at.elapsed(), v.tick)));
+    if should_read(known, last_input()) && !PENDING.swap(true, Ordering::Relaxed) && reader().send(job).is_err() {
         PENDING.store(false, Ordering::Relaxed);
     }
     known.is_some_and(|(busy, ..)| busy)
@@ -294,14 +324,23 @@ mod tests {
     }
 
     #[test]
-    fn a_window_is_read_when_new_and_twice_more_while_not_busy() {
+    fn a_window_is_read_when_new_twice_more_while_not_busy_and_after_the_user_used_it() {
         let ms = Duration::from_millis;
-        assert!(should_read(None), "no verdict yet: a new window, place or title");
-        assert!(!should_read(Some((false, 1, ms(500)))), "just read");
-        assert!(should_read(Some((false, 1, ms(1600)))), "not busy: look again, its tabs may not be drawn yet");
-        assert!(should_read(Some((false, 2, ms(1600)))), "and once more");
-        assert!(!should_read(Some((false, 3, ms(60_000)))), "then it is left alone");
-        assert!(!should_read(Some((true, 1, ms(60_000)))), "busy stays busy until the window, place or title changes");
+        let quiet = (0, 10_000); // no input for a long time
+        // known = (busy, quiet reads in a row, reads, time since, tick of the read)
+        assert!(should_read(None, quiet), "no verdict yet: a new window, place or title");
+        assert!(!should_read(Some((false, 1, 1, ms(500), 5_000)), quiet), "just read");
+        assert!(should_read(Some((false, 1, 1, ms(1600), 5_000)), quiet), "not busy: look again, its tabs may not be drawn yet");
+        assert!(!should_read(Some((false, 3, 3, ms(60_000), 5_000)), quiet), "then it is left alone");
+        assert!(!should_read(Some((true, 0, 1, ms(60_000), 5_000)), quiet), "busy stays busy while nobody touches it");
+        // a click after the read, and the user has stopped for 600 ms: a tab may have gone
+        assert!(should_read(Some((true, 0, 1, ms(5_000), 5_000)), (6_000, 6_700)), "touched since the read and quiet again");
+        assert!(!should_read(Some((true, 0, 1, ms(5_000), 5_000)), (6_000, 6_300)), "still busy using it: wait for the pause");
+        assert!(!should_read(Some((true, 0, 1, ms(5_000), 5_000)), (4_000, 9_000)), "the last input was before the read");
+        assert!(!should_read(Some((true, 0, 2, ms(1_000), 5_000)), (6_000, 6_700)), "not more than once in 1.5 s");
+        // a busy window whose last picture showed nothing is asked again soon, to be sure
+        assert!(should_read(Some((true, 1, 4, ms(500), 5_000)), quiet), "one empty picture is not believed alone");
+        assert!(!should_read(Some((true, 1, 4, ms(200), 5_000)), quiet), "but not in a hurry");
     }
 
     #[test]
