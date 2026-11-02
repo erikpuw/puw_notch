@@ -47,6 +47,7 @@ use music::WM_MUSIC;
 use i18n::tr;
 use audio::WM_VOLUME;
 use status::{WM_LOCKKEY, WM_VOLUMEKEY};
+use screen::WM_SCREENEVENT;
 use notify::Toast;
 use weather::WM_WEATHER;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, NOTE_ROWS, PAGES};
@@ -60,6 +61,9 @@ const T_CHECK: usize = 2;
 const T_DWELL: usize = 3;
 const T_ALERT: usize = 4;
 const T_CARET: usize = 6;
+/// The foreground window changed or moved: look again once it has had a moment to settle.
+const T_SETTLE: usize = 7;
+const SETTLE_MS: u32 = 120;
 /// Page switch morph length.
 const PAGE_MORPH_S: f32 = 0.32;
 /// Notifications kept on the Notifications page.
@@ -587,6 +591,34 @@ impl App {
         }
     }
 
+    /// What is under the pill, and the verdict: hide for a fullscreen app, thin line or pill. Returns true while
+    /// the foreground window is still moving (no verdict yet).
+    fn check_screen(&mut self, sample: bool) -> bool {
+        let cx = self.win.0 + self.win.2 / 2;
+        let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
+        match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w, sample, &mut self.last_foreground) {
+            screen::Check::Fullscreen => self.set_hidden(true),
+            screen::Check::Settling => {
+                self.set_hidden(false);
+                return true;
+            }
+            screen::Check::Busy(busy) => {
+                self.set_hidden(false);
+                if sample {
+                    let before = self.notch.mode;
+                    self.notch.report_busy(busy);
+                    if self.notch.mode != before {
+                        // A notch that "does not show" may be resting as the thin line: say why.
+                        let fg = screen::class_name(unsafe { GetForegroundWindow() });
+                        system::log(&if busy { format!("thin line: content under the pill, foreground {fg}") } else { "back to the pill".to_string() });
+                        self.kick();
+                    }
+                }
+            }
+        }
+        false
+    }
+
     fn tick(&mut self) {
         // Typing needs the keyboard: when the notch is not the foreground window (Windows refused
         // the focus, or took it back without a WM_ACTIVATE) it cannot be typing, and `editing`
@@ -634,25 +666,7 @@ impl App {
         if self.rested == TRIM_TICKS {
             unsafe { let _ = windows::Win32::System::Threading::SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX); }
         }
-        let cx = self.win.0 + self.win.2 / 2;
-        let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
-        match screen::check(self.hwnd, cx, self.monitor, self.scale, pill_w, sample, &mut self.last_foreground) {
-            screen::Check::Fullscreen => self.set_hidden(true),
-            screen::Check::Settling => self.set_hidden(false),
-            screen::Check::Busy(busy) => {
-                self.set_hidden(false);
-                if sample {
-                    let before = self.notch.mode;
-                    self.notch.report_busy(busy);
-                    if self.notch.mode != before {
-                        // A notch that "does not show" may be resting as the thin line: say why.
-                        let fg = screen::class_name(unsafe { GetForegroundWindow() });
-                        system::log(&if busy { format!("thin line: content under the pill, foreground {fg}") } else { "back to the pill".to_string() });
-                        self.kick();
-                    }
-                }
-            }
-        }
+        self.check_screen(sample);
 
         mark(3, &mut lap);
         self.remind();
@@ -1251,6 +1265,14 @@ impl App {
                     self.notch.on_dwell(inside);
                     self.kick();
                 }
+                // After a foreground change: look, and again in a moment while the window is still moving.
+                T_SETTLE => {
+                    unsafe { let _ = KillTimer(Some(self.hwnd), T_SETTLE); }
+                    let sample = self.notch.is_settled_rest();
+                    if self.check_screen(sample) {
+                        unsafe { SetTimer(Some(self.hwnd), T_SETTLE, SETTLE_MS, None) };
+                    }
+                }
                 T_CARET => {
                     self.caret = !self.caret;
                     self.redraw();
@@ -1413,6 +1435,7 @@ impl App {
                     None => self.click(x, y),
                 }
             }
+            WM_SCREENEVENT => unsafe { SetTimer(Some(self.hwnd), T_SETTLE, SETTLE_MS, None); },
             WM_LOCKKEY => {
                 let (name, on) = status::lock_state(wp.0);
                 self.show_banner(status_toast(tr("Bàn phím", "Keyboard"), name.to_string(), on_off(on), None, render::ICON_KEYBOARD), STATUS_MS);
@@ -1851,6 +1874,7 @@ fn run() -> windows::core::Result<()> {
         APP.with(|a| *a.borrow_mut() = Some(app));
 
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        screen::watch(hwnd);
         SetTimer(Some(hwnd), T_CHECK, CHECK_MS, None);
 
         let mut msg = MSG::default();

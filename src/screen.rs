@@ -2,19 +2,38 @@
 //! from the foreground window's own picture (`PrintWindow`), which has no notch in it, so the notch is not
 //! left out of screen capture and shows in remote desktop and screen sharing.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::notch;
+
+/// Posted to the notch's window when the foreground window changed or a window was moved or resized.
+pub const WM_SCREENEVENT: u32 = WM_APP + 11;
+static HOOK_TARGET: AtomicIsize = AtomicIsize::new(0);
+
+unsafe extern "system" fn on_event(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
+    let _ = PostMessageW(Some(HWND(HOOK_TARGET.load(Ordering::Relaxed) as _)), WM_SCREENEVENT, WPARAM(0), LPARAM(0));
+}
+
+/// Like Nusa: Windows tells the notch when the foreground window changes (event 3) or a window has been
+/// moved or resized (0xB), so it looks at once instead of at its next tick. Rare events, nothing wakes it
+/// at rest. The notch's own windows are skipped (flag 2).
+pub fn watch(hwnd: HWND) {
+    HOOK_TARGET.store(hwnd.0 as isize, Ordering::Relaxed);
+    for event in [0x0003, 0x000B] {
+        unsafe { SetWinEventHook(event, event, None, Some(on_event), 0, 0, 2) };
+    }
+}
 
 pub enum Check {
     /// A fullscreen app (game, video) owns the notch's monitor: hide the notch.
@@ -203,8 +222,21 @@ fn busy_under(job: Job) -> bool {
         .lock()
         .ok()
         .and_then(|v| v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect && v.title == job.title).map(|v| (v.busy, v.quiet, v.reads, v.at.elapsed(), v.tick)));
-    if should_read(known, last_input()) && !PENDING.swap(true, Ordering::Relaxed) && reader().send(job).is_err() {
-        PENDING.store(false, Ordering::Relaxed);
+    let (first, key) = (known.is_none(), (job.hwnd, job.rect, job.title));
+    if should_read(known, last_input()) && !PENDING.swap(true, Ordering::Relaxed) {
+        if reader().send(job).is_err() {
+            PENDING.store(false, Ordering::Relaxed);
+        } else if first {
+            // A window draws itself in about 20 ms: a new window's first read is waited for (up to 8 x 5 ms), so
+            // the notch answers at once. An app that hangs is left to the reader thread.
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(5));
+                if !PENDING.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+            return VERDICT.lock().ok().and_then(|v| v.as_ref().filter(|v| (v.hwnd, v.rect, v.title) == key).map(|v| v.busy)).unwrap_or(false);
+        }
     }
     known.is_some_and(|(busy, ..)| busy)
 }

@@ -178,13 +178,12 @@ pub struct Notch {
     panel: [f32; 2],
     obstructed: bool,
     clear_checks: u8,
-    busy_checks: u8,
     size: [Spring; 3],
 }
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_width: 0.0, alert_choice: false, wide: false, panel: [target(Mode::Expanded, false)[0], target(Mode::Expanded, false)[1]], obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_width: 0.0, alert_choice: false, wide: false, panel: [target(Mode::Expanded, false)[0], target(Mode::Expanded, false)[1]], obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
         for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
@@ -327,22 +326,17 @@ impl Notch {
         }
     }
 
-    /// Result of one obstruction check. Both directions need two checks in a row, so one odd
-    /// frame (a window mid-animation, a tooltip) neither shrinks the notch nor brings it back.
+    /// Result of one obstruction check. A busy one shrinks the notch at once (`screen::check` only says so for a
+    /// window that holds still, and a picture that shows tabs is believed straight away); bringing it back takes
+    /// two quiet ones in a row, so one odd frame (a tooltip) does not.
     pub fn report_busy(&mut self, busy: bool) {
         if busy {
             self.clear_checks = 0;
-            self.busy_checks = self.busy_checks.saturating_add(1);
-            if self.busy_checks >= 2 {
-                self.obstructed = true;
-            }
-        } else {
-            self.busy_checks = 0;
-            if self.obstructed {
-                self.clear_checks += 1;
-                if self.clear_checks >= 2 {
-                    self.obstructed = false;
-                }
+            self.obstructed = true;
+        } else if self.obstructed {
+            self.clear_checks += 1;
+            if self.clear_checks >= 2 {
+                self.obstructed = false;
             }
         }
         if self.is_resting() {
@@ -551,17 +545,15 @@ mod tests {
     }
 
     #[test]
-    fn busy_and_clear_both_need_two_checks() {
+    fn busy_shrinks_at_once_and_clearing_needs_two_checks() {
         let mut n = Notch::new(false);
         n.report_busy(true);
-        assert_eq!(n.mode, Mode::Collapsed, "one busy frame (window mid-animation) is not enough");
+        assert_eq!(n.mode, Mode::Mini, "a busy window shrinks the notch straight away");
         n.report_busy(false);
+        assert_eq!(n.mode, Mode::Mini, "one quiet check is not enough to bring it back");
         n.report_busy(true);
-        assert_eq!(n.mode, Mode::Collapsed, "busy checks must be in a row");
-        n.report_busy(true);
-        assert_eq!(n.mode, Mode::Mini);
         n.report_busy(false);
-        assert_eq!(n.mode, Mode::Mini);
+        assert_eq!(n.mode, Mode::Mini, "quiet checks must be in a row");
         n.report_busy(false);
         assert_eq!(n.mode, Mode::Collapsed);
     }
