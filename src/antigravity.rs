@@ -135,14 +135,17 @@ fn answer_body(w: &Waiting, answer: Answer) -> Option<String> {
     Some(format!(r#"{{"cascadeId":{},"interaction":{{"trajectoryId":{},"stepIndex":{},{inner}}}}}"#, json_string(&w.cascade), json_string(&w.trajectory), w.step))
 }
 
-/// Ask the server for the waiting steps of every run that is not idle.
-fn waiting_now(server: &usage::LocalServer) -> Vec<Waiting> {
-    let Some(list) = server.call("GetAllCascadeTrajectories", "{}") else { return Vec::new() };
-    busy_runs(&list)
-        .into_iter()
-        .filter(|(id, _)| id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
-        .filter_map(|(id, steps)| parse_waiting(&server.call("GetCascadeTrajectorySteps", &format!(r#"{{"cascadeId":"{id}","stepOffset":{}}}"#, steps - 1))?))
-        .collect()
+/// Ask the server for the waiting steps of every run that is not idle. None when the server does not
+/// answer (the app closed or restarted: its port and token are new).
+fn waiting_now(server: &usage::LocalServer) -> Option<Vec<Waiting>> {
+    let list = server.call("GetAllCascadeTrajectories", "{}")?;
+    Some(
+        busy_runs(&list)
+            .into_iter()
+            .filter(|(id, _)| id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
+            .filter_map(|(id, steps)| parse_waiting(&server.call("GetCascadeTrajectorySteps", &format!(r#"{{"cascadeId":"{id}","stepOffset":{}}}"#, steps - 1))?))
+            .collect(),
+    )
 }
 
 /// Start watching: a request for every new waiting step goes to the approval queue.
@@ -152,21 +155,32 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
         // The steps asked about so far, each with the request that is up for it (while it waits).
         let mut seen: HashMap<(String, i64), Option<u64>> = HashMap::new();
+        // Finding the server lists every process and reads the app's log: done when the app is not
+        // known to run, not at every poll.
+        let mut server: Option<usage::LocalServer> = None;
         loop {
-            // Not on this PC: nothing to look for (checked now and then, in case it is installed later).
-            if !usage::installed(usage::App::Antigravity) {
-                seen.clear();
-                std::thread::sleep(POLL_ABSENT);
-                continue;
+            if !enabled.load(Ordering::Relaxed) {
+                server = None;
             }
-            let server = if enabled.load(Ordering::Relaxed) { usage::antigravity_server() } else { None };
-            let Some(server) = server else {
-                seen.clear();
-                std::thread::sleep(POLL_CLOSED);
+            if server.is_none() {
+                // Not on this PC: nothing to look for (checked now and then, in case it is installed later).
+                if !usage::installed(usage::App::Antigravity) {
+                    seen.clear();
+                    std::thread::sleep(POLL_ABSENT);
+                    continue;
+                }
+                server = if enabled.load(Ordering::Relaxed) { usage::antigravity_server() } else { None };
+                if server.is_none() {
+                    seen.clear();
+                    std::thread::sleep(POLL_CLOSED);
+                    continue;
+                }
+            }
+            std::thread::sleep(POLL);
+            let Some(now) = server.as_ref().and_then(waiting_now) else {
+                server = None;
                 continue;
             };
-            std::thread::sleep(POLL);
-            let now = waiting_now(&server);
             // A question answered in Antigravity itself no longer waits: its banner goes.
             for (key, id) in seen.iter_mut() {
                 if id.is_some() && !now.iter().any(|w| (&w.cascade, w.step) == (&key.0, key.1)) {

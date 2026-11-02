@@ -1,6 +1,8 @@
 //! Now playing (any app that reports to Windows media controls: Spotify, browsers, ...)
-//! plus synced lyrics from LRCLIB. WinRT calls block, so a worker thread polls and the UI reads
-//! a shared snapshot after a WM_MUSIC nudge.
+//! plus synced lyrics from LRCLIB. WinRT calls block, so a worker thread reads the player and the UI
+//! reads a shared snapshot after a WM_MUSIC nudge. Windows says when the session, the track, play or
+//! pause or the timeline change (`Watch`), which wakes the worker; it only looks by itself now and then
+//! (`next_poll`), often when iTunes (no such events) is open.
 
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -9,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use windows::core::{w, HSTRING};
 use windows::Data::Json::{JsonArray, JsonObject, JsonValueType};
-use windows::Foundation::Uri;
+use windows::Foundation::{TypedEventHandler, Uri};
 use windows::Media::Control::*;
 use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 use windows::Web::Http::HttpClient;
@@ -20,7 +22,11 @@ use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow, 
 
 /// Posted when the snapshot changed (new track, play/pause, lyrics arrived).
 pub const WM_MUSIC: u32 = WM_APP + 5;
+/// How often the worker looks without being woken: iTunes (read through COM, says nothing) open,
+/// a track playing (position and state corrections), nothing playing (events do the rest).
 const POLL: Duration = Duration::from_millis(500);
+const POLL_PLAYING: Duration = Duration::from_secs(2);
+const POLL_IDLE: Duration = Duration::from_secs(10);
 /// A paused player keeps the music pill this long, then the notch goes back to the clock.
 const PAUSE_KEEP: Duration = Duration::from_secs(10);
 
@@ -111,10 +117,19 @@ pub enum Cmd {
     Seek(u64),
 }
 
+/// What wakes the worker.
+pub enum Msg {
+    /// A button of the notch for the track shown.
+    Command(Cmd, Track),
+    /// The Music page or the pill appeared or went: read in full and fetch what is missing.
+    Resync,
+    /// Windows says the player changed something: look now.
+    Wake,
+}
+
 pub struct Music {
     pub now: Arc<Mutex<Option<Track>>>,
-    // None wakes the worker when the Music page or pill visibility changes.
-    cmds: Sender<Option<(Cmd, Track)>>,
+    cmds: Sender<Msg>,
     page_open: Arc<AtomicBool>,
     pill_visible: Arc<AtomicBool>,
 }
@@ -129,29 +144,30 @@ impl Music {
         let pill_visible = Arc::new(AtomicBool::new(false));
         let pill_demand = pill_visible.clone();
         let target = hwnd.0 as isize;
-        crate::system::spawn("music", move || worker(shared, rx, target, demand, pill_demand));
+        let wake = cmds.clone();
+        crate::system::spawn("music", move || worker(shared, rx, wake, target, demand, pill_demand));
         Music { now, cmds, page_open, pill_visible }
     }
 
     pub fn send(&self, c: Cmd) {
-        if let Some(track) = self.snapshot() { let _ = self.cmds.send(Some((c, track))); }
+        if let Some(track) = self.snapshot() { let _ = self.cmds.send(Msg::Command(c, track)); }
     }
 
     pub fn seek(&self, preview: &Track) {
         if let Some(track) = self.snapshot().filter(|t| t.can_seek && t.duration_ms > 0 && t.art_key == preview.art_key && t.same_media(preview)) {
-            let _ = self.cmds.send(Some((Cmd::Seek(preview.position_ms.min(track.duration_ms)), track)));
+            let _ = self.cmds.send(Msg::Command(Cmd::Seek(preview.position_ms.min(track.duration_ms)), track));
         }
     }
 
     pub fn set_page_open(&self, open: bool) {
         if self.page_open.swap(open, Ordering::Relaxed) != open {
-            let _ = self.cmds.send(None);
+            let _ = self.cmds.send(Msg::Resync);
         }
     }
 
     pub fn set_pill_visible(&self, visible: bool) {
         if self.pill_visible.swap(visible, Ordering::Relaxed) != visible {
-            let _ = self.cmds.send(None);
+            let _ = self.cmds.send(Msg::Resync);
         }
     }
 
@@ -216,7 +232,64 @@ fn session_command(s: &GlobalSystemMediaTransportControlsSession, cmd: &Cmd, tra
     }
 }
 
-fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>, target: isize, page_open: Arc<AtomicBool>, pill_visible: Arc<AtomicBool>) {
+/// Handlers on the current media session: any change of its state, track or timeline wakes the worker.
+struct Watch {
+    session: GlobalSystemMediaTransportControlsSession,
+    tokens: [i64; 3],
+}
+
+impl Watch {
+    fn new(session: GlobalSystemMediaTransportControlsSession, wake: &Sender<Msg>) -> Option<Watch> {
+        macro_rules! on {
+            ($add:ident, $args:ty) => {{
+                let tx = wake.clone();
+                session
+                    .$add(&TypedEventHandler::<GlobalSystemMediaTransportControlsSession, $args>::new(move |_, _| {
+                        let _ = tx.send(Msg::Wake);
+                        Ok(())
+                    }))
+                    .ok()?
+            }};
+        }
+        let tokens = [
+            on!(PlaybackInfoChanged, PlaybackInfoChangedEventArgs),
+            on!(MediaPropertiesChanged, MediaPropertiesChangedEventArgs),
+            on!(TimelinePropertiesChanged, TimelinePropertiesChangedEventArgs),
+        ];
+        Some(Watch { session, tokens })
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        let _ = self.session.RemovePlaybackInfoChanged(self.tokens[0]);
+        let _ = self.session.RemoveMediaPropertiesChanged(self.tokens[1]);
+        let _ = self.session.RemoveTimelinePropertiesChanged(self.tokens[2]);
+    }
+}
+
+/// Wake the worker when the sessions or the current one change (a player opens, closes, takes over).
+fn watch_manager(manager: &GlobalSystemMediaTransportControlsSessionManager, wake: &Sender<Msg>) {
+    let tx = wake.clone();
+    let _ = manager.SessionsChanged(&TypedEventHandler::<GlobalSystemMediaTransportControlsSessionManager, SessionsChangedEventArgs>::new(move |_, _| {
+        let _ = tx.send(Msg::Wake);
+        Ok(())
+    }));
+    let tx = wake.clone();
+    let _ = manager.CurrentSessionChanged(&TypedEventHandler::<GlobalSystemMediaTransportControlsSessionManager, CurrentSessionChangedEventArgs>::new(move |_, _| {
+        let _ = tx.send(Msg::Wake);
+        Ok(())
+    }));
+}
+
+fn next_poll(shared: &Mutex<Option<Track>>) -> Duration {
+    if unsafe { FindWindowW(None, w!("iTunes")) }.is_ok() {
+        return POLL;
+    }
+    if shared.lock().ok().and_then(|g| g.as_ref().map(|t| t.playing)).unwrap_or(false) { POLL_PLAYING } else { POLL_IDLE }
+}
+
+fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Msg>, wake: Sender<Msg>, target: isize, page_open: Arc<AtomicBool>, pill_visible: Arc<AtomicBool>) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); };
     let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().and_then(|op| op.get()).ok();
@@ -228,19 +301,25 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Option<(Cmd, Track)>>,
     let asset_pill = pill_visible.clone();
     crate::system::spawn("music-assets", move || asset_worker(asset_shared, jobs, target, asset_demand, asset_pill));
     let mut requested = None;
+    if let Some(m) = &manager {
+        watch_manager(m, &wake);
+    }
+    let mut watching: Option<Watch> = None;
     loop {
-        let mut resync = false;
-        let cmd = match rx.recv_timeout(POLL) {
-            Ok(c) => {
-                if c.is_none() {
-                    requested = None;
-                    resync = true;
-                }
-                c
+        let (cmd, resync) = match rx.recv_timeout(next_poll(&shared)) {
+            Ok(Msg::Command(c, t)) => (Some((c, t)), false),
+            Ok(Msg::Resync) => {
+                requested = None;
+                (None, true)
             }
+            Ok(Msg::Wake) | Err(RecvTimeoutError::Timeout) => (None, false),
             Err(RecvTimeoutError::Disconnected) => return,
-            Err(RecvTimeoutError::Timeout) => None,
         };
+        // The handlers follow the current session.
+        let current = manager.as_ref().and_then(|m| m.GetCurrentSession().ok());
+        if watching.as_ref().map(|w| &w.session) != current.as_ref() {
+            watching = current.and_then(|s| Watch::new(s, &wake));
+        }
         // The Music page switched off: no player is read, commands are dropped.
         if !crate::render::page_shown(crate::render::Page::Music) {
             if shared.lock().map(|mut g| g.take().is_some()).unwrap_or(false) {
@@ -697,7 +776,7 @@ mod tests {
         let mut preview = track.clone();
         preview.position_ms = u64::MAX;
         music.seek(&preview);
-        let (command, target) = rx.try_recv().unwrap().unwrap();
+        let Ok(Msg::Command(command, target)) = rx.try_recv() else { panic!("a command was queued") };
         assert!(matches!(command, Cmd::Seek(120_000)));
         assert_eq!(target.source_id, track.source_id);
         assert!(rx.try_recv().is_err());
@@ -720,11 +799,11 @@ mod tests {
         music.set_page_open(false);
         assert!(rx.try_recv().is_err());
         music.set_page_open(true);
-        assert!(rx.try_recv().unwrap().is_none());
+        assert!(matches!(rx.try_recv(), Ok(Msg::Resync)));
         music.set_page_open(true);
         assert!(rx.try_recv().is_err());
         music.set_page_open(false);
-        assert!(rx.try_recv().unwrap().is_none());
+        assert!(matches!(rx.try_recv(), Ok(Msg::Resync)));
     }
 
     #[test]
