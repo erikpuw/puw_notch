@@ -27,6 +27,8 @@ pub const WM_MUSIC: u32 = WM_APP + 5;
 const POLL: Duration = Duration::from_millis(500);
 const POLL_PLAYING: Duration = Duration::from_secs(2);
 const POLL_IDLE: Duration = Duration::from_secs(10);
+/// After Windows says something changed, the player may still be setting the rest (the cover).
+const WAKE_SETTLE: Duration = Duration::from_millis(300);
 /// A paused player keeps the music pill this long, then the notch goes back to the clock.
 const PAUSE_KEEP: Duration = Duration::from_secs(10);
 
@@ -312,7 +314,17 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Msg>, wake: Sender<Msg
                 requested = None;
                 (None, true)
             }
-            Ok(Msg::Wake) | Err(RecvTimeoutError::Timeout) => (None, false),
+            Ok(Msg::Wake) => {
+                // A player sets the title first and the cover a moment later: look when both are there,
+                // and look again for a cover that was missing.
+                std::thread::sleep(WAKE_SETTLE);
+                let missing = shared.lock().ok().is_some_and(|mut g| g.as_mut().filter(|t| t.art.is_none() && t.art_ready).map(|t| t.art_ready = false).is_some());
+                if missing {
+                    requested = None;
+                }
+                (None, false)
+            }
+            Err(RecvTimeoutError::Timeout) => (None, false),
             Err(RecvTimeoutError::Disconnected) => return,
         };
         // The handlers follow the current session.
