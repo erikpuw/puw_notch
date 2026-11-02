@@ -169,12 +169,10 @@ fn log_header() -> String {
     format!("PUW Notch v{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// A log written by another version is of no use for this one: start it over.
+/// Every run starts its own log: the sessions of earlier runs are of no use for this one.
 pub fn log_open() {
-    let Some(p) = log_path() else { return };
-    let first = std::fs::read_to_string(&p).ok().and_then(|s| s.lines().next().map(str::to_string));
-    if first.as_deref() != Some(&log_header()) {
-        let _ = std::fs::remove_file(&p);
+    if let Some(p) = log_path() {
+        let _ = std::fs::remove_file(p);
     }
 }
 

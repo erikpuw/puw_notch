@@ -1729,10 +1729,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
 /// Starts, exits and failures go to notch.log: a start with Windows that dies early shows nothing
 /// on screen and leaves nothing in the event log otherwise.
 fn main() -> windows::core::Result<()> {
-    let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
-    system::log_open();
     watchdog();
-    system::log(&format!("start v{} pid {} cwd {cwd}", env!("CARGO_PKG_VERSION"), std::process::id()));
     std::panic::set_hook(Box::new(|info| system::log(&format!("panic: {info}"))));
     let result = run();
     match &result {
@@ -1749,6 +1746,10 @@ fn run() -> windows::core::Result<()> {
             system::log("already running, leaving");
             return Ok(());
         }
+        // Only the run that keeps the window starts the log over: a second start must not wipe it.
+        system::log_open();
+        let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+        system::log(&format!("start v{} pid {} cwd {cwd}", env!("CARGO_PKG_VERSION"), std::process::id()));
         system::refresh_autostart();
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         // Never run at Windows' "efficiency" speed (EcoQoS): battery saver slows what it takes for
