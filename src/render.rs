@@ -1892,7 +1892,7 @@ impl Renderer {
             // Aurora over the glow: a thin glowing line in the cover's two colours, swaying slowly.
             let aurora_a = open * level * gate;
             if aurora_a > 0.01 && v.mode != Mode::Alert {
-                self.draw_aurora(&shape, (l, r, nh), w, s, v.phase, aurora_a);
+                self.draw_aurora(&shape, (l, r, nh), w, s, v.phase, aurora_a, panel_size(v.page)[1] * s);
             }
 
             // Each layout fades in as the pill reaches its size.

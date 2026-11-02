@@ -105,7 +105,7 @@ impl Renderer {
     /// Draw the aurora over the glow inside the panel outline `shape`: `panel` is (left, right,
     /// height) in device px, `w` the window width, `s` the scale, `t` the animation time (s) and
     /// `aurora_a` the overall opacity. A failure skips the aurora for this frame.
-    pub(super) fn draw_aurora(&self, shape: &ID2D1PathGeometry, panel: (f32, f32, f32), w: i32, s: f32, t: f32, aurora_a: f32) {
+    pub(super) fn draw_aurora(&self, shape: &ID2D1PathGeometry, panel: (f32, f32, f32), w: i32, s: f32, t: f32, aurora_a: f32, rest: f32) {
         let (l, r, nh) = panel;
         let rt = &self.rt;
         unsafe {
@@ -120,7 +120,10 @@ impl Renderer {
                 D2D1_GRADIENT_STOP { position: f, color: color(c.0, c.1, c.2, pulse) }
             }).collect();
             let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: l, Y: 0.0 }, endPoint: Vector2 { X: r, Y: 0.0 } };
-            let (yc, amp) = (nh * AURORA_Y, nh * AURORA_AMP);
+            // The line is laid out on the panel's resting height: when the page icons open and the panel
+            // grows, the glow follows the bottom but the aurora stays where it is.
+            let lay = nh.min(rest);
+            let (yc, amp) = (lay * AURORA_Y, lay * AURORA_AMP);
             // Everything that can fail is made first: a failure skips the aurora for this
             // frame instead of leaving the panel's layer pushed and the frame unfinished.
             let made = (|| -> Result<(ID2D1Bitmap, D2D_SIZE_F, ID2D1LinearGradientBrush, ID2D1PathGeometry)> {
@@ -142,7 +145,7 @@ impl Renderer {
             small.SetTransform(&Matrix3x2 { M11: 1.0 / AURORA_SHRINK, M12: 0.0, M21: 0.0, M22: 1.0 / AURORA_SHRINK, M31: 0.0, M32: 0.0 });
             let brush = small.CreateLinearGradientBrush(&line, None, &small.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?)?;
             for (k, alpha) in AURORA_LAYERS {
-                let band = self.band(t, l, r, yc, amp, nh * AURORA_HALO, k)?;
+                let band = self.band(t, l, r, yc, amp, lay * AURORA_HALO, k)?;
                 brush.SetOpacity(alpha);
                 small.FillGeometry(&band, &brush, None);
             }
