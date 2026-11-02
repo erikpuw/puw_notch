@@ -1,8 +1,14 @@
-//! What is under / around the notch: fullscreen apps, and windows reaching under the pill. Only what Windows
-//! says about windows is used, never the screen's pixels, so the notch is not left out of screen capture and
-//! shows in remote desktop and screen sharing.
+//! What is under / around the notch: fullscreen apps and busy content under the pill. The content is read
+//! from the foreground window's own picture (`PrintWindow`), which has no notch in it, so the notch is not
+//! left out of screen capture and shows in remote desktop and screen sharing.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -11,7 +17,7 @@ use crate::notch;
 pub enum Check {
     /// A fullscreen app (game, video) owns the notch's monitor: hide the notch.
     Fullscreen,
-    /// Normal desktop; `true` when the foreground window reaches under the pill (tabs, a title bar).
+    /// Normal desktop; `true` when the window under the notch has busy pixels (tabs, a title) under the pill.
     /// Not checked -> `false`, and the caller ignores it.
     Busy(bool),
     /// The foreground window just changed, moved or resized (maximize / restore animation):
@@ -34,6 +40,131 @@ fn body_half(pill_w: f32) -> f32 {
 fn clip_span(from: i32, to: i32, left: i32, right: i32) -> Option<(i32, i32)> {
     let (from, to) = (from.max(left + 2), to.min(right - 2));
     (to - from >= 4).then_some((from, to))
+}
+
+/// A pixel is "edge" when a channel differs from its left neighbour by at least this much.
+const EDGE_DELTA: u8 = 14;
+/// Edge pixels under the pill that make it "covering something": a tab title, a tab's edge.
+const BUSY_EDGES: usize = 12;
+
+/// Busy when the pill sits on content: tabs or a title under it (Edge, Terminal). `None` = the
+/// window does not reach under the pill. Maximize / restore no longer trips it: `check` only samples
+/// a window that held still, and `Notch::report_busy` needs two checks in a row.
+pub fn is_busy(under_pill: Option<usize>) -> bool {
+    under_pill.is_some_and(|n| n >= BUSY_EDGES)
+}
+
+/// Count edge pixels in a top-down BGRA buffer `w` pixels wide.
+pub fn edge_pixels(px: &[u8], w: usize) -> usize {
+    let mut n = 0;
+    for row in px.chunks_exact(w * 4) {
+        for pair in row.windows(8).step_by(4) {
+            let d = (0..3).map(|c| pair[c].abs_diff(pair[c + 4])).max().unwrap_or(0);
+            if d >= EDGE_DELTA {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// The part of a window to read: its rect on screen, and the region under the pill in the window's own
+/// pixels (`x`, `y` from its top left, `w` x `h`).
+struct Job {
+    hwnd: isize,
+    rect: RECT,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+/// What a read found, for the window (and the place it stood) it was made of.
+struct Verdict {
+    hwnd: isize,
+    rect: RECT,
+    busy: bool,
+    at: Instant,
+}
+
+/// A verdict is read again after this long: tabs come and go under a window that holds still.
+const RESAMPLE: Duration = Duration::from_secs(2);
+static VERDICT: Mutex<Option<Verdict>> = Mutex::new(None);
+static PENDING: AtomicBool = AtomicBool::new(false);
+static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+
+/// The reader thread. `PrintWindow` asks the other window to draw itself and waits for it: an app that
+/// hangs would hold the caller, so it is never the UI thread.
+fn reader() -> &'static mpsc::Sender<Job> {
+    JOBS.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        std::thread::spawn(move || {
+            for job in rx {
+                let found = unsafe { read_band(&job) };
+                if let Ok(mut v) = VERDICT.lock() {
+                    // A picture that did not come (the window would not draw, or drew nothing) says nothing:
+                    // the verdict before it for this window stands.
+                    let before = v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect).map(|v| v.busy);
+                    *v = Some(Verdict { hwnd: job.hwnd, rect: job.rect, busy: found.or(before).unwrap_or(false), at: Instant::now() });
+                }
+                PENDING.store(false, Ordering::Relaxed);
+            }
+        });
+        tx
+    })
+}
+
+/// Edge pixels of the region in the window's own picture, as busy or not; `None` when no picture came.
+/// The window is drawn into a bitmap that is only as tall as the region reaches down (the rest is cut off).
+unsafe fn read_band(job: &Job) -> Option<bool> {
+    let (width, rows) = (job.rect.right - job.rect.left, job.y + job.h);
+    if width <= 0 || rows <= 0 || width > 16_384 || rows > 512 || job.x < 0 || job.y < 0 || job.x + job.w > width {
+        return None;
+    }
+    let screen = GetDC(None);
+    let mem = CreateCompatibleDC(Some(screen));
+    let mut bmi = BITMAPINFO::default();
+    bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -rows;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    let mut bits = std::ptr::null_mut();
+    let mut busy = None;
+    if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+        let old = SelectObject(mem, bmp.into());
+        // 2 = PW_RENDERFULLCONTENT: windows drawn by the GPU (Edge, Terminal) too.
+        if PrintWindow(HWND(job.hwnd as *mut _), mem, PRINT_WINDOW_FLAGS(2)).as_bool() && !bits.is_null() {
+            let px = std::slice::from_raw_parts(bits as *const u8, (width * rows * 4) as usize);
+            let mut region = Vec::with_capacity((job.w * job.h * 4) as usize);
+            for row in job.y..job.y + job.h {
+                let start = ((row * width + job.x) * 4) as usize;
+                region.extend_from_slice(&px[start..start + (job.w * 4) as usize]);
+            }
+            // All zero = nothing drawn (a window the GPU keeps to itself).
+            if region.iter().any(|b| *b != 0) {
+                busy = Some(is_busy(Some(edge_pixels(&region, job.w as usize))));
+            }
+        }
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+    }
+    let _ = DeleteDC(mem);
+    ReleaseDC(None, screen);
+    busy
+}
+
+/// The last verdict for this window where it stands now (false until the first read is back); a read is
+/// asked for when there is none or it is old, one at a time.
+fn busy_under(job: Job) -> bool {
+    let known = VERDICT
+        .lock()
+        .ok()
+        .and_then(|v| v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect).map(|v| (v.busy, v.at.elapsed())));
+    if known.is_none_or(|(_, age)| age >= RESAMPLE) && !PENDING.swap(true, Ordering::Relaxed) && reader().send(job).is_err() {
+        PENDING.store(false, Ordering::Relaxed);
+    }
+    known.is_some_and(|(busy, _)| busy)
 }
 
 /// Is an ordinary (not topmost) visible window stacked above `own`? A topmost window is never
@@ -76,9 +207,8 @@ fn shell_says_fullscreen() -> bool {
 }
 
 /// `own` = notch window, `center_x` = notch centre in screen px, `monitor` = notch monitor rect,
-/// `pill_w` = current resting pill width (logical px). The verdict comes from the windows alone:
-/// `Busy` when the foreground window reaches under the pill's body, i.e. a maximized or snapped window
-/// whose tabs or title bar sit where the pill is.
+/// `pill_w` = current resting pill width (logical px). `Busy` when the foreground window has busy pixels
+/// (tabs, a title) under the pill's body, read from the window's own picture by the reader thread.
 /// `sample` = false skips that verdict: it only means something while the notch rests at its pill size
 /// (not hovered, open, bannering or animating).
 /// `last` = foreground window and rect seen by the previous call; the verdict waits until they repeat,
@@ -112,7 +242,18 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         if !still {
             return Check::Settling;
         }
-        Check::Busy(reaches_pill(r, center_x, monitor.top, scale, pill_w))
+        if !reaches_pill(r, center_x, monitor.top, scale, pill_w) {
+            return Check::Busy(false);
+        }
+        // The pill's body in the window's own pixels: from the top of the screen down the pill's height,
+        // across the span the window covers.
+        let (half, sh) = ((body_half(pill_w) * scale) as i32, (PILL_H * scale) as i32);
+        let y = r.top.max(monitor.top);
+        let h = monitor.top + sh - y;
+        let Some((from, to)) = clip_span(center_x - half, center_x + half, r.left, r.right).filter(|_| h > 3) else {
+            return Check::Busy(false);
+        };
+        Check::Busy(busy_under(Job { hwnd: fg.0 as isize, rect: r, x: from - r.left, y: y - r.top, w: to - from, h }))
     }
 }
 
@@ -125,11 +266,29 @@ fn reaches_pill(r: RECT, center_x: i32, top: i32, scale: f32, pill_w: f32) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::{body_half, clip_span, reaches_pill};
+    use super::{body_half, clip_span, edge_pixels, is_busy, reaches_pill};
     use windows::Win32::Foundation::RECT;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
         RECT { left, top, right, bottom }
+    }
+
+    #[test]
+    fn busy_when_content_sits_under_the_pill() {
+        assert!(is_busy(Some(40)), "tab titles under the pill");
+        assert!(is_busy(Some(30)), "one tab edge running down the pill's height");
+        assert!(!is_busy(Some(11)), "a few stray pixels");
+        assert!(!is_busy(Some(0)), "empty title bar");
+        assert!(!is_busy(None), "the window does not reach under the pill");
+    }
+
+    #[test]
+    fn flat_is_quiet_stripes_are_busy() {
+        let w = 8;
+        let flat = vec![40u8; w * 2 * 4];
+        assert_eq!(edge_pixels(&flat, w), 0);
+        let stripes: Vec<u8> = (0..w * 2).flat_map(|i| if i % 2 == 0 { [0, 0, 0, 255] } else { [200, 200, 200, 255] }).collect();
+        assert_eq!(edge_pixels(&stripes, w), 2 * (w - 1));
     }
 
     #[test]
