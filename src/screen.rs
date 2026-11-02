@@ -1,9 +1,8 @@
-//! What is under / around the notch: fullscreen apps and busy content beside the pill.
-
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+//! What is under / around the notch: fullscreen apps, and windows reaching under the pill. Only what Windows
+//! says about windows is used, never the screen's pixels, so the notch is not left out of screen capture and
+//! shows in remote desktop and screen sharing.
 
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -12,8 +11,8 @@ use crate::notch;
 pub enum Check {
     /// A fullscreen app (game, video) owns the notch's monitor: hide the notch.
     Fullscreen,
-    /// Normal desktop; `true` when the window under the notch has busy pixels beside the pill.
-    /// Not sampled -> `false`, and the caller ignores it.
+    /// Normal desktop; `true` when the foreground window reaches under the pill (tabs, a title bar).
+    /// Not checked -> `false`, and the caller ignores it.
     Busy(bool),
     /// The foreground window just changed, moved or resized (maximize / restore animation):
     /// no verdict until it holds still.
@@ -21,8 +20,7 @@ pub enum Check {
 }
 
 /// What the pill covers: the body of the pill (its resting height, the top of the screen), measured
-/// from the pill itself, short or long (music widens it), without its rounded corners. The notch
-/// window is left out of the capture while this is read, so it sees the tabs under the pill.
+/// from the pill itself, short or long (music widens it), without its rounded corners.
 const PILL_H: f32 = 30.0;
 
 /// Half the width checked: the pill's body, i.e. its half width minus the rounded corner.
@@ -36,32 +34,6 @@ fn body_half(pill_w: f32) -> f32 {
 fn clip_span(from: i32, to: i32, left: i32, right: i32) -> Option<(i32, i32)> {
     let (from, to) = (from.max(left + 2), to.min(right - 2));
     (to - from >= 4).then_some((from, to))
-}
-
-/// A pixel is "edge" when a channel differs from its left neighbour by at least this much.
-const EDGE_DELTA: u8 = 14;
-/// Edge pixels under the pill that make it "covering something": a tab title, a tab's edge.
-const BUSY_EDGES: usize = 12;
-
-/// Busy when the pill sits on content: tabs or a title under it (Edge, Terminal). `None` = the
-/// window does not reach under the pill. Maximize / restore no longer trips it: `check` only samples
-/// a window that held still, and `Notch::report_busy` needs two checks in a row.
-pub fn is_busy(under_pill: Option<usize>) -> bool {
-    under_pill.is_some_and(|n| n >= BUSY_EDGES)
-}
-
-/// Count edge pixels in a top-down BGRA buffer `w` pixels wide.
-pub fn edge_pixels(px: &[u8], w: usize) -> usize {
-    let mut n = 0;
-    for row in px.chunks_exact(w * 4) {
-        for pair in row.windows(8).step_by(4) {
-            let d = (0..3).map(|c| pair[c].abs_diff(pair[c + 4])).max().unwrap_or(0);
-            if d >= EDGE_DELTA {
-                n += 1;
-            }
-        }
-    }
-    n
 }
 
 /// Is an ordinary (not topmost) visible window stacked above `own`? A topmost window is never
@@ -98,28 +70,19 @@ pub fn class_name(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n])
 }
 
-/// Pixels under the pill change slowly: once a sample agrees with the one before, the next few
-/// ticks (about 2 s) reuse it. A sample that differs is confirmed on the very next tick.
-const RESAMPLE_TICKS: u8 = 3;
-static SKIP: AtomicU8 = AtomicU8::new(0);
-static LAST_BUSY: AtomicBool = AtomicBool::new(false);
-
-fn settle(busy: bool) -> Check {
-    let agreed = LAST_BUSY.swap(busy, Ordering::Relaxed) == busy;
-    SKIP.store(if agreed { RESAMPLE_TICKS } else { 0 }, Ordering::Relaxed);
-    Check::Busy(busy)
-}
-
 /// A game in exclusive full screen or Presentation Mode: Windows says so, no window to measure.
 fn shell_says_fullscreen() -> bool {
     unsafe { SHQueryUserNotificationState() }.is_ok_and(|s| s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE)
 }
 
 /// `own` = notch window, `center_x` = notch centre in screen px, `monitor` = notch monitor rect,
-/// `pill_w` = current resting pill width (logical px); the strips follow `strip_span`.
-/// `sample` = false skips the pixel strips: the capture includes our own window, so they are only
-/// meaningful while the notch rests at its pill size (not hovered, open, bannering or animating).
-/// `last` = foreground window and rect seen by the previous call; sampling waits until they repeat.
+/// `pill_w` = current resting pill width (logical px). The verdict comes from the windows alone:
+/// `Busy` when the foreground window reaches under the pill's body, i.e. a maximized or snapped window
+/// whose tabs or title bar sit where the pill is.
+/// `sample` = false skips that verdict: it only means something while the notch rests at its pill size
+/// (not hovered, open, bannering or animating).
+/// `last` = foreground window and rect seen by the previous call; the verdict waits until they repeat,
+/// so a maximize / restore animation is not mistaken for a window that stays.
 pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, sample: bool, last: &mut Option<(isize, RECT)>) -> Check {
     if shell_says_fullscreen() {
         return Check::Fullscreen;
@@ -147,90 +110,38 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
             return Check::Busy(false);
         }
         if !still {
-            SKIP.store(0, Ordering::Relaxed);
             return Check::Settling;
         }
-        if SKIP.load(Ordering::Relaxed) > 0 {
-            SKIP.fetch_sub(1, Ordering::Relaxed);
-            return Check::Busy(LAST_BUSY.load(Ordering::Relaxed));
-        }
-        let half = (body_half(pill_w) * scale) as i32;
-        let sh = (PILL_H * scale) as i32;
-        let top = monitor.top;
-        // Only sample where the foreground window actually is, so wallpaper never counts.
-        if r.top > top + sh || r.bottom <= top {
-            return settle(false);
-        }
-        let y = r.top.max(top);
-        let h = top + sh - y;
-        let under = clip_span(center_x - half, center_x + half, r.left, r.right).filter(|_| h > 3);
-        if !LEFT_OUT.load(Ordering::Relaxed) {
-            return Check::Busy(false);
-        }
-        settle(is_busy(under.map(|(from, to)| grab_edges(from, y, to - from, h))))
+        Check::Busy(reaches_pill(r, center_x, monitor.top, scale, pill_w))
     }
 }
 
-/// The notch is left out of screen capture for good, so a capture of the screen sees what is under
-/// the pill. Set once: switching it per sample made the compositor redraw the screen twice and
-/// waited a frame on the UI thread. Screenshot keys bring it back for a while (`show_in_capture`);
-/// screen recordings and shares do not show it.
-static LEFT_OUT: AtomicBool = AtomicBool::new(false);
-
-/// Called once for the notch window. Fails on Windows 10 before 2004 and some remote / driver
-/// setups: a capture would then hold the pill's own clock and read as busy for good, so nothing
-/// under the pill is sampled there.
-pub fn leave_out_of_capture(own: HWND) {
-    match unsafe { SetWindowDisplayAffinity(own, WDA_EXCLUDEFROMCAPTURE) } {
-        Ok(()) => LEFT_OUT.store(true, Ordering::Relaxed),
-        Err(e) => crate::system::log(&format!("cannot leave the notch out of screen capture ({e}); not sampling under the pill")),
-    }
-}
-
-/// Back in screen capture while the user takes a screenshot; nothing under the pill is sampled
-/// until `leave_out_of_capture` again (the capture would hold the pill itself).
-pub fn show_in_capture(own: HWND) {
-    LEFT_OUT.store(false, Ordering::Relaxed);
-    let _ = unsafe { SetWindowDisplayAffinity(own, WDA_NONE) };
-}
-
-/// Edge pixels in a screen capture of the area under the pill.
-unsafe fn grab_edges(x: i32, y: i32, w: i32, h: i32) -> usize {
-    let screen = GetDC(None);
-    let mem = CreateCompatibleDC(Some(screen));
-    let mut bmi = BITMAPINFO::default();
-    bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-    bmi.bmiHeader.biWidth = w;
-    bmi.bmiHeader.biHeight = -h;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    let mut bits = std::ptr::null_mut();
-    let mut edges = 0;
-    if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
-        let old = SelectObject(mem, bmp.into());
-        if BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_ok() && !bits.is_null() {
-            let px = std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize);
-            edges = edge_pixels(px, w as usize);
-        }
-        SelectObject(mem, old);
-        let _ = DeleteObject(bmp.into());
-    }
-    let _ = DeleteDC(mem);
-    ReleaseDC(None, screen);
-    edges
+/// Does the window `r` reach under the pill's body (its resting height from the top of the monitor)?
+fn reaches_pill(r: RECT, center_x: i32, top: i32, scale: f32, pill_w: f32) -> bool {
+    let half = (body_half(pill_w) * scale) as i32;
+    let sh = (PILL_H * scale) as i32;
+    r.top <= top + sh && r.bottom > top + 3 && clip_span(center_x - half, center_x + half, r.left, r.right).is_some()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{body_half, clip_span, edge_pixels, grab_edges, is_busy, leave_out_of_capture};
+    use super::{body_half, clip_span, reaches_pill};
+    use windows::Win32::Foundation::RECT;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT { left, top, right, bottom }
+    }
 
     #[test]
-    fn busy_when_content_sits_under_the_pill() {
-        assert!(is_busy(Some(40)), "tab titles under the pill");
-        assert!(is_busy(Some(30)), "one tab edge running down the pill's height");
-        assert!(!is_busy(Some(11)), "a few stray pixels");
-        assert!(!is_busy(Some(0)), "empty title bar");
-        assert!(!is_busy(None), "the window does not reach under the pill");
+    fn a_window_reaches_the_pill_when_it_covers_the_top_edge_under_it() {
+        // 1920 px wide screen, the pill's centre at 960, 150 px pill (body half 61 px), scale 1.
+        let on = |r: RECT| reaches_pill(r, 960, 0, 1.0, 150.0);
+        assert!(on(rect(0, 0, 1920, 1040)), "maximized");
+        assert!(on(rect(0, 0, 960, 1040)), "snapped to the left half, reaching the pill's left half");
+        assert!(on(rect(900, 20, 1500, 900)), "a window whose top edge is inside the pill's height");
+        assert!(!on(rect(100, 120, 900, 700)), "a window below the pill");
+        assert!(!on(rect(0, 0, 500, 700)), "a window beside the pill");
+        assert!(!on(rect(0, -800, 1920, 2)), "a window that ends at the very top edge");
     }
 
     #[test]
@@ -252,33 +163,5 @@ mod tests {
         assert_eq!(clip_span(900, 1020, 1000, 1100), Some((1002, 1020)), "only a sliver");
         assert_eq!(clip_span(900, 1020, 1100, 1900), None, "window entirely beside the pill");
         assert_eq!(clip_span(900, 903, 0, 1920), None, "too narrow to tell anything");
-    }
-
-    #[test]
-    fn flat_is_quiet_stripes_are_busy() {
-        let w = 8;
-        let flat = vec![40u8; w * 2 * 4];
-        assert_eq!(edge_pixels(&flat, w), 0);
-        let stripes: Vec<u8> = (0..w * 2).flat_map(|i| if i % 2 == 0 { [0, 0, 0, 255] } else { [200, 200, 200, 255] }).collect();
-        assert_eq!(edge_pixels(&stripes, w), 2 * (w - 1));
-    }
-
-    #[test]
-    #[ignore = "timing: prints how long one sample of the screen under the pill blocks the UI thread"]
-    fn sample_under_pill_time() {
-        use windows::core::w;
-        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE};
-        unsafe {
-            // A visible topmost window over the sampled area, left out of capture like the notch.
-            let (n, (x, w, h)) = (20, (800, 188, 74));
-            let own = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST, w!("STATIC"), w!("Sample timing"), WS_POPUP | WS_VISIBLE, x, 0, w, h, None, None, None, None).unwrap();
-            leave_out_of_capture(own);
-            let t0 = std::time::Instant::now();
-            for _ in 0..n {
-                grab_edges(x, 0, w, h);
-            }
-            println!("screen sample: {:.2} ms", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
-            DestroyWindow(own).unwrap();
-        }
     }
 }

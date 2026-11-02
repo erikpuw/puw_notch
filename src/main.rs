@@ -46,7 +46,7 @@ use notch::{Mode, Notch, ALERT_MS, DWELL_MS, MAX_H, MAX_W, STATUS_MS};
 use music::WM_MUSIC;
 use i18n::tr;
 use audio::WM_VOLUME;
-use status::{WM_LOCKKEY, WM_SCREENSHOTKEY, WM_VOLUMEKEY};
+use status::{WM_LOCKKEY, WM_VOLUMEKEY};
 use notify::Toast;
 use weather::WM_WEATHER;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, NOTE_ROWS, PAGES};
@@ -60,10 +60,6 @@ const T_CHECK: usize = 2;
 const T_DWELL: usize = 3;
 const T_ALERT: usize = 4;
 const T_CARET: usize = 6;
-/// Ends the screenshot window: the notch leaves screen capture again.
-const T_CAPTURE: usize = 7;
-/// How long the notch stays in screen capture after a screenshot key (time to pick the area).
-const CAPTURE_MS: u32 = 30_000;
 /// Page switch morph length.
 const PAGE_MORPH_S: f32 = 0.32;
 /// Notifications kept on the Notifications page.
@@ -632,7 +628,7 @@ impl App {
         // Progress bar and lyric line move on their own while the panel is open.
         changed |= self.notch.mode == Mode::Expanded && self.track.as_ref().is_some_and(|t| t.playing);
 
-        // The capture includes our own window: sample only while the pill rests, still and alone.
+        // The verdict about what is under the pill only counts while the pill rests, still and alone.
         let sample = self.notch.is_settled_rest();
         self.rested = if sample { self.rested.saturating_add(1) } else { 0 };
         if self.rested == TRIM_TICKS {
@@ -1247,10 +1243,6 @@ impl App {
             WM_TIMER => match wp.0 {
                 T_ANIM => self.frame(),
                 T_CHECK => self.tick(),
-                T_CAPTURE => {
-                    unsafe { let _ = KillTimer(Some(self.hwnd), T_CAPTURE); }
-                    screen::leave_out_of_capture(self.hwnd);
-                }
                 T_DWELL => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
                     let inside = self.cursor_inside();
@@ -1424,11 +1416,6 @@ impl App {
             WM_LOCKKEY => {
                 let (name, on) = status::lock_state(wp.0);
                 self.show_banner(status_toast(tr("Bàn phím", "Keyboard"), name.to_string(), on_off(on), None, render::ICON_KEYBOARD), STATUS_MS);
-            }
-            // The notch shows in the screenshot being taken (and any taken in the next 30 s).
-            WM_SCREENSHOTKEY => {
-                screen::show_in_capture(self.hwnd);
-                unsafe { SetTimer(Some(self.hwnd), T_CAPTURE, CAPTURE_MS, None) };
             }
             // A volume key taken from Windows: apply it here; WM_VOLUME then shows it.
             WM_VOLUMEKEY => {
@@ -1762,7 +1749,6 @@ fn run() -> windows::core::Result<()> {
             Some(instance),
             None,
         )?;
-        screen::leave_out_of_capture(hwnd);
 
         let settings = system::load_settings();
         render::set_pages_on(settings.pages);
