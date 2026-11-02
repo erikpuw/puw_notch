@@ -499,7 +499,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
                 } else if card == Card::Water {
                     // The round + at the tile's bottom right, "later" beside it.
                     out.push((Button::Drink, r(x + card_w - 48.0, bottom - 44.0, 34.0, 34.0)));
-                    out.push((Button::Snooze, r(x + card_w - 100.0, bottom - 37.0, 48.0, 20.0)));
+                    out.push((Button::Snooze, r(x + card_w - 72.0, CARD_TOP + 28.0, 60.0, 18.0)));
                 } else {
                     out.push((Button::Stood, r(x + card_w - 48.0, bottom - 44.0, 34.0, 34.0)));
                 }
@@ -2736,21 +2736,21 @@ impl Renderer {
                                 }
                                 // The figure, the share of the day done, and the status line.
                                 let (big, frac, status) = if card == Card::Water {
-                                    let status = if !h.water_on { tr("Đang tắt", "Off").to_string() }
-                                        else if h.taken_ml >= h.goal_ml { tr("Đạt mục tiêu hôm nay", "Goal reached today").to_string() }
-                                        else if hv.minute_of_day < h.from_min { format!("{} {}", tr("Bắt đầu nhắc lúc", "Reminders start at"), health::hhmm(h.from_min)) }
+                                    let status = if !h.water_on { String::new() }
+                                        else if h.taken_ml >= h.goal_ml { tr("đạt mục tiêu", "goal reached").to_string() }
+                                        else if hv.minute_of_day < h.from_min { format!("{} {}", tr("bắt đầu", "starts"), health::hhmm(h.from_min)) }
                                         else {
                                             match h.next_drink(hv.now, hv.minute_of_day) {
-                                                Some(at) => format!("{} {}", tr("Nhắc lúc", "Next at"), health::hhmm((at - (hv.now - hv.minute_of_day as i64)).max(0) as u32)),
-                                                None => tr("Ngoài giờ nhắc", "Outside reminder hours").to_string(),
+                                                Some(at) => format!("{} {}", tr("nhắc lúc", "next at"), health::hhmm((at - (hv.now - hv.minute_of_day as i64)).max(0) as u32)),
+                                                None => tr("hết giờ nhắc", "after hours").to_string(),
                                             }
                                         };
                                     (h.taken_ml.to_string(), h.taken_ml as f32 / h.goal_ml.max(1) as f32, status)
                                 } else {
                                     let sat = h.sitting_minutes(hv.now);
-                                    let status = if !h.sit_on { tr("Đang tắt", "Off").to_string() }
-                                        else if h.sitting_since.is_none() { tr("Đang rời máy", "Away from the PC").to_string() }
-                                        else { format!("{} {} {}", tr("Nhắc sau", "Reminder in"), (h.sit_every_min as i64 - sat).max(0), tr("phút", "min")) };
+                                    let status = if !h.sit_on { String::new() }
+                                        else if h.sitting_since.is_none() { tr("đang rời máy", "away from the PC").to_string() }
+                                        else { format!("{} {} {}", tr("nhắc sau", "reminder in"), (h.sit_every_min as i64 - sat).max(0), tr("phút", "min")) };
                                     (sat.to_string(), sat as f32 / h.sit_every_min.max(1) as f32, status)
                                 };
                                 // The card's own picture, big and faint in its bottom right corner, cut by the tile.
@@ -2764,18 +2764,22 @@ impl Renderer {
                                 rt.PopAxisAlignedClip();
                                 // The figure large; under it what it is of and when the next reminder is.
                                 let (bx, by) = (x + 14.0 * s, (CARD_TOP + 30.0) * s);
-                                let lower = |t: &str| { let mut c = t.chars(); c.next().map_or(String::new(), |f| f.to_lowercase().chain(c).collect()) };
-                                let (unit_inline, caption) = if card == Card::Water {
-                                    (String::new(), format!("{} {} ml · {}", tr("trên", "of"), h.goal_ml, lower(&status)))
+                                // Two short lines: what the figure is of, then the status; a switched-off tile
+                                // leaves the second empty and says so under its gear.
+                                let off = status.is_empty();
+                                let (unit_inline, line1) = if card == Card::Water {
+                                    (String::new(), format!("{} {} ml", tr("trên", "of"), h.goal_ml))
                                 } else {
-                                    (tr("phút", "min").to_string(), format!("{} · {}", tr("đã ngồi", "sitting"), lower(&status)))
+                                    (tr("phút", "min").to_string(), tr("đã ngồi", "sitting").to_string())
                                 };
-                                text(&big, F_FIGURE, rect(bx, by, x + card_w * s - 12.0 * s, by + 36.0 * s), lead, grey(1.0, a))?;
+                                text(&big, F_FIGURE, rect(bx, by, x + card_w * s - 12.0 * s, by + 36.0 * s), lead, grey(if off { 0.5 } else { 1.0 }, a))?;
                                 if !unit_inline.is_empty() {
                                     let bw = width(&big, F_FIGURE);
                                     text(&unit_inline, F_BODY, rect(bx + bw + 5.0 * s, by + 8.0 * s, x + card_w * s - 12.0 * s, by + 32.0 * s), lead, grey(0.6, a))?;
                                 }
-                                text(&caption, F_LABEL, rect(bx, by + 38.0 * s, x + card_w * s - 10.0 * s, by + 56.0 * s), lead, grey(0.6, a))?;
+                                let line_r = x + (card_w - 54.0) * s;
+                                text(&line1, F_LABEL, rect(bx, by + 38.0 * s, line_r, by + 54.0 * s), lead, grey(0.6, a))?;
+                                text(&status, F_LABEL, rect(bx, by + 54.0 * s, line_r, by + 70.0 * s), lead, grey(0.75, a))?;
                                 // The day's progress as a thin bar along the tile's bottom, in its colour.
                                 let (track_l, track_r, track_y) = (bx, x + (card_w - 64.0) * s, (bottom - 16.0) * s);
                                 let track = |right: f32| rounded(rect(track_l, track_y, right, track_y + 4.0 * s), 2.0 * s);
@@ -2784,7 +2788,7 @@ impl Renderer {
                                 // The round action button: + for a drink, a tick for having stood up.
                                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                                 if let Some(pb) = rect_of(ab) {
-                                    let k = if hovered == Some(ab) { 1.0 } else { 0.9 };
+                                    let k = (if hovered == Some(ab) { 1.0 } else { 0.9 }) * if off { 0.6 } else { 1.0 };
                                     let c = D2D1_ELLIPSE { point: Vector2 { X: (pb.left + pb.right) / 2.0, Y: (pb.top + pb.bottom) / 2.0 }, radiusX: (pb.right - pb.left) / 2.0, radiusY: (pb.bottom - pb.top) / 2.0 };
                                     rt.FillEllipse(&c, &self.brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
                                     // Dark on both: white on the orange is only 3.1:1. The sign is drawn as strokes of
@@ -2803,11 +2807,13 @@ impl Renderer {
                                         rt.DrawLine(at(-2.0, 4.5), at(6.5, -4.5), &ink, w, &self.round);
                                     }
                                 }
-                                if let Some(sb) = rect_of(Button::Snooze) {
-                                    if card == Card::Water {
-                                        let hot = hovered == Some(Button::Snooze);
-                                        text(tr("Để sau", "Later"), F_LABEL, sb, center, grey(if hot { 1.0 } else { 0.6 }, a))?;
-                                    }
+                                // Under the gear: "Later" for a water reminder, or that the tile is off.
+                                let under = rect(x + (card_w - 72.0) * s, (CARD_TOP + 28.0) * s, x + (card_w - 12.0) * s, (CARD_TOP + 46.0) * s);
+                                if off {
+                                    text(tr("Đang tắt", "Off"), F_LABEL, under, trail, grey(0.55, a))?;
+                                } else if card == Card::Water {
+                                    let hot = hovered == Some(Button::Snooze);
+                                    text(tr("Để sau", "Later"), F_LABEL, under, trail, grey(if hot { 1.0 } else { 0.6 }, a))?;
                                 }
                             }
                         }
