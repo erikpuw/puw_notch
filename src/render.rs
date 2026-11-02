@@ -2027,12 +2027,27 @@ impl Renderer {
                             text(label, F_LABEL, b, center, ink)?;
                         }
                     }
-                    text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
-                    text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
+                    // A status banner (the icon says what it is) is just its lines, centred on the
+                    // icon; a notification names its app above the title.
+                    let status = t.icon.is_some() && t.choices.is_empty();
+                    let mid = nh / 2.0 + 2.0 * s;
+                    let (title_top, body_top, bar_y) = if t.level.is_some() {
+                        (mid - 15.0 * s, 0.0, mid + 9.0 * s)
+                    } else if t.body.is_empty() {
+                        (mid - 9.0 * s, 0.0, 0.0)
+                    } else {
+                        (mid - 17.0 * s, mid + 1.0 * s, 0.0)
+                    };
+                    if status {
+                        text(&t.title, F_TITLE, rect(tl, title_top, tr, title_top + 18.0 * s), lead, grey(1.0, a))?;
+                    } else {
+                        text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
+                        text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
+                    }
                     match t.level {
                         Some(level) => {
                             let th = 5.0 * s;
-                            let my = 50.0 * s;
+                            let my = bar_y;
                             let bar = |right: f32| rounded(rect(tl, my - th / 2.0, right, my + th / 2.0), th / 2.0);
                             rt.FillRoundedRectangle(&bar(tr), &self.brush(grey(0.25, a))?);
                             rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &self.brush(grey(1.0, a))?);
@@ -2040,7 +2055,7 @@ impl Renderer {
                         // A question with buttons: wraps over up to 3 lines, the buttons below.
                         None if !t.choices.is_empty() => text(&t.body, F_BODY_WRAP, rect(tl, notch::BANNER_TEXT_TOP * s, tr, (nh - 36.0 * s).max(notch::BANNER_TEXT_TOP * s + notch::BANNER_LINE_H * s)), lead, grey(0.75, a))?,
                         // Status banner (icon): one line under the title.
-                        None if t.icon.is_some() => text(&t.body, F_BODY, rect(tl, 42.0 * s, tr, 58.0 * s), lead, grey(0.75, a))?,
+                        None if t.icon.is_some() => text(&t.body, F_BODY, rect(tl, body_top, tr, body_top + 16.0 * s), lead, grey(0.75, a))?,
                         // Notification: wraps over the banner's height (sized to its lines, at most
                         // `BANNER_MAX_LINES`); what still does not fit ends with "…".
                         None => {

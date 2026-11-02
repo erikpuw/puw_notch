@@ -1604,8 +1604,8 @@ fn connection_toast(e: Event) -> Toast {
     match e {
         Event::Radio(RadioType::Wifi, on) => status_toast("Wi-Fi", format!("{} Wi-Fi", if on { tr("Đã bật", "Turned on") } else { tr("Đã tắt", "Turned off") }), "", None, if on { render::ICON_WIFI } else { render::ICON_WIFI_OFF }),
         Event::Radio(RadioType::Bluetooth, on) => status_toast("Bluetooth", format!("{} Bluetooth", if on { tr("Đã bật", "Turned on") } else { tr("Đã tắt", "Turned off") }), "", None, render::ICON_BT),
-        Event::Radio(RadioType::Mobile, on) => status_toast(tr("Mạng di động", "Mobile data"), on_off(on).to_string(), "", None, render::ICON_MOBILE),
-        Event::Airplane(on) => status_toast(tr("Chế độ máy bay", "Airplane mode"), on_off(on).to_string(), "", None, render::ICON_AIRPLANE),
+        Event::Radio(RadioType::Mobile, on) => status_toast(tr("Mạng di động", "Mobile data"), format!("{} {}", tr("Mạng di động", "Mobile data"), on_off(on)), "", None, render::ICON_MOBILE),
+        Event::Airplane(on) => status_toast(tr("Chế độ máy bay", "Airplane mode"), format!("{} {}", tr("Chế độ máy bay", "Airplane mode"), on_off(on)), "", None, render::ICON_AIRPLANE),
         Event::Net(Net::Online { name, wifi }) => {
             let (source, icon) = if wifi { ("Wi-Fi", render::ICON_WIFI) } else { (tr("Mạng", "Network"), render::ICON_ETHERNET) };
             status_toast(source, format!("{} {name}", tr("Đã kết nối", "Connected to")), "", None, icon)
@@ -1632,8 +1632,8 @@ fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
     match e {
         Plugged => battery(tr("Đang sạc", "Charging"), tr("Đã cắm sạc", "Charger connected"), render::ICON_PLUG),
         Unplugged => battery(tr("Đã rút sạc", "Unplugged"), tr("Đang dùng pin", "On battery"), render::ICON_UNPLUG),
-        SaverOn => status_toast(tr("Tiết kiệm pin", "Battery saver"), on_off(true).to_string(), "", None, render::ICON_SAVER),
-        SaverOff => status_toast(tr("Tiết kiệm pin", "Battery saver"), on_off(false).to_string(), "", None, render::ICON_SAVER),
+        SaverOn => status_toast(tr("Tiết kiệm pin", "Battery saver"), format!("{} {}", tr("Tiết kiệm pin", "Battery saver"), on_off(true)), "", None, render::ICON_SAVER),
+        SaverOff => status_toast(tr("Tiết kiệm pin", "Battery saver"), format!("{} {}", tr("Tiết kiệm pin", "Battery saver"), on_off(false)), "", None, render::ICON_SAVER),
         Low => battery(tr("Pin yếu", "Low battery"), tr("Nên cắm sạc", "Plug in soon"), render::ICON_BATTERY_LOW),
         Critical => battery(tr("Pin rất yếu", "Battery critical"), tr("Cắm sạc ngay", "Plug in now"), render::ICON_BATTERY_LOW),
         Full => battery(tr("Đã sạc đầy", "Fully charged"), tr("Có thể rút sạc", "You can unplug"), render::ICON_BATTERY),
