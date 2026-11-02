@@ -420,7 +420,9 @@ impl App {
         self.last_frame = now;
         // A frame that came this late while moving is what the eye reads as a stutter: leave a line
         // (at most one every 10 s) so a report of one says how late and in which mode.
-        if gap > 0.08 && self.animating && self.last_gap_log.is_none_or(|t| t.elapsed().as_secs() >= 10) {
+        // The equaliser alone comes by timer every BARS_FRAME_MS: a few timer steps of slack are not a stutter.
+        let limit = if self.frame_ms == BARS_FRAME_MS { 0.125 } else { 0.08 };
+        if gap > limit && self.animating && self.last_gap_log.is_none_or(|t| t.elapsed().as_secs() >= 10) {
             self.last_gap_log = Some(now);
             system::log(&format!("late frame: {:.0} ms (mode {:?}, page {})", gap * 1000.0, self.notch.mode, self.page.name()));
         }
