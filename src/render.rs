@@ -539,7 +539,7 @@ pub fn banner_close(cx: f32, scale: f32, width: f32, pill: bool) -> D2D_RECT_F {
 /// centred on `cx`, one per label in order, along the bottom edge and right-aligned.
 pub fn approve_buttons(cx: f32, scale: f32, width: f32, height: f32, labels: &[String]) -> Vec<D2D_RECT_F> {
     let (top, bottom) = ((height - 34.0) * scale, (height - 8.0) * scale);
-    let gap = 8.0 * scale;
+    let gap = 4.0 * scale;
     let mut right = cx + (width / 2.0 - 14.0) * scale;
     let mut out: Vec<D2D_RECT_F> = labels.iter().rev().map(|l| {
         let w = (24.0 + 7.0 * l.chars().count() as f32).clamp(56.0, 120.0) * scale;
