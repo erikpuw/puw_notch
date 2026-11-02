@@ -603,6 +603,7 @@ impl App {
                 self.set_hidden(false);
                 unsafe { SetTimer(Some(self.hwnd), T_SETTLE, SETTLE_MS, None) };
             }
+            screen::Check::Unknown => self.set_hidden(false),
             screen::Check::Busy(busy) => {
                 self.set_hidden(false);
                 if sample {

@@ -164,6 +164,10 @@ pub fn log_open() {
 /// before anything shows (a start with Windows) can be traced. Best effort, never fails.
 pub fn log(line: &str) {
     use std::io::Write;
+    // Tests build renderers and notches too: they must not write into the log of the app that runs.
+    if cfg!(test) {
+        return;
+    }
     let Some(p) = log_path() else { return };
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);

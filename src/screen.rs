@@ -38,6 +38,8 @@ pub enum Check {
     /// Normal desktop; `true` when the pill sits on a tab or a button of the foreground window.
     /// Not checked -> `false`, and the caller ignores it.
     Busy(bool),
+    /// The foreground window did not answer in time: keep what the notch shows, look again at the next tick.
+    Unknown,
     /// The foreground window just changed, moved or resized (maximize / restore animation):
     /// no verdict until it holds still.
     Settling,
@@ -173,7 +175,7 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         }
         let half = (body_half(pill_w) * scale) as i32;
         let y = monitor.top + (PILL_H * scale / 2.0) as i32;
-        Check::Busy(covers_something(fg, center_x, half, y).unwrap_or(false))
+        covers_something(fg, center_x, half, y).map_or(Check::Unknown, Check::Busy)
     }
 }
 
