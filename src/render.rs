@@ -2062,8 +2062,8 @@ impl Renderer {
                         for (k, (b, label)) in approve_buttons(cx, s, v.size[0], v.size[1], &t.choices).into_iter().zip(&t.choices).enumerate() {
                             let (fill, ink) = if k == 0 { (color(GREEN.0, GREEN.1, GREEN.2, a), grey(0.0, a)) } else { (grey(0.22, a), grey(1.0, a)) };
                             rt.FillRoundedRectangle(&rounded(b, (b.bottom - b.top) / 2.0), &self.brush(fill)?);
-                            // The font sits a little low in its line box: lift the label to the pill's middle.
-                            text(label, F_LABEL, rect(b.left, b.top - 2.0 * s, b.right, b.bottom - 2.0 * s), center, ink)?;
+                            // The font sits a little low in its line box: lift the label by a pixel to the pill's middle.
+                            text(label, F_LABEL, rect(b.left, b.top - 1.0 * s, b.right, b.bottom - 1.0 * s), center, ink)?;
                         }
                     }
                     // A status banner (the icon says what it is) is just its lines, centred on the
