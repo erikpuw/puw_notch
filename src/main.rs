@@ -713,6 +713,11 @@ impl App {
         if self.hidden || !shown {
             return false;
         }
+        // A status banner without the big figure (battery, Bluetooth) is as wide as its lines.
+        if t.icon.is_some() && t.choices.is_empty() && t.badge.is_none() {
+            let width = self.renderer.status_banner_width(&t.title, &t.body, self.scale);
+            self.notch.set_alert_width(width);
+        }
         self.banner = Some(t);
         self.banner_at = Instant::now();
         unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };

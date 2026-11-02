@@ -168,6 +168,8 @@ pub struct Notch {
     pub live: bool,
     /// Lines of text in the current notification banner (0 = status banner), see `alert_size`.
     alert_lines: u8,
+    /// Width of a status banner that fits its text (0 = the standard width).
+    alert_width: f32,
     /// The banner is a question with buttons (wider, see `alert_size_choice`).
     alert_choice: bool,
     /// The lyrics show beside the player: the open panel is LYRICS_EXTRA_W wider.
@@ -182,7 +184,7 @@ pub struct Notch {
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_choice: false, wide: false, panel: [target(Mode::Expanded, false)[0], target(Mode::Expanded, false)[1]], obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_width: 0.0, alert_choice: false, wide: false, panel: [target(Mode::Expanded, false)[0], target(Mode::Expanded, false)[1]], obstructed: false, clear_checks: 0, busy_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
         for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
@@ -262,8 +264,14 @@ impl Notch {
         }
         self.mode = Mode::Alert;
         self.alert_lines = lines;
+        self.alert_width = 0.0;
         self.alert_choice = false;
         true
+    }
+
+    /// The status banner just shown is `width` wide, to fit its lines.
+    pub fn set_alert_width(&mut self, width: f32) {
+        self.alert_width = width;
     }
 
     /// Banner of a question with buttons and `lines` lines of text. Returns true if shown.
@@ -276,7 +284,11 @@ impl Notch {
     /// Size the springs head for right now.
     fn goal(&self) -> [f32; 3] {
         if self.mode == Mode::Alert {
-            return if self.alert_choice { alert_size_choice(self.alert_lines) } else { alert_size(self.alert_lines) };
+            let mut size = if self.alert_choice { alert_size_choice(self.alert_lines) } else { alert_size(self.alert_lines) };
+            if self.alert_width > 0.0 {
+                size[0] = self.alert_width;
+            }
+            return size;
         }
         let mut t = target(self.mode, self.live);
         if self.mode == Mode::Expanded {

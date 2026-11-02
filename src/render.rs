@@ -595,6 +595,7 @@ const F_TINY_ICON: usize = 5;
 const F_BODY_WRAP: usize = 6;
 /// Text column of a notification banner: its 420 px width minus icon (18 + 36 + 12) and right pad 22.
 const BANNER_TEXT_W: f32 = 420.0 - 88.0;
+const BANNER_MIN_W: f32 = 220.0;
 const F_SMALL_ICON: usize = 7;
 const F_BIG: usize = 8;
 /// Icon of a banner: larger than the 16 px of the buttons (the banner has no ring around it).
@@ -1588,6 +1589,24 @@ impl Renderer {
 
     /// Draw one frame and push it to `hwnd` placed at screen (x, y), window size (w, h) device px.
     /// Returns true while an icon morph is still playing (the caller keeps frames coming).
+    /// Width (design px) a status banner needs to hold its title and body beside the icon, never
+    /// narrower than `BANNER_MIN_W` (the level bar of volume and brightness needs room).
+    pub fn status_banner_width(&mut self, title: &str, body: &str, scale: f32) -> f32 {
+        let Ok(fonts) = self.fonts(scale) else { return notch::alert_size(0)[0] };
+        let line = |text: &str, font: usize| -> f32 {
+            let u: Vec<u16> = text.encode_utf16().collect();
+            let mut m = DWRITE_TEXT_METRICS::default();
+            unsafe {
+                match self.dw.CreateTextLayout(&u, &fonts[font], 10_000.0, 40.0) {
+                    Ok(layout) if layout.GetMetrics(&mut m).is_ok() => m.widthIncludingTrailingWhitespace / scale,
+                    _ => 0.0,
+                }
+            }
+        };
+        // Left margin, icon and its gap, the text, the right margin.
+        (18.0 + 36.0 + 12.0 + line(title, F_TITLE).max(line(body, F_BODY)).ceil() + 22.0).clamp(BANNER_MIN_W, 420.0)
+    }
+
     /// Lines `text` wraps to in a notification banner (its body font and width, at `scale`).
     pub fn banner_lines(&mut self, text: &str, scale: f32, with_image: bool) -> u32 {
         let Ok(fonts) = self.fonts(scale) else { return 1 };
