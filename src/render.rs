@@ -2060,14 +2060,12 @@ impl Renderer {
                     }
                     if !t.choices.is_empty() {
                         for (k, (b, label)) in approve_buttons(cx, s, v.size[0], v.size[1], &t.choices).into_iter().zip(&t.choices).enumerate() {
-                            // The first answer is the filled one, the others are outlined, and the way out
-                            // (the last of three) is just text.
-                            let ghost = k > 0 && k + 1 == t.choices.len() && t.choices.len() > 2;
-                            let ink = if k == 0 { color(0.02, 0.13, 0.04, a) } else if ghost { grey(0.6, a) } else { grey(1.0, a) };
+                            // The first answer is the filled one, the others are outlined.
+                            let ink = if k == 0 { color(0.02, 0.13, 0.04, a) } else { grey(1.0, a) };
                             let r = (b.bottom - b.top) / 2.0;
                             if k == 0 {
                                 rt.FillRoundedRectangle(&rounded(b, r), &self.brush(color(GREEN.0, GREEN.1, GREEN.2, a))?);
-                            } else if !ghost {
+                            } else {
                                 let edge = 0.5 * s;
                                 rt.DrawRoundedRectangle(&rounded(rect(b.left + edge, b.top + edge, b.right - edge, b.bottom - edge), r - edge), &self.brush(grey(0.28, a))?, 1.0 * s, None);
                             }
