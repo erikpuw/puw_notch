@@ -1946,7 +1946,7 @@ impl Renderer {
             let mut icon_busy = false;
             if v.mode == Mode::Alert {
                 if let Some(t) = v.banner {
-                    let a = fade(44.0, 18.0);
+                    let a = fade(30.0, 18.0);
                     // Icon on the left, text beside it. Status and device icons, and a notification's
                     // bell, are line icons whose parts move for a moment after the banner appears
                     // (icons.rs); the water drop hops.
@@ -2030,7 +2030,7 @@ impl Renderer {
                     // A status banner (the icon says what it is) is just its lines, centred on the
                     // icon; a notification names its app above the title.
                     let status = t.icon.is_some() && t.choices.is_empty();
-                    let mid = nh / 2.0 + 2.0 * s;
+                    let mid = nh / 2.0;
                     let (title_top, body_top, bar_y) = if t.level.is_some() {
                         (mid - 15.0 * s, 0.0, mid + 9.0 * s)
                     } else if t.body.is_empty() {

@@ -30,7 +30,7 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
         (Mode::Peek, true) => [232.0, 34.0, 15.0],
         (Mode::PeekMini, _) => [72.0, 8.0, 4.0],
         (Mode::Expanded, _) => [480.0, 186.0, 28.0],
-        (Mode::Alert, _) => [360.0, 64.0, 22.0],
+        (Mode::Alert, _) => [360.0, 52.0, 22.0],
         (Mode::Hidden, _) => [0.0; 3],
     }
 }
