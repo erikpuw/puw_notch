@@ -45,7 +45,7 @@ use connectivity::{Event, Net, RadioType, WM_CONN};
 use notch::{Mode, Notch, ALERT_MS, DWELL_MS, MAX_H, MAX_W, STATUS_MS};
 use music::WM_MUSIC;
 use i18n::tr;
-use audio::WM_VOLUME;
+use audio::{WM_MIC, WM_VOLUME};
 use status::{WM_LOCKKEY, WM_VOLUMEKEY};
 use screen::WM_SCREENEVENT;
 use notify::Toast;
@@ -171,6 +171,8 @@ struct App {
     last_brightness: Option<u8>,
     audio: Option<audio::Audio>,
     mic_muted: Option<bool>,
+    /// Ticks so far, to look at the default audio devices every few.
+    audio_ticks: u8,
     music: music::Music,
     /// The Limits page's readings, what was already announced, alerts waiting for a free moment,
     /// and the app tab (followed by itself until the user picks one).
@@ -515,24 +517,26 @@ impl App {
         (x - cx).abs() <= half && y >= 0.0 && y <= h + self.top_px()
     }
 
-    /// Keep the speaker callback on the default device and re-read the mic. A mic mute change
-    /// from anywhere (laptop mic key, Windows settings, a call app) gets a banner.
+    /// Keep the speaker and mic callbacks on the default devices (a few seconds late is fine, so not on
+    /// every tick); the mic's state is read once when it is found, `WM_MIC` reports the rest.
     fn refresh_audio(&mut self) {
         let hwnd = self.hwnd;
         let Some(a) = &mut self.audio else { return };
         if a.watch_speaker(hwnd) {
             connectivity::nudge();
         }
-        let now = a.mic_muted();
-        let mic_flip = match (self.mic_muted, now) {
-            (Some(before), Some(after)) if before != after => Some(after),
-            _ => None,
-        };
-        self.mic_muted = now;
-        if let Some(muted) = mic_flip {
-            let (title, icon) = if muted { (tr("Đã tắt mic", "Mic off"), render::ICON_MIC_OFF) } else { (tr("Đã bật mic", "Mic on"), render::ICON_MIC) };
-            self.show_banner(status_toast("Mic", title.to_string(), "", None, icon), STATUS_MS);
+        if a.watch_mic(hwnd) || self.mic_muted.is_none() {
+            self.mic_muted = a.mic_muted();
         }
+    }
+
+    /// The default mic was muted or unmuted, from anywhere (laptop mic key, Windows settings, a call app).
+    fn mic_changed(&mut self, muted: bool) {
+        if self.mic_muted.replace(muted) == Some(muted) {
+            return;
+        }
+        let (title, icon) = if muted { (tr("Đã tắt mic", "Mic off"), render::ICON_MIC_OFF) } else { (tr("Đã bật mic", "Mic on"), render::ICON_MIC) };
+        self.show_banner(status_toast("Mic", title.to_string(), "", None, icon), STATUS_MS);
     }
 
     /// A USB device came or went: a banner with its name (once per plug, none for root hubs).
@@ -656,7 +660,10 @@ impl App {
             self.health.new_day(today);
             self.clamp_scroll();
         }
-        self.refresh_audio();
+        self.audio_ticks = self.audio_ticks.wrapping_add(1);
+        if self.audio_ticks % 4 == 0 {
+            self.refresh_audio();
+        }
         mark(1, &mut lap);
         self.refresh_music();
         self.refresh_robot();
@@ -1458,6 +1465,9 @@ impl App {
                     self.redraw();
                 }
             }
+            WM_MIC => self.mic_changed(lp.0 != 0),
+            // Charger plugged or unplugged, battery percent changed: read the battery now.
+            WM_POWERBROADCAST if wp.0 as u32 == PBT_APMPOWERSTATUSCHANGE => system::battery_changed(),
             WM_POWERBROADCAST if wp.0 as u32 == PBT_POWERSETTINGCHANGE => {
                 let setting = unsafe { (lp.0 as *const POWERBROADCAST_SETTING).as_ref() };
                 let level = setting.and_then(|ps| {
@@ -1803,6 +1813,7 @@ fn run() -> windows::core::Result<()> {
             last_brightness: None,
             audio: audio::Audio::new(),
             mic_muted: None,
+            audio_ticks: 0,
             music: music::Music::start(hwnd),
             usage: usage::Monitor::start(hwnd),
             approve: {

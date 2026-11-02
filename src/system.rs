@@ -115,24 +115,36 @@ pub fn battery() -> Option<Battery> {
     Some(Battery { percent: s.BatteryLifePercent.min(100), charging: s.ACLineStatus == 1, saver: saver_on(s.SystemStatusFlag, effective_overlay()) })
 }
 
+type BatteryCache = (std::sync::Arc<std::sync::Mutex<Option<Battery>>>, std::thread::Thread);
+static BATTERY: std::sync::OnceLock<BatteryCache> = std::sync::OnceLock::new();
+
 /// The battery as the last look found it. The look (`battery`) asks the power service, which can
-/// take 100 ms or more while the power mode or battery saver changes: it is taken once a second
-/// on its own thread, so the window never waits for it.
+/// take 100 ms or more while the power mode or battery saver changes: it is taken on its own thread,
+/// so the window never waits for it. Windows reports the charger and the percent (`battery_changed`
+/// wakes the thread at once); the thread also looks every 5 s for what Windows does not report.
 pub fn battery_cached() -> Option<Battery> {
-    static CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Option<Battery>>>> = std::sync::OnceLock::new();
-    let cell = CACHE.get_or_init(|| {
+    let (cell, _) = BATTERY.get_or_init(|| {
         let cell = std::sync::Arc::new(std::sync::Mutex::new(battery()));
         let mine = cell.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+        let thread = std::thread::spawn(move || loop {
+            std::thread::park_timeout(std::time::Duration::from_secs(5));
             let now = battery();
             if let Ok(mut b) = mine.lock() {
                 *b = now;
             }
-        });
-        cell
+        })
+        .thread()
+        .clone();
+        (cell, thread)
     });
     cell.lock().map_or(None, |b| *b)
+}
+
+/// Windows says the charger or the battery percent changed: look now.
+pub fn battery_changed() {
+    if let Some((_, thread)) = BATTERY.get() {
+        thread.unpark();
+    }
 }
 
 fn settings_path() -> Option<PathBuf> {
