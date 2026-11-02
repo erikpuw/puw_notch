@@ -4,7 +4,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
@@ -79,21 +78,13 @@ struct Job {
     h: i32,
 }
 
-/// What a read found, for the window (and the place it stood) it was made of; `None` = no picture came.
+/// What a read found, for the window (and the place it stood) it was made of.
 struct Verdict {
     hwnd: isize,
     rect: RECT,
-    busy: Option<bool>,
-    at: Instant,
-    /// How many times this window has been read where it stands.
-    reads: u32,
+    busy: bool,
 }
 
-/// A window is read where it stands, and again after 2, 4, 8 ... 64 s (then every 64 s): a window that has
-/// just opened has not drawn its tabs yet, and tabs come and go later. A window that holds still costs
-/// next to nothing; a new window or a move starts the series again.
-/// The caller waits up to 8 x 5 ms for a read: a window draws itself in about 20 ms, so the verdict is usually
-/// there at once; an app that hangs is left to the reader thread and answered on a later check.
 static VERDICT: Mutex<Option<Verdict>> = Mutex::new(None);
 static PENDING: AtomicBool = AtomicBool::new(false);
 static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
@@ -105,10 +96,12 @@ fn reader() -> &'static mpsc::Sender<Job> {
         let (tx, rx) = mpsc::channel::<Job>();
         std::thread::spawn(move || {
             for job in rx {
-                let busy = unsafe { read_band(&job) };
+                let found = unsafe { read_band(&job) };
                 if let Ok(mut v) = VERDICT.lock() {
-                    let reads = v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect).map_or(0, |v| v.reads) + 1;
-                    *v = Some(Verdict { hwnd: job.hwnd, rect: job.rect, busy, at: Instant::now(), reads });
+                    // A picture that did not come (the window would not draw, or drew nothing) says nothing:
+                    // the verdict before it for this window stands.
+                    let before = v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect).map(|v| v.busy);
+                    *v = Some(Verdict { hwnd: job.hwnd, rect: job.rect, busy: found.or(before).unwrap_or(false) });
                 }
                 PENDING.store(false, Ordering::Relaxed);
             }
@@ -157,25 +150,14 @@ unsafe fn read_band(job: &Job) -> Option<bool> {
     busy
 }
 
-/// The verdict for this window where it stands now: read when it has none or the next read of the series is
-/// due (waiting a moment for the first), one read at a time.
-fn busy_under(hwnd: isize, rect: RECT, x: i32, y: i32, w: i32, h: i32) -> bool {
-    let known = |v: &Option<Verdict>| v.as_ref().filter(|v| v.hwnd == hwnd && v.rect == rect).map(|v| (v.busy, v.at.elapsed(), v.reads));
-    let look = || known(&VERDICT.lock().unwrap_or_else(|e| e.into_inner()));
-    let stale = look().is_none_or(|(_, age, reads)| age >= Duration::from_secs(1 << reads.clamp(1, 6)));
-    if stale && !PENDING.swap(true, Ordering::Relaxed) {
-        if reader().send(Job { hwnd, rect, x, y, w, h }).is_ok() {
-            for _ in 0..8 {
-                std::thread::sleep(Duration::from_millis(5));
-                if !PENDING.load(Ordering::Relaxed) {
-                    break;
-                }
-            }
-        } else {
-            PENDING.store(false, Ordering::Relaxed);
-        }
+/// The verdict for this window where it stands now (false until the read is back). A window is read once,
+/// when it is the foreground window or its place changes, as Nusa does; nothing reads it again meanwhile.
+fn busy_under(job: Job) -> bool {
+    let known = VERDICT.lock().ok().and_then(|v| v.as_ref().filter(|v| v.hwnd == job.hwnd && v.rect == job.rect).map(|v| v.busy));
+    if known.is_none() && !PENDING.swap(true, Ordering::Relaxed) && reader().send(job).is_err() {
+        PENDING.store(false, Ordering::Relaxed);
     }
-    look().and_then(|(busy, ..)| busy).unwrap_or(false)
+    known.unwrap_or(false)
 }
 
 /// Is an ordinary (not topmost) visible window stacked above `own`? A topmost window is never
@@ -264,7 +246,7 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         let Some((from, to)) = clip_span(center_x - half, center_x + half, r.left, r.right).filter(|_| h > 3) else {
             return Check::Busy(false);
         };
-        Check::Busy(busy_under(fg.0 as isize, r, from - r.left, y - r.top, to - from, h))
+        Check::Busy(busy_under(Job { hwnd: fg.0 as isize, rect: r, x: from - r.left, y: y - r.top, w: to - from, h }))
     }
 }
 
