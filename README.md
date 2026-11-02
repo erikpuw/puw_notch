@@ -8,7 +8,7 @@
 
 <p align="center">
   Nhạc, việc, thông báo, thời tiết và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
-  Rust + Direct2D vẽ trên GPU qua DirectComposition, exe ~755 KB, không WebView.
+  Rust + Direct2D vẽ trên GPU qua DirectComposition, exe ~754 KB, không WebView.
 </p>
 
 <p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a></p>
@@ -117,7 +117,7 @@ cargo build --release
 target/release/puw_notch.exe
 ```
 
-Bản release dùng `opt-level = "z"` (ưu tiên nhỏ gọn: exe ~755 KB thay vì ~810 KB, thời gian vẽ mỗi khung hình đo được không đổi). `build.rs` gắn icon và thông tin phiên bản (VERSIONINFO: tên, công ty, version lấy từ `Cargo.toml`) vào exe, xem ở Properties → Details. Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`. App ghi lúc khởi động, thoát, lỗi, lúc tự ẩn, lúc panel mở/đóng, khung hình trễ, nhịp chậm và GPU đang dùng để vẽ vào `%APPDATA%\PuwNotch\notch.log` (tối đa 64 KB, bắt đầu lại khi đổi phiên bản), để biết vì sao app không chạy khi khởi động cùng Windows.
+Bản release dùng `opt-level = "z"` (ưu tiên nhỏ gọn: exe ~754 KB thay vì ~810 KB, thời gian vẽ mỗi khung hình đo được không đổi). `build.rs` gắn icon và thông tin phiên bản (VERSIONINFO: tên, công ty, version lấy từ `Cargo.toml`) vào exe, xem ở Properties → Details. Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`. App ghi lúc khởi động, thoát, lỗi, lúc tự ẩn, lúc panel mở/đóng, khung hình trễ, nhịp chậm và GPU đang dùng để vẽ vào `%APPDATA%\PuwNotch\notch.log` (tối đa 64 KB, bắt đầu lại khi đổi phiên bản), để biết vì sao app không chạy khi khởi động cùng Windows.
 
 Thông báo đọc từ trung tâm thông báo Windows, nên **thông báo Windows phải đang bật**. Muốn chỉ thấy thông báo trên notch, không hiện banner ở góc phải màn hình: bật **Không làm phiền** của Windows (Cài đặt → Hệ thống → Thông báo). Windows vẫn giữ thông báo trong trung tâm thông báo nên notch vẫn đọc và hiện banner như bình thường. Windows chưa cho app khác tự tắt banner của từng app đang chạy, nên việc này do bạn bật.
 
