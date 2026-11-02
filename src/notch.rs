@@ -45,7 +45,7 @@ pub const BANNER_TEXT_TOP: f32 = 43.0;
 /// Wider than the status banner and as tall as its text, capped at `BANNER_MAX_LINES`.
 /// Banner of a question with buttons: `lines` (1 to 3) lines of its text, then a row of buttons.
 pub fn alert_size_choice(lines: u8) -> [f32; 3] {
-    [520.0, BANNER_TEXT_TOP + lines.clamp(1, 3) as f32 * BANNER_LINE_H + 38.0, 24.0]
+    [520.0, BANNER_TEXT_TOP + lines.clamp(1, 3) as f32 * BANNER_LINE_H + 42.0, 24.0]
 }
 
 pub fn alert_size(lines: u8) -> [f32; 3] {

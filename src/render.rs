@@ -538,7 +538,7 @@ pub fn banner_close(cx: f32, scale: f32, width: f32, pill: bool) -> D2D_RECT_F {
 /// The buttons of an approval banner (window px) for a banner `width` x `height` px (logical)
 /// centred on `cx`, one per label in order, along the bottom edge and right-aligned.
 pub fn approve_buttons(cx: f32, scale: f32, width: f32, height: f32, labels: &[String]) -> Vec<D2D_RECT_F> {
-    let (top, bottom) = ((height - 30.0) * scale, (height - 8.0) * scale);
+    let (top, bottom) = ((height - 34.0) * scale, (height - 8.0) * scale);
     let gap = 8.0 * scale;
     let mut right = cx + (width / 2.0 - 14.0) * scale;
     let mut out: Vec<D2D_RECT_F> = labels.iter().rev().map(|l| {
@@ -1975,7 +1975,7 @@ impl Renderer {
                     let status = t.icon.is_some() && t.choices.is_empty();
                     // A question's icon sits level with its text (app name down to the last line), not the
                     // banner with its buttons.
-                    let icon_mid = if t.choices.is_empty() { nh / 2.0 + if status { 0.0 } else { 2.0 * s } } else { (10.0 + v.size[1] - 38.0) / 2.0 * s };
+                    let icon_mid = if t.choices.is_empty() { nh / 2.0 + if status { 0.0 } else { 2.0 * s } } else { (10.0 + v.size[1] - 42.0) / 2.0 * s };
                     let (ix, iy) = (l + 18.0 * s, icon_mid - d / 2.0);
                     let icon = t.icon.unwrap_or(ICON_BELL);
                     let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
@@ -2060,8 +2060,17 @@ impl Renderer {
                     }
                     if !t.choices.is_empty() {
                         for (k, (b, label)) in approve_buttons(cx, s, v.size[0], v.size[1], &t.choices).into_iter().zip(&t.choices).enumerate() {
-                            let (fill, ink) = if k == 0 { (color(GREEN.0, GREEN.1, GREEN.2, a), grey(0.0, a)) } else { (grey(0.22, a), grey(1.0, a)) };
-                            rt.FillRoundedRectangle(&rounded(b, (b.bottom - b.top) / 2.0), &self.brush(fill)?);
+                            // The first answer is the filled one, the others are outlined, and the way out
+                            // (the last of three) is just text.
+                            let ghost = k > 0 && k + 1 == t.choices.len() && t.choices.len() > 2;
+                            let ink = if k == 0 { color(0.02, 0.13, 0.04, a) } else if ghost { grey(0.6, a) } else { grey(1.0, a) };
+                            let r = (b.bottom - b.top) / 2.0;
+                            if k == 0 {
+                                rt.FillRoundedRectangle(&rounded(b, r), &self.brush(color(GREEN.0, GREEN.1, GREEN.2, a))?);
+                            } else if !ghost {
+                                let edge = 0.5 * s;
+                                rt.DrawRoundedRectangle(&rounded(rect(b.left + edge, b.top + edge, b.right - edge, b.bottom - edge), r - edge), &self.brush(grey(0.28, a))?, 1.0 * s, None);
+                            }
                             // The font sits a little low in its line box: lift the label by a pixel to the pill's middle.
                             text(label, F_LABEL, rect(b.left, b.top - 1.0 * s, b.right, b.bottom - 1.0 * s), center, ink)?;
                         }
@@ -2091,7 +2100,7 @@ impl Renderer {
                             rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &self.brush(grey(1.0, a))?);
                         }
                         // A question with buttons: wraps over up to 3 lines, the buttons below.
-                        None if !t.choices.is_empty() => text(&t.body, F_BODY_WRAP, rect(tl, notch::BANNER_TEXT_TOP * s, tr, (nh - 36.0 * s).max(notch::BANNER_TEXT_TOP * s + notch::BANNER_LINE_H * s)), lead, grey(0.75, a))?,
+                        None if !t.choices.is_empty() => text(&t.body, F_BODY_WRAP, rect(tl, notch::BANNER_TEXT_TOP * s, tr, (nh - 40.0 * s).max(notch::BANNER_TEXT_TOP * s + notch::BANNER_LINE_H * s)), lead, grey(0.75, a))?,
                         // Status banner (icon): one line under the title.
                         None if t.icon.is_some() => text(&t.body, F_BODY, rect(tl, body_top, tr, body_top + 16.0 * s), lead, grey(0.75, a))?,
                         // Notification: wraps over the banner's height (sized to its lines, at most
