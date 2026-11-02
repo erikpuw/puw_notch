@@ -5,7 +5,7 @@
 
 use windows::core::implement;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl};
+use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl, IAudioMeterInformation};
 use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_MUTE, VK_VOLUME_UP};
@@ -42,12 +42,48 @@ pub struct Audio {
     devices: IMMDeviceEnumerator,
     speaker: Watched,
     mic: Watched,
+    /// The default speaker's peak meter (made on first use, again when the default speaker changes).
+    meter: Option<IAudioMeterInformation>,
+}
+
+/// The height of the pill's equaliser from the speaker's peak: scaled by the loudest of the last
+/// seconds (a low volume still moves the bars (down to a peak of 0.15)), quick to rise and slow to fall.
+#[derive(Default)]
+pub struct Level {
+    loudest: f32,
+    target: f32,
+    now: f32,
+}
+
+impl Level {
+    /// The speaker's peak right now (0..1), read every so often.
+    pub fn feed(&mut self, peak: f32) {
+        self.loudest = peak.max(self.loudest * 0.99).max(0.15);
+        self.target = (peak / self.loudest).min(1.0);
+    }
+
+    /// The peak cannot be read: a steady middle height.
+    pub fn steady(&mut self) {
+        self.target = 0.75;
+    }
+
+    /// Nothing plays: sink to the lowest.
+    pub fn hush(&mut self) {
+        self.target = 0.0;
+    }
+
+    /// Move `dt` seconds towards the target; the height 0..1.
+    pub fn step(&mut self, dt: f32) -> f32 {
+        let tau = if self.target > self.now { 0.04 } else { 0.12 };
+        self.now += (self.target - self.now) * (1.0 - (-dt / tau).exp());
+        self.now
+    }
 }
 
 impl Audio {
     pub fn new() -> Option<Self> {
         let devices = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }.ok()?;
-        Some(Audio { devices, speaker: None, mic: None })
+        Some(Audio { devices, speaker: None, mic: None, meter: None })
     }
 
     fn endpoint(&self, flow: EDataFlow) -> Option<IAudioEndpointVolume> {
@@ -83,7 +119,24 @@ impl Audio {
     }
 
     pub fn watch_speaker(&mut self, hwnd: HWND) -> bool {
-        Self::follow(&self.devices, &mut self.speaker, hwnd, eRender, WM_VOLUME)
+        let moved = Self::follow(&self.devices, &mut self.speaker, hwnd, eRender, WM_VOLUME);
+        if moved {
+            self.meter = None;
+        }
+        moved
+    }
+
+    /// The peak (0..1) of what the default speaker plays right now; None when it cannot be read.
+    pub fn peak(&mut self) -> Option<f32> {
+        if self.meter.is_none() {
+            let dev = unsafe { self.devices.GetDefaultAudioEndpoint(eRender, eMultimedia) }.ok()?;
+            self.meter = unsafe { dev.Activate::<IAudioMeterInformation>(CLSCTX_ALL, None) }.ok();
+        }
+        let peak = unsafe { self.meter.as_ref()?.GetPeakValue() }.ok();
+        if peak.is_none() {
+            self.meter = None;
+        }
+        peak
     }
 
     pub fn watch_mic(&mut self, hwnd: HWND) -> bool {
@@ -124,6 +177,26 @@ impl Drop for Audio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_equaliser_follows_the_loudness_whatever_the_volume() {
+        let settle = |level: &mut Level| (0..10).map(|_| level.step(0.05)).last().unwrap();
+        let mut loud = Level::default();
+        loud.feed(0.9);
+        let mut quiet = Level::default();
+        quiet.feed(0.2);
+        assert!(settle(&mut loud) > 0.9 && settle(&mut quiet) > 0.9, "the first reading is the loudest so far: full height at any volume above the floor");
+        loud.feed(0.45);
+        assert!(settle(&mut loud) < 0.6, "half the recent loudest is half height");
+        loud.hush();
+        assert!(settle(&mut loud) < 0.3, "it sinks when nothing plays");
+        let mut rise = Level::default();
+        rise.feed(1.0);
+        let up = rise.step(0.05);
+        rise.hush();
+        let down = up - rise.step(0.05);
+        assert!(up > down, "quick to rise, slow to fall: {up} up, {down} down in the same time");
+    }
 
     #[test]
     fn percent_rounds_and_clamps() {
