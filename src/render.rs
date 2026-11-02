@@ -2879,8 +2879,10 @@ impl Renderer {
                 let total = wide + (kept as f32 - 1.0) * (dot + gap);
                 let mut dx = cx - total / 2.0;
                 let arriving = v.leaving.map_or(1.0, |(_, t, _)| ease_out(t));
-                // The row of page icons comes as the panel grows by NAV_EXTRA, the dots give way to it.
-                let nav_fade = ((nh - ph * s) / (NAV_EXTRA * s)).clamp(0.0, 1.0);
+                // The row of page icons comes as the panel grows by NAV_EXTRA, the dots give way to it. The icons only show
+                // once they are inside the panel (they reach 12 px under its resting height, so none show before the panel is 12 px past it), so they fade out before the
+                // shrinking edge gets to them instead of poking out of it.
+                let nav_fade = ((nh - ph * s - 10.0 * s) / (8.0 * s)).clamp(0.0, 1.0);
                 for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
                     let weight = match v.leaving {
                         _ if p == v.page => arriving,
