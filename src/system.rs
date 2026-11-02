@@ -127,13 +127,13 @@ static BATTERY: std::sync::OnceLock<BatteryCache> = std::sync::OnceLock::new();
 /// The battery as the last look found it. The look (`battery`) asks the power service, which can
 /// take 100 ms or more while the power mode or battery saver changes: it is taken on its own thread,
 /// so the window never waits for it. Windows reports the charger and the percent (`battery_changed`
-/// wakes the thread at once); the thread also looks every 5 s for what Windows does not report.
+/// wakes the thread at once); the thread also looks every second for what Windows does not report (the battery saver).
 pub fn battery_cached() -> Option<Battery> {
     let (cell, _) = BATTERY.get_or_init(|| {
         let cell = std::sync::Arc::new(std::sync::Mutex::new(battery()));
         let mine = cell.clone();
         let thread = crate::system::spawn("battery", move || loop {
-            std::thread::park_timeout(std::time::Duration::from_secs(5));
+            std::thread::park_timeout(std::time::Duration::from_secs(1));
             let now = battery();
             if let Ok(mut b) = mine.lock() {
                 *b = now;
