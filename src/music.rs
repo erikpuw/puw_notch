@@ -6,7 +6,7 @@
 
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::core::{w, HSTRING};
@@ -440,17 +440,28 @@ fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<G
         }
         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
         if !page_open.load(Ordering::Relaxed) || !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
-        let lines = fetch_lyrics(&t.title, &t.artist, t.duration_ms / 1000, &page_open);
-        if !page_open.load(Ordering::Relaxed) || !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
-        if let Ok(mut g) = shared.lock() {
-            if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) {
-                cur.lyrics = Arc::new(lines);
-                cur.assets_ready = true;
+        // The lyrics come over the network and can take seconds: on their own thread, so the next
+        // track's cover does not wait for them. One fetch per track at a time.
+        if LYRICS_FOR.swap(t.art_key, Ordering::Relaxed) == t.art_key { continue; }
+        let (shared, page_open, pill_visible) = (shared.clone(), page_open.clone(), pill_visible.clone());
+        crate::system::spawn("lyrics", move || {
+            let lines = fetch_lyrics(&t.title, &t.artist, t.duration_ms / 1000, &page_open);
+            if page_open.load(Ordering::Relaxed) && asset_job_current(&shared, &page_open, &pill_visible, t.art_key) {
+                if let Ok(mut g) = shared.lock() {
+                    if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) {
+                        cur.lyrics = Arc::new(lines);
+                        cur.assets_ready = true;
+                    }
+                }
+                unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
             }
-        }
-        unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
+            let _ = LYRICS_FOR.compare_exchange(t.art_key, u64::MAX, Ordering::Relaxed, Ordering::Relaxed);
+        });
     }
 }
+
+/// The track (`art_key`) whose lyrics are being fetched.
+static LYRICS_FOR: AtomicU64 = AtomicU64::new(u64::MAX);
 
 fn prefer_itunes(standard: Option<&Track>, native: Option<&Track>, foreground: bool) -> bool {
     let Some(native) = native else { return false };
