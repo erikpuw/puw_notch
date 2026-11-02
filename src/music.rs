@@ -26,10 +26,7 @@ pub const WM_MUSIC: u32 = WM_APP + 5;
 /// a track playing (position and state corrections), nothing playing (events do the rest).
 const POLL: Duration = Duration::from_millis(500);
 const POLL_PLAYING: Duration = Duration::from_secs(2);
-const POLL_IDLE: Duration = Duration::from_secs(10);
-/// After Windows says something changed, the player may still be setting the rest (the cover).
-const WAKE_SETTLE: Duration = Duration::from_millis(300);
-/// A paused player keeps the music pill this long, then the notch goes back to the clock.
+const POLL_IDLE: Duration = Duration::from_secs(10);/// A paused player keeps the music pill this long, then the notch goes back to the clock.
 const PAUSE_KEEP: Duration = Duration::from_secs(10);
 
 /// Music layout in the resting pill: while playing, or for `PAUSE_KEEP` after a pause so a quick
@@ -315,10 +312,9 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Msg>, wake: Sender<Msg
                 (None, true)
             }
             Ok(Msg::Wake) => {
-                // A player sets the title first and the cover a moment later: look when both are there,
-                // and look again for a cover that was missing.
-                std::thread::sleep(WAKE_SETTLE);
-                let missing = shared.lock().ok().is_some_and(|mut g| g.as_mut().filter(|t| t.art.is_none() && t.art_ready).map(|t| t.art_ready = false).is_some());
+                // A player (puw-player) sets the title first and the cover in a second update a moment
+                // later: that update finds the cover missing and reads it again.
+                let missing = shared.lock().ok().is_some_and(|mut g| g.as_mut().filter(|t| t.art.is_none()).map(|t| t.art_ready = false).is_some());
                 if missing {
                     requested = None;
                 }
