@@ -2340,7 +2340,10 @@ impl Renderer {
                                     let disc = D2D1_ELLIPSE { point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
                                         radiusX: (br.right - br.left) / 2.0, radiusY: (br.bottom - br.top) / 2.0 };
                                     rt.FillEllipse(&disc, &self.brush(fill)?);
-                                    micon("play", icon, F_ICON, br, if on { grey(0.05, a) } else { grey(0.5, a) })?;
+                                    // A triangle's weight sits left of its box: the play glyph moves 1.5 px right so
+                                    // it looks centred in the disc (the pause bars need no shift).
+                                    let nudge = if playing { 0.0 } else { 1.5 * s };
+                                    micon("play", icon, F_ICON, rect(br.left + nudge, br.top, br.right + nudge, br.bottom), if on { grey(0.05, a) } else { grey(0.5, a) })?;
                                     continue;
                                 }
                                 let c = if !on { grey(0.3, a) }
@@ -2430,8 +2433,14 @@ impl Renderer {
                                 if v.todos.is_empty() {
                                     let mid = (x0 + xr) / 2.0;
                                     let ring = D2D1_ELLIPSE { point: Vector2 { X: mid, Y: (ROW_Y + 16.0) * s }, radiusX: 11.0 * s, radiusY: 11.0 * s };
-                                    rt.DrawEllipse(&ring, &self.brush(grey(0.3, a))?, 1.5 * s, None);
-                                    text(ICON_CHECK, F_TINY_ICON, rect(mid - 11.0 * s, (ROW_Y + 5.0) * s, mid + 11.0 * s, (ROW_Y + 27.0) * s), center, grey(0.3, a))?;
+                                    rt.DrawEllipse(&ring, &self.brush(grey(0.4, a))?, 1.5 * s, None);
+                                    // The tick is drawn as 2 px strokes in the ring's middle (the font's was tiny and faint).
+                                    let w = (2.0 * s).round().max(2.0);
+                                    let (cx, cy) = (mid.round(), ((ROW_Y + 16.0) * s).round());
+                                    let ink = self.brush(grey(0.6, a))?;
+                                    let at = |dx: f32, dy: f32| Vector2 { X: cx + dx * s, Y: cy + dy * s };
+                                    rt.DrawLine(at(-4.5, 0.5), at(-1.5, 3.5), &ink, w, &self.round);
+                                    rt.DrawLine(at(-1.5, 3.5), at(4.5, -3.0), &ink, w, &self.round);
                                     text(tr("Chưa có ghi chú nào", "No notes yet"), F_BODY, rect(x0, (ROW_Y + 32.0) * s, xr, (ROW_Y + 50.0) * s), center, grey(0.7, a))?;
                                     text(tr("Gõ vào ô trên rồi nhấn Enter", "Type above and press Enter"), F_LABEL, rect(x0, (ROW_Y + 50.0) * s, xr, (ROW_Y + 66.0) * s), center, grey(0.5, a))?;
                                 }
