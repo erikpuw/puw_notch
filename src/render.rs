@@ -388,7 +388,7 @@ pub fn panel_w(wide: bool) -> f32 {
 }
 
 /// Media controls of the music page, in window px for the settled panel centred at `cx`. The
-/// player is the left 440 px of the panel; with the lyrics open (`wide`) the panel is wider and
+/// player is the left 480 px of the panel; with the lyrics open (`wide`) the panel is wider and
 /// the lyrics take the part on the right.
 pub fn buttons(cx: f32, scale: f32, wide: bool) -> [(Button, D2D_RECT_F); 5] {
     buttons_from(cx / scale - panel_w(wide) / 2.0, scale)
@@ -2273,7 +2273,7 @@ impl Renderer {
                     match page {
                         Page::Music => {
                             let top = COVER_TOP * s;
-                            // The player is the left 440 px of the panel, wider or not.
+                            // The player is the left 480 px of the panel (the standard width), wider or not.
                             let cr = l + (notch::target(Mode::Expanded, false)[0] - SIDE) * s;
                             draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 14.0 * s, a)?;
                             let tl = cl + (COVER + COVER_GAP) * s;
@@ -2855,7 +2855,7 @@ impl Renderer {
                 ];
                 // While the lyrics are open the arrows are hidden (they fade as the panel widens), so the
                 // way back is the lyrics button: shrinking the panel never leaves the mouse outside it.
-                let arrow_a = a * (1.0 - ((v.size[0] - 440.0) / notch::LYRICS_EXTRA_W).clamp(0.0, 1.0));
+                let arrow_a = a * (1.0 - ((v.size[0] - notch::target(Mode::Expanded, false)[0]) / notch::LYRICS_EXTRA_W).clamp(0.0, 1.0));
                 for (b, icon) in [(Button::PagePrev, ICON_LEFT), (Button::PageNext, ICON_RIGHT)] {
                     if arrow_a < 0.01 {
                         break;
