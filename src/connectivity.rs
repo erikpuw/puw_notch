@@ -1,18 +1,20 @@
 //! Connectivity watcher: Wi-Fi / Bluetooth / mobile radios on-off, airplane mode, the network in use
 //! (and whether it reaches the internet) and Bluetooth devices connecting. WinRT calls block, so a
-//! worker polls every 2 s, diffs against the last snapshot and queues events for the notch window.
+//! worker takes a snapshot, diffs it against the last and queues events for the notch window. It looks
+//! when Windows says something changed (`subscribe`), and every 30 s for what Windows does not say
+//! (a device's battery).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use windows::core::{w, Interface, GUID, HSTRING};
+use windows::core::{w, IInspectable, Interface, GUID, HSTRING};
 use windows::Devices::Bluetooth::{BluetoothConnectionStatus, BluetoothDevice, BluetoothLEDevice};
-use windows::Devices::Enumeration::{DeviceInformation, DeviceInformationKind};
+use windows::Devices::Enumeration::{DeviceInformation, DeviceInformationKind, DeviceInformationUpdate, DeviceWatcher};
 use windows_collections::IIterable;
-use windows::Foundation::IReference;
+use windows::Foundation::{IReference, TypedEventHandler};
 use windows::Devices::Radios::{Radio, RadioKind, RadioState};
-use windows::Networking::Connectivity::{NetworkConnectivityLevel, NetworkInformation};
+use windows::Networking::Connectivity::{NetworkConnectivityLevel, NetworkInformation, NetworkStatusChangedEventHandler};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
@@ -20,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 /// Posted when events are queued; read them with `take_events`.
 pub const WM_CONN: u32 = WM_APP + 6;
-const POLL: Duration = Duration::from_secs(2);
+const POLL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum RadioType {
@@ -188,11 +190,56 @@ fn wait(period: Duration) -> bool {
     NUDGE.1.wait_timeout_while(guard, period, |n| !*n).map_or(false, |(mut n, _)| std::mem::take(&mut *n))
 }
 
+/// Windows says when the network changes, a radio is switched, or a Bluetooth device connects or goes:
+/// each wakes the watcher (`nudge`). The returned radios and watchers must stay alive.
+fn subscribe() -> (Vec<Radio>, Vec<DeviceWatcher>) {
+    let _ = NetworkInformation::NetworkStatusChanged(&NetworkStatusChangedEventHandler::new(|_| {
+        nudge();
+        Ok(())
+    }));
+    let radios: Vec<Radio> = Radio::GetRadiosAsync().and_then(|op| op.get()).map(|list| list.into_iter().collect()).unwrap_or_default();
+    for r in &radios {
+        let _ = r.StateChanged(&TypedEventHandler::<Radio, IInspectable>::new(|_, _| {
+            nudge();
+            Ok(())
+        }));
+    }
+    let mut watchers = Vec::new();
+    let selectors = [
+        BluetoothDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected),
+        BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected),
+    ];
+    for sel in selectors.into_iter().flatten() {
+        let Ok(w) = DeviceInformation::CreateWatcherAqsFilter(&sel) else { continue };
+        let _ = w.Added(&TypedEventHandler::<DeviceWatcher, DeviceInformation>::new(|_, _| {
+            nudge();
+            Ok(())
+        }));
+        for_update(&w);
+        let _ = w.Start();
+        watchers.push(w);
+    }
+    (radios, watchers)
+}
+
+/// Updated and Removed carry a `DeviceInformationUpdate`.
+fn for_update(w: &DeviceWatcher) {
+    let _ = w.Updated(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(|_, _| {
+        nudge();
+        Ok(())
+    }));
+    let _ = w.Removed(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(|_, _| {
+        nudge();
+        Ok(())
+    }));
+}
+
 pub fn watch(hwnd: HWND) {
     let target = hwnd.0 as isize;
     crate::system::spawn("connectivity", move || {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
         let _ = Radio::RequestAccessAsync().and_then(|op| op.get());
+        let _keep = subscribe();
         // Class lookups are a round trip each; remember them per device id.
         let mut kinds: BTreeMap<String, DeviceKind> = BTreeMap::new();
         let mut last = snapshot(&mut kinds);
