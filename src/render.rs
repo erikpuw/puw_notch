@@ -687,6 +687,8 @@ const BLUE: (f32, f32, f32) = (0.3, 0.62, 1.0);
 const ORANGE: (f32, f32, f32) = (1.0, 0.6, 0.2);
 /// Idle robot's LED eyes: near-white, like a small LED face.
 const LED: (f32, f32, f32) = (0.93, 0.97, 1.0);
+/// The robot's red eyes and plug when the battery is low: the battery ring's red.
+const LOW_RED: (f32, f32, f32) = (1.0, 0.27, 0.23);
 
 /// Banner icon for a Bluetooth device.
 pub fn device_icon(kind: DeviceKind) -> &'static str {
@@ -1472,8 +1474,12 @@ impl Renderer {
     /// face, cheering two sparkles twinkle there.
     fn draw_face(&self, e: &Eyes, cx: f32, cy: f32, s: f32, a: f32) -> Result<()> {
         let rt = &self.rt;
-        // The cheering face is green, like the battery ring while it charges.
-        let ink = if e.face == Face::Happy { GREEN } else { LED };
+        // The cheering face is green, like the battery ring while it charges; the sad one red, like it at 20 %.
+        let ink = match e.face {
+            Face::Happy => GREEN,
+            Face::Sad => LOW_RED,
+            _ => LED,
+        };
         let led = |alpha: f32| unsafe { rt.CreateSolidColorBrush(&color(ink.0, ink.1, ink.2, alpha), None) };
         let lit = led(a)?;
         // (how far the layer grows past the shape in logical px, its opacity), the widest and faintest last.
@@ -1562,6 +1568,22 @@ impl Renderer {
                 unsafe {
                     rt.DrawGeometry(&star, &glow, 3.0 * s, &self.round);
                     rt.FillGeometry(&star, &spark, None);
+                }
+            }
+        }
+        if e.face == Face::Sad {
+            // A plug beside the face that fades in and out slowly: plug in the charger.
+            let k = 0.55 + 0.45 * (0.5 + 0.5 * (e.time * std::f32::consts::TAU / 1.5).sin());
+            let (plug, glow) = (led(a * k)?, led(a * k * 0.16)?);
+            let at = |dx: f32, dy: f32| p(cx + dx * s, cy + dy * s);
+            let body = rounded(rect(cx + 31.0 * s, cy - 3.0 * s, cx + 40.0 * s, cy + 3.5 * s), 1.8 * s);
+            let lines = [path(&[at(33.5, -6.0), at(33.5, -3.0)], false)?, path(&[at(37.5, -6.0), at(37.5, -3.0)], false)?, path(&[at(35.5, 3.5), at(35.5, 6.5)], false)?];
+            unsafe {
+                for (width, brush) in [(5.5, &glow), (1.5, &plug)] {
+                    rt.DrawRoundedRectangle(&body, brush, width * s, &self.round);
+                    for line in &lines {
+                        rt.DrawGeometry(line, brush, width * s, &self.round);
+                    }
                 }
             }
         }

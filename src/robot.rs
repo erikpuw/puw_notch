@@ -34,7 +34,7 @@ pub enum Face {
     Greet,
     /// The eye on the side it looks toward big, the other small (`curious_eyes`).
     Curious,
-    /// Drooping eyes.
+    /// Drooping red eyes and a plug fading in and out: the battery is low, plug it in.
     Sad,
     /// Closed arcs, a z drifting up.
     Sleep,
