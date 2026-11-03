@@ -1,9 +1,16 @@
-# PermissionRequest hook for Claude Code: shows the question on PUW Notch (Allow / Deny, or the
-# options of a multiple-choice question) and answers for Claude. Anything else (notch not running,
+# PermissionRequest hook for Claude Code and Codex: shows the question on PUW Notch (Allow / Deny, or the
+# options of a multiple-choice question) and answers for the app. Anything else (notch not running,
 # no click in time, "Trong app" pressed, a question the banner cannot hold) prints nothing, so
-# Claude asks in its own window as usual. Do not name a variable $input here: PowerShell then takes
+# the app asks in its own window as usual. Do not name a variable $input here: PowerShell then takes
 # the standard input for itself and the request never arrives.
+#   -App Codex   the name on the banner (default Claude)
+#   -Log         append what came in and what was answered to %TEMP%\puw-notch-hook.log (to see what an app sends)
+param([string]$App = 'Claude', [switch]$Log)
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+
+function Write-Log($text) {
+    if ($Log) { Add-Content -Path (Join-Path $env:TEMP 'puw-notch-hook.log') -Value ((Get-Date -Format s) + ' ' + $text) }
+}
 
 # One request to the notch: its answer line ('allow', 'deny', 'choice:N' or 'ask'), or $null.
 function Ask-Notch($title, $detail, $labels) {
@@ -14,7 +21,7 @@ function Ask-Notch($title, $detail, $labels) {
     $pipe.Connect(300)
     $writer = New-Object System.IO.StreamWriter($pipe, $utf8)
     $reader = New-Object System.IO.StreamReader($pipe, $utf8)
-    $message = @{ app = 'Claude'; title = $title; detail = $detail }
+    $message = @{ app = $App; title = $title; detail = $detail }
     if ($shown.Count) { $message.options = $shown }
     $writer.WriteLine(($message | ConvertTo-Json -Compress))
     $writer.Flush()
@@ -24,7 +31,9 @@ function Ask-Notch($title, $detail, $labels) {
 try {
     [Console]::OutputEncoding = $utf8
     $stdin = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), $utf8)
-    $request = $stdin.ReadToEnd() | ConvertFrom-Json
+    $raw = $stdin.ReadToEnd()
+    Write-Log "in: $raw"
+    $request = $raw | ConvertFrom-Json
     $tool = [string]$request.tool_name
     if ($tool -eq 'ExitPlanMode') { exit 0 }
 
@@ -54,9 +63,10 @@ try {
     }
     if (-not $detail) { $detail = ($request.tool_input | ConvertTo-Json -Compress -Depth 3) }
     $answer = Ask-Notch $tool $detail @()
+    Write-Log "answer: $answer"
     if ($answer -eq 'allow') {
         '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
     } elseif ($answer -eq 'deny') {
         '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied on PUW Notch."}}}'
     }
-} catch { }
+} catch { Write-Log "error: $_" }
