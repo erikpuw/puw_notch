@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use crate::weather::Place;
 use windows::core::{s, w, GUID, PCWSTR};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::Win32::Foundation::ERROR_SUCCESS;
+use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS};
+use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::System::Registry::*;
 use windows::Win32::Foundation::SYSTEMTIME;
@@ -298,9 +301,73 @@ fn autostart_value() -> Option<String> {
     (r == ERROR_SUCCESS).then(|| String::from_utf16_lossy(&buf[..(bytes as usize / 2).saturating_sub(1)]))
 }
 
-/// On only when the entry starts this very exe: one left from another folder (an older version, a
-/// deleted download) is not "on", it starts nothing.
+const TASK_NAME: &str = "PuwNotch";
+
+/// The file Task Scheduler keeps for the task: its contents need administrator rights, its existence does not.
+fn task_file() -> PathBuf {
+    PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into())).join("System32\\Tasks").join(TASK_NAME)
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// The task that starts the notch at logon with the highest rights, without a prompt (like Windhawk's):
+/// `schtasks /create` alone would stop it on battery and after 72 h, so the settings come in as XML.
+/// It starts 15 s after the logon: right after it Windows is still loading the startup apps, and the
+/// notch's first ticks (asking every window under the pill) ran 90 ms and more.
+fn task_xml(exe: &std::path::Path, user: &str) -> String {
+    let (user, command) = (xml_escape(user), xml_escape(&autostart_command(exe)));
+    let dir = xml_escape(&exe.parent().map_or(String::new(), |d| d.display().to_string()));
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId><Delay>PT15S</Delay></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{command}</Command><WorkingDirectory>{dir}</WorkingDirectory></Exec></Actions>
+</Task>
+"#
+    )
+}
+
+/// Runs `schtasks.exe args` as administrator and waits for it: one UAC prompt, none when the notch is already
+/// elevated. True when it exited with 0 (a refused prompt is false).
+fn schtasks_as_admin(args: &str) -> bool {
+    let params: Vec<u16> = args.encode_utf16().chain([0]).collect();
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: w!("runas"),
+        lpFile: w!("schtasks.exe"),
+        lpParameters: PCWSTR(params.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+    unsafe {
+        if ShellExecuteExW(&mut info).is_err() || info.hProcess.is_invalid() {
+            return false;
+        }
+        WaitForSingleObject(info.hProcess, 30_000);
+        let mut code = 1;
+        let _ = GetExitCodeProcess(info.hProcess, &mut code);
+        let _ = CloseHandle(info.hProcess);
+        code == 0
+    }
+}
+
+/// On when the task exists, or the old Run entry starts this very exe (one left from another folder, an older
+/// version or a deleted download, is not "on": it starts nothing).
 pub fn autostart_enabled() -> bool {
+    if task_file().exists() {
+        return true;
+    }
     let Ok(exe) = std::env::current_exe() else { return false };
     autostart_value().is_some_and(|v| v.eq_ignore_ascii_case(&autostart_command(&exe)))
 }
@@ -309,11 +376,12 @@ pub fn autostart_enabled() -> bool {
 /// folder keeps starting with Windows without the switch being turned off and on again.
 pub fn refresh_autostart() {
     if autostart_value().is_some() && !autostart_enabled() {
-        set_autostart(true);
+        set_run_entry(true);
     }
 }
 
-pub fn set_autostart(on: bool) {
+/// The old Run entry is what `refresh_autostart` keeps pointed at this exe for those who already have it.
+fn set_run_entry(on: bool) {
     unsafe {
         if !on {
             let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME);
@@ -323,6 +391,30 @@ pub fn set_autostart(on: bool) {
         let value: Vec<u16> = autostart_command(&exe).encode_utf16().chain([0]).collect();
         let _ = RegSetKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, REG_SZ.0, Some(value.as_ptr().cast()), (value.len() * 2) as u32);
     }
+}
+
+/// Turning it on creates the logon task (one UAC prompt, then the notch starts with administrator rights
+/// and no prompt) and drops the Run entry; off removes both. The prompt waits on its own thread.
+pub fn set_autostart(on: bool) {
+    if !on {
+        set_run_entry(false);
+        if task_file().exists() {
+            spawn("autostart", || schtasks_as_admin(&format!("/delete /tn {TASK_NAME} /f")));
+        }
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    spawn("autostart", move || {
+        let user = format!("{}\\{}", std::env::var("USERDOMAIN").unwrap_or_default(), std::env::var("USERNAME").unwrap_or_default());
+        let file = std::env::temp_dir().join("puw_notch_task.xml");
+        let utf16: Vec<u8> = [0xFEFFu16].into_iter().chain(task_xml(&exe, &user).encode_utf16()).flat_map(u16::to_le_bytes).collect();
+        let made = std::fs::write(&file, utf16).is_ok() && schtasks_as_admin(&format!("/create /tn {TASK_NAME} /xml \"{}\" /f", file.display()));
+        let _ = std::fs::remove_file(&file);
+        log(&format!("autostart task {}", if made { "created" } else { "not created" }));
+        if made {
+            set_run_entry(false);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -354,6 +446,16 @@ mod tests {
     #[test]
     fn autostart_command_quotes_the_path() {
         assert_eq!(autostart_command(std::path::Path::new(r"C:\Users\A B\Telegram Desktop\puw_notch.exe")), r#""C:\Users\A B\Telegram Desktop\puw_notch.exe""#);
+    }
+
+    #[test]
+    fn task_runs_at_logon_with_highest_rights_and_survives_battery() {
+        let xml = task_xml(std::path::Path::new(r"C:\Apps & Co\puw_notch.exe"), r"PC\A <b>");
+        assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>") && xml.contains("<LogonTrigger>"));
+        assert!(xml.contains("<Delay>PT15S</Delay>"), "not before the startup apps have loaded");
+        assert!(xml.contains("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>") && xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(xml.contains(r#"<Command>&quot;C:\Apps &amp; Co\puw_notch.exe&quot;</Command>"#), "path quoted and escaped");
+        assert!(xml.contains(r"<UserId>PC\A &lt;b&gt;</UserId>"), "user escaped");
     }
 
     #[test]
