@@ -22,7 +22,7 @@
 | **Notch** | Giờ, vòng pin (xanh khi sạc, vàng khi tiết kiệm pin, đỏ từ 20%), sóng nhạc. Rê chuột để mở bảng. Hai kiểu chọn ở tray: tai thỏ hoặc viên thuốc nổi. |
 | **Tự né** | Thu mini khi đè lên chữ bên dưới (nhiều tab như Edge, Terminal), ẩn khi chơi game hoặc xem phim toàn màn hình. Nó hỏi thẳng cửa sổ phía dưới (chỗ trống của thanh tiêu đề hay tab, nút) chứ không chụp màn hình, nên không phải giấu mình khỏi chụp: vẫn hiện khi quay, chia sẻ màn hình và điều khiển từ xa. |
 | **Banner** | Thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth (kèm % pin thiết bị), mạng, pin, tiết kiệm pin, USB. Nút × tắt sớm; ảnh chụp màn hình có ảnh thu nhỏ, bấm để mở. |
-| **Duyệt trên notch** | Câu hỏi của Claude Code và Antigravity (xin quyền dùng công cụ, câu hỏi chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt; banner tự đóng sau 20 giây (app hỏi lại như thường) và đóng ngay khi bạn trả lời trong app, tắt hẳn ở tray. Cách thiết lập ở [dưới](#thiết-lập-cho-claude-code-tuỳ-chọn). |
+| **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity (xin quyền dùng công cụ, câu hỏi chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt; banner tự đóng sau 20 giây (app hỏi lại như thường) và đóng ngay khi bạn trả lời trong app, tắt hẳn ở tray. Cách thiết lập ở [dưới](#thiết-lập-cho-claude-code-tuỳ-chọn). |
 | **Robot** | 30 giây không đụng máy thì mặt LED (chỉ có đôi mắt) thay đồng hồ: nhìn quanh, thỉnh thoảng liếc sang bên, mừng một lần (mắt `> <` xanh, hai ngôi sao) khi pin vừa đầy, buồn (mắt đỏ, phích cắm nhấp nháy) khi pin từ 20% trở xuống mà chưa sạc. Động chuột lại thì `^ ^` và liếc theo chuột; 5 phút thì ngủ. Bật / tắt ở tray. |
 | **Nhẹ** | Chỉ tải phần đang hiện: lời bài hát khi mở trang Nhạc, icon khi mở trang Thông báo; ẩn toàn màn hình thì ngừng tải. Khi nghỉ chỉ chừng 7 MB RAM và 0% CPU, đang phát nhạc ở dạng pill chừng 14 MB, mở trang Nhạc có aurora chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
 | **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị (chỉ giữ trang bạn dùng; trang ẩn thì hoàn toàn ngừng: không nhắc việc, uống nước, đứng dậy, không đọc nhạc, thời tiết, hạn mức, thông báo), Tính năng khác (Duyệt ngay trên notch, Ẩn bảng âm lượng Windows: mặc định tắt), Khởi động cùng Windows (hỏi quyền quản trị một lần để tạo tác vụ `PuwNotch` trong Task Scheduler; từ đó notch tự chạy với quyền quản trị 15 giây sau khi đăng nhập, không hỏi lại, đọc được cả cửa sổ chạy admin; bỏ tick thì tác vụ bị xóa), Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát. |
@@ -68,7 +68,7 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 |---|---|---|
 | ![](assets/screenshots/page-usage-claude.png) | ![](assets/screenshots/page-usage-codex.png) | ![](assets/screenshots/page-usage-antigravity.png) |
 
-**Duyệt ngay trên notch**: câu hỏi của Claude và Antigravity hiện thành banner, bấm là trả lời:
+**Duyệt ngay trên notch**: câu hỏi của Claude, Codex và Antigravity hiện thành banner, bấm là trả lời:
 
 | Claude (câu hỏi chọn) | Antigravity (xin quyền dùng công cụ) |
 |---|---|
@@ -140,7 +140,26 @@ Phần duyệt ngay trên notch và số giới hạn của Claude Code ở term
 
 - `puw-notch-approve.ps1` (hook): gửi yêu cầu duyệt tới notch qua ống cục bộ. Notch không chạy, không bấm trong 50 giây hoặc bấm **Trong app** thì Claude hỏi như bình thường. Không có tự duyệt.
 - `puw-notch-statusline.ps1` (statusLine): chỉ cần nếu bạn dùng Claude Code ở terminal; app Claude desktop thì notch đọc thẳng file của app.
-- Antigravity và Codex không cần thiết lập gì: notch đọc từ máy chủ cục bộ của Antigravity (khi app mở) và từ `~/.codex`.
+- Antigravity không cần thiết lập gì: notch đọc từ máy chủ cục bộ của Antigravity (khi app mở). Codex: hạn mức không cần thiết lập, duyệt lệnh xem phần dưới.
+
+## Thiết lập cho Codex (tuỳ chọn)
+
+Hạn mức của Codex notch đọc thẳng từ `~/.codex`, không cần thiết lập. **Duyệt lệnh của Codex ngay trên notch** dùng chung script `puw-notch-approve.ps1` với Claude Code: chép nó vào `~/.claude/` (hoặc chỗ bạn thích) rồi thêm một mục `PermissionRequest` vào `~/.codex/hooks.json` (thay `<tên>` bằng tên người dùng Windows):
+
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/<tên>/.claude/puw-notch-approve.ps1 -App Codex" } ] }
+    ]
+  }
+}
+```
+
+- Nếu `hooks.json` đã có mục `PermissionRequest`, thêm nhóm trên vào **cuối** mảng để không đổi vị trí các hook cũ (Codex lưu mã tin cậy theo vị trí).
+- Codex chỉ chạy hook đã được tin cậy: mở Codex, gõ `/hooks` và tin cậy hook mới.
+- Từ đó khi Codex xin quyền, banner **Codex** hiện trên notch với lệnh cần chạy; bấm **Đồng ý** hoặc **Không**. Notch không chạy hoặc không bấm trong 50 giây thì Codex hỏi như bình thường. Không có tự duyệt.
+- `-App` là tên hiện trên banner. `-Log` (thêm vào cuối lệnh) ghi những gì hook nhận vào `%TEMP%\puw-notch-hook.log`, chỉ để xem một app gửi gì; đừng để bật thường xuyên vì nó lưu cả lệnh.
 
 ## Ủng hộ
 

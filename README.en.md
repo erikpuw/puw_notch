@@ -22,7 +22,7 @@
 | **Notch** | Clock, battery ring (green while charging, yellow in battery saver, red at 20 %), music waves. Hover to open the panel. Two looks, chosen in the tray: ears or a floating pill. |
 | **Stays clear** | Shrinks when it would cover text underneath (many tabs, as in Edge or Terminal), hides during fullscreen games and videos. It asks the window beneath it (a bare bit of title bar, or a tab or button?) instead of capturing the screen, so it never has to hide from capture: it still shows in recordings, screen shares and remote desktop. |
 | **Banners** | Windows notifications, volume, brightness, mic, Caps/Num Lock, Wi-Fi, Bluetooth (with the device's battery), network, battery, battery saver, USB. An × closes one early; a screenshot banner shows a thumbnail, click to open. |
-| **Approve on the notch** | Questions from Claude Code and Antigravity (permission to use a tool, multiple-choice questions) show as banners; click **Allow** / **Deny** or pick an answer. No auto-approve; the banner closes by itself after 20 s (the app asks as usual) and at once when you answer in the app, and the tray switch turns it off. Setup [below](#setting-up-claude-code-optional). |
+| **Approve on the notch** | Questions from Claude Code, Codex and Antigravity (permission to use a tool, multiple-choice questions) show as banners; click **Allow** / **Deny** or pick an answer. No auto-approve; the banner closes by itself after 20 s (the app asks as usual) and at once when you answer in the app, and the tray switch turns it off. Setup [below](#setting-up-claude-code-optional). |
 | **Robot** | After 30 s without input an LED face (just a pair of eyes) replaces the clock: it looks around, glances aside now and then, cheers once (green `> <` eyes, two sparkles) when the battery has just filled up, and is sad (red eyes, a blinking plug) at 20 % or less while not charging. Move the mouse and it shows `^ ^` and glances at the cursor; after 5 min it sleeps. Toggle in the tray. |
 | **Light** | Loads only what is visible: lyrics while the Music page is open, icons while Notifications is open; paused while hidden for fullscreen. About 7 MB of RAM and 0 % CPU at rest, about 14 MB while music plays in the pill, about 22 MB with the Music page open and its aurora ([Task Manager pictures](#light-and-the-tray-menu)). |
 | **Tray** | Minimal notch, Idle robot, Notch style, Pages shown (keep only the pages you use; a hidden page stops completely: no task, water or stand-up reminders, and no music, weather, limits or notifications are read), More features (Approve on the notch, Hide Windows volume popup: off by default), Start with Windows (asks for administrator permission once to create a `PuwNotch` task in Task Scheduler; from then on the notch starts with administrator rights 15 s after you sign in, with no prompt, and can read administrator windows too; untick it and the task is removed), Language (Tiếng Việt / English), About, Quit. |
@@ -68,7 +68,7 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 |---|---|---|
 | ![](assets/screenshots/en/page-usage-claude.png) | ![](assets/screenshots/en/page-usage-codex.png) | ![](assets/screenshots/en/page-usage-antigravity.png) |
 
-**Approve on the notch**: questions from Claude and Antigravity show as banners, a click answers:
+**Approve on the notch**: questions from Claude, Codex and Antigravity show as banners, a click answers:
 
 | Claude (a multiple-choice question) | Antigravity (permission to use a tool) |
 |---|---|
@@ -140,7 +140,26 @@ Approving on the notch and the limits of Claude Code in a terminal need two smal
 
 - `puw-notch-approve.ps1` (hook): sends the permission request to the notch over a local pipe. If the notch is not running, nobody clicks within 50 seconds, or you press **In the app**, Claude asks as usual. There is no auto-approve.
 - `puw-notch-statusline.ps1` (statusLine): only needed for Claude Code in a terminal; for the Claude desktop app the notch reads the app's own file.
-- Antigravity and Codex need no setup: the notch reads Antigravity's local server (while it is open) and `~/.codex`.
+- Antigravity needs no setup: the notch reads its local server (while it is open). Codex: the limits need no setup, approving commands is in the next section.
+
+## Setting up Codex (optional)
+
+The notch reads Codex's limits straight from `~/.codex`, no setup. **Approving Codex's commands on the notch** shares the `puw-notch-approve.ps1` script with Claude Code: copy it to `~/.claude/` (or wherever you like) and add a `PermissionRequest` entry to `~/.codex/hooks.json` (replace `<name>` with your Windows user name):
+
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/<name>/.claude/puw-notch-approve.ps1 -App Codex" } ] }
+    ]
+  }
+}
+```
+
+- If `hooks.json` already has a `PermissionRequest` entry, add the group above at the **end** of its array so the older hooks keep their positions (Codex stores its trust hash by position).
+- Codex only runs hooks it trusts: open Codex, type `/hooks` and trust the new hook.
+- From then on, when Codex asks for permission, a **Codex** banner with the command shows on the notch; click **Allow** or **Deny**. If the notch is not running, or nobody clicks within 50 seconds, Codex asks as usual. There is no auto-approve.
+- `-App` is the name on the banner. `-Log` (added at the end of the command) writes what the hook receives to `%TEMP%\puw-notch-hook.log`, only to see what an app sends; do not leave it on, as it stores the commands too.
 
 ## Support
 
