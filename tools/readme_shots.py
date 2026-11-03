@@ -3,7 +3,11 @@ README's PNGs in assets/screenshots: premultiplied BGRA to straight RGBA, croppe
 notch (it is drawn at the top centre of a 900 px wide window) and laid over assets/backdrop.jpg,
 the picture a desktop would have behind it.
 
-    python tools/readme_shots.py
+    python tools/readme_shots.py                 # Vietnamese set -> assets/screenshots
+    python tools/readme_shots.py --lang en       # English set (PUW_README_LANG=en for the cargo test) -> assets/screenshots/en
+
+The English set holds only the pictures with words in them (pages and banners); the pills, the robot and
+the style pills read the same in both languages and are shared.
 """
 import os
 import sys
@@ -11,8 +15,9 @@ import sys
 from PIL import Image, ImageEnhance
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "target", "readme")
-DST = os.path.join(ROOT, "assets", "screenshots")
+ENGLISH = "--lang" in sys.argv and sys.argv[sys.argv.index("--lang") + 1] == "en"
+SRC = os.path.join(ROOT, "target", "readme-en" if ENGLISH else "readme")
+DST = os.path.join(ROOT, "assets", "screenshots", "en") if ENGLISH else os.path.join(ROOT, "assets", "screenshots")
 CENTRE = 450
 BACKDROP = os.path.join(ROOT, "assets", "backdrop.jpg")
 
@@ -26,7 +31,7 @@ SIZES = {
     "page-usage-claude": (580, 218), "page-usage-codex": (580, 218), "page-usage-antigravity": (580, 218),
     "style-pill-page": (580, 224),
     "page-music-lyrics": (900, 218),
-    "banner-approve-claude": (580, None), "banner-approve-antigravity": (580, None),
+    "banner": (500, None), "banner-approve-claude": (580, None), "banner-approve-antigravity": (580, None),
 }
 
 
@@ -50,7 +55,12 @@ def backdrop(width, height):
     return pic.crop((0, top, width, top + height))
 
 
+# The pictures that carry words (page titles, dates, sample content, buttons): each language has its own.
+TEXTUAL = [n for n in SIZES if n.startswith(("page-", "banner-approve")) or n in ("style-pill-page", "banner")]
+
+
 def main(names):
+    os.makedirs(DST, exist_ok=True)
     for name in names:
         path = os.path.join(SRC, name + ".bmp")
         if not os.path.exists(path):
@@ -69,4 +79,5 @@ def main(names):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or list(SIZES))
+    args = [a for i, a in enumerate(sys.argv[1:], 1) if a != "--lang" and sys.argv[i - 1] != "--lang"]
+    main(args or (TEXTUAL if ENGLISH else list(SIZES)))

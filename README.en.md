@@ -52,33 +52,33 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 | Screenshot | Screenshot |
 |---|---|
-| ![Music](assets/screenshots/page-music.png)<br>**Music**: cover, title, lyrics, background and aurora line in the cover's colours | ![Music, nothing playing](assets/screenshots/page-music-empty.png)<br>**Music** with nothing playing |
-| ![Notes](assets/screenshots/page-tasks.png)<br>**Notes**: notes and appointments in one list | ![Notifications](assets/screenshots/page-notifications.png)<br>**Notifications**: each with its app's icon |
-| ![Health](assets/screenshots/page-health.png)<br>**Health**: water and stand-up reminders | ![Banner](assets/screenshots/banner.png)<br>Notification **banner** |
+| ![Music](assets/screenshots/en/page-music.png)<br>**Music**: cover, title, lyrics, background and aurora line in the cover's colours | ![Music, nothing playing](assets/screenshots/en/page-music-empty.png)<br>**Music** with nothing playing |
+| ![Notes](assets/screenshots/en/page-tasks.png)<br>**Notes**: notes and appointments in one list | ![Notifications](assets/screenshots/en/page-notifications.png)<br>**Notifications**: each with its app's icon |
+| ![Health](assets/screenshots/en/page-health.png)<br>**Health**: water and stand-up reminders | ![Banner](assets/screenshots/en/banner.png)<br>Notification **banner** |
 
-![Music with lyrics](assets/screenshots/page-music-lyrics.png)<br>**Music** with lyrics: the panel widens, the line being sung lit in the middle, the aurora line swaying along the bottom
+![Music with lyrics](assets/screenshots/en/page-music-lyrics.png)<br>**Music** with lyrics: the panel widens, the line being sung lit in the middle, the aurora line swaying along the bottom
 
-![Quick page picker](assets/screenshots/page-nav.png)<br>**Quick page picker**: put the mouse on the page dots and they open into a row of icons, click one to jump straight to that page (they come back as dots when the mouse leaves)
+![Quick page picker](assets/screenshots/en/page-nav.png)<br>**Quick page picker**: put the mouse on the page dots and they open into a row of icons, click one to jump straight to that page (they come back as dots when the mouse leaves)
 
-![Weather](assets/screenshots/page-weather.png)<br>**Weather**: large icon, temperature, the next 5 slots, one line of figures, °C | °F buttons
+![Weather](assets/screenshots/en/page-weather.png)<br>**Weather**: large icon, temperature, the next 5 slots, one line of figures, °C | °F buttons
 
 **Limits** of Claude, Codex and Antigravity (Claude shows what is used; Codex and Antigravity show what is left, counting down like their own apps). The Codex tab names the plan of the account in use; a free plan counts 30 days:
 
 | Claude | Codex (free plan, 30 days) | Antigravity |
 |---|---|---|
-| ![](assets/screenshots/page-usage-claude.png) | ![](assets/screenshots/page-usage-codex.png) | ![](assets/screenshots/page-usage-antigravity.png) |
+| ![](assets/screenshots/en/page-usage-claude.png) | ![](assets/screenshots/en/page-usage-codex.png) | ![](assets/screenshots/en/page-usage-antigravity.png) |
 
 **Approve on the notch**: questions from Claude and Antigravity show as banners, a click answers:
 
 | Claude (a multiple-choice question) | Antigravity (permission to use a tool) |
 |---|---|
-| ![](assets/screenshots/banner-approve-claude.png) | ![](assets/screenshots/banner-approve-antigravity.png) |
+| ![](assets/screenshots/en/banner-approve-claude.png) | ![](assets/screenshots/en/banner-approve-antigravity.png) |
 
 **Pill style** (tray, Notch style): floats below the top edge of the screen with all four corners round; the ears remain the default.
 
 | Resting | Playing music | Open page |
 |---|---|---|
-| ![](assets/screenshots/style-pill-idle.png) | ![](assets/screenshots/style-pill-music.png) | ![](assets/screenshots/style-pill-page.png) |
+| ![](assets/screenshots/style-pill-idle.png) | ![](assets/screenshots/style-pill-music.png) | ![](assets/screenshots/en/style-pill-page.png) |
 
 The collapsed pill:
 

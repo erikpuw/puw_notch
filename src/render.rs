@@ -689,6 +689,8 @@ const ORANGE: (f32, f32, f32) = (1.0, 0.6, 0.2);
 const LED: (f32, f32, f32) = (0.93, 0.97, 1.0);
 /// The robot's red eyes and plug when the battery is low: the battery ring's red.
 const LOW_RED: (f32, f32, f32) = (1.0, 0.27, 0.23);
+/// Height of the countdown bar on the bottom edge of an approval banner.
+const COUNTDOWN_H: f32 = 3.0;
 
 /// Banner icon for a Bluetooth device.
 pub fn device_icon(kind: DeviceKind) -> &'static str {
@@ -2082,17 +2084,24 @@ impl Renderer {
                         rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
                         rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
                     }
-                    // An approval waits `approve::BANNER`: a bright line along the bottom edge runs
+                    // An approval waits `approve::BANNER`: a bright bar along the very bottom edge runs
                     // down meanwhile, and when it is gone the question goes back to its app.
                     if !t.choices.is_empty() {
                         let left = (1.0 - age / approve::BANNER.as_secs_f32()).clamp(0.0, 1.0);
                         icon_busy |= left > 0.0;
-                        let (x0, x1, y) = (l + 26.0 * s, r - 26.0 * s, nh - 4.0 * s);
-                        if left > 0.0 && x1 > x0 {
+                        if left > 0.0 {
                             // Green, then yellow and red as the time runs out.
                             let mix = |p: (f32, f32, f32), q: (f32, f32, f32), k: f32| (p.0 + (q.0 - p.0) * k, p.1 + (q.1 - p.1) * k, p.2 + (q.2 - p.2) * k);
                             let c = if left > 0.45 { GREEN } else if left > 0.25 { mix(YELLOW, GREEN, (left - 0.25) / 0.2) } else { mix((1.0, 0.3, 0.25), YELLOW, (left / 0.25).min(1.0)) };
-                            rt.FillRoundedRectangle(&rounded(rect(x0, y - 1.0 * s, x0 + (x1 - x0) * left, y + 1.0 * s), 1.0 * s), &self.brush(color(c.0, c.1, c.2, a))?);
+                            // The bar is as wide as the banner and cut to its outline, so its ends curve up with the corners.
+                            let top = nh - COUNTDOWN_H * s;
+                            let params = D2D1_LAYER_PARAMETERS { contentBounds: rect(l, top, r, nh), geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
+                                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: 1.0,
+                                opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
+                            rt.PushLayer(&params, None);
+                            rt.FillRectangle(&rect(l, top, l + (r - l) * left, nh), &self.brush(color(c.0, c.1, c.2, a))?);
+                            rt.PopLayer();
+                            drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
                         }
                     }
                     if !t.choices.is_empty() {
@@ -3686,20 +3695,28 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (900, 340);
+            // PUW_README_LANG=en draws the English set (into target/readme-en) with English sample content.
+            let english = std::env::var("PUW_README_LANG").is_ok_and(|v| v == "en");
+            crate::i18n::set_english(english);
+            let tl = |vi: &'static str, en: &'static str| if english { en } else { vi };
+            let en_date = |d: &'static str| if english { match d { "T7, 24/10" => "Sat, 24/10", "T2, 26/10" => "Mon, 26/10", "T5, 29/10" => "Thu, 29/10", d => d } } else { d };
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("README shots"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let lines = [
                 // Made-up lines about the feature itself (no song's lyrics in the README pictures).
-                (0, "Lời mẫu cho ảnh xem trước"), (6_000, "Lời lấy từ LRCLIB và chạy theo đúng thời gian của bài đang phát trên máy"),
-                (12_000, "Dòng đang hát sáng lên ở giữa"), (18_000, "Dòng dài tự xuống dòng cho vừa khung lời bên phải, không bị cắt mất chữ"),
-                (24_000, "Bấm nút lời để mở hoặc đóng khung này"), (30_000, "Tua bài thì lời nhảy theo"),
+                (0, tl("Lời mẫu cho ảnh xem trước", "Sample lyrics for the preview")),
+                (6_000, tl("Lời lấy từ LRCLIB và chạy theo đúng thời gian của bài đang phát trên máy", "Lyrics come from LRCLIB and follow the song playing on this PC")),
+                (12_000, tl("Dòng đang hát sáng lên ở giữa", "The line being sung lights up in the middle")),
+                (18_000, tl("Dòng dài tự xuống dòng cho vừa khung lời bên phải, không bị cắt mất chữ", "A long line wraps to fit the lyrics column on the right, with no words cut off")),
+                (24_000, tl("Bấm nút lời để mở hoặc đóng khung này", "Press the lyrics button to open or close this panel")),
+                (30_000, tl("Tua bài thì lời nhảy theo", "Seek the song and the lyrics jump along")),
             ];
             // A cover image for the glow and the cover slot: PUW_PREVIEW_COVER=path.
             let art = std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new);
-            let song = |position_ms| Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms, playing: true,
+            let song = |position_ms| Track { title: tl("Bài hát mẫu", "Sample song").into(), artist: tl("Nghệ sĩ mẫu", "Sample artist").into(), duration_ms: 210_000, position_ms, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true, art: art.clone(), art_key: 1,
                 lyrics: Arc::new(lines.iter().map(|(t, s)| (*t as u64, s.to_string())).collect()), ..Default::default() };
             let (playing, singing) = (song(64_000), song(14_000));
-            let place = Some(Place { name: "Đà Nẵng".into(), lat: 16.0, lon: 108.0 });
+            let place = Some(Place { name: tl("Đà Nẵng", "Da Nang").into(), lat: 16.0, lon: 108.0 });
             let sky = |sky, temp: f32| State { place: place.clone(), now: Some(Now { temp, feels: temp + 3.0, humidity: 82.0, wind: 11.0, sky, day: true }), updated: Some(202610290140), ..State::default() };
             let (none, partly, rain) = (State::default(), sky(Sky::PartlyCloudy, 29.0), sky(Sky::Rain, 26.0));
             // With the next 24 hours: a shower late in the afternoon, so the outlook line has rain.
@@ -3729,9 +3746,10 @@ mod tests {
                 ("page-health", Mode::Expanded, None, Page::Health, false, &none, charging(76), "20:49", "T2, 26/10"),
                 ("page-weather", Mode::Expanded, None, Page::Weather, false, &partly_30, on_battery, "02:05", "T5, 29/10"),
             ];
-            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/readme");
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if english { "target/readme-en" } else { "target/readme" });
             std::fs::create_dir_all(&dir).unwrap();
             for (name, mode, music, page, lyrics, wx, battery, time, date) in shots {
+                let date = en_date(date);
                 let live = music.is_some();
                 let mut size = target(mode, live);
                 if mode == Mode::Expanded {
@@ -3777,30 +3795,34 @@ mod tests {
                 let now = crate::usage::now_secs();
                 let bar = |label: &str, weekly, used, hours: i64| Bar { label: label.into(), weekly, used, resets_at: now + hours * 3600 };
                 let mut snap = Snapshot::default();
-                snap.apps[0] = Some(vec![bar("5 giờ", false, 37.0, 3), bar("Tuần", true, 8.0, 150)]);
-                snap.apps[1] = Some(vec![bar("30 ngày", true, 14.0, 718)]);
+                snap.apps[0] = Some(vec![bar(tl("5 giờ", "5 h"), false, 37.0, 3), bar(tl("Tuần", "Week"), true, 8.0, 150)]);
+                snap.apps[1] = Some(vec![bar(tl("30 ngày", "30 days"), true, 14.0, 718)]);
                 snap.plans[1] = Some("free".into());
                 snap.updated[1] = Some(now);
-                snap.apps[2] = Some(vec![bar("Gemini · Tuần", true, 0.4, 150), bar("Gemini · 5 giờ", false, 0.0, 4), bar("Claude · GPT · Tuần", true, 36.0, 160),
-                    bar("Claude · GPT · 5 giờ", false, 30.0, 4), bar("Argon · Tuần", true, 89.0, 150)]);
+                snap.apps[2] = Some(vec![bar(tl("Gemini · Tuần", "Gemini · Week"), true, 0.4, 150), bar(tl("Gemini · 5 giờ", "Gemini · 5 h"), false, 0.0, 4), bar(tl("Claude · GPT · Tuần", "Claude · GPT · Week"), true, 36.0, 160),
+                    bar(tl("Claude · GPT · 5 giờ", "Claude · GPT · 5 h"), false, 30.0, 4), bar(tl("Argon · Tuần", "Argon · Week"), true, 89.0, 150)]);
                 let toast = |app: &str, title: &str, body: &str, choices: &[&str]| Toast { app: app.into(), title: title.into(), body: body.into(), level: None, icon: Some(ICON_WARN),
                     image: None, open: None, badge: None, choices: choices.iter().map(|c| c.to_string()).collect() };
-                let claude_ask = toast("Claude", "Duyệt lệnh", "Cho phép chạy công cụ get_architecture của codebase-memory-mcp cho project này (chỉ đọc)?", &["Đồng ý", "Không đồng ý", "Trong app"]);
-                let antigravity_ask = toast("Antigravity", "Cho phép mcp", "codebase-memory-mcp/get_architecture", &["Đồng ý", "Không"]);
+                let claude_ask = toast("Claude", tl("Duyệt lệnh", "Approve command"), tl("Cho phép chạy công cụ get_architecture của codebase-memory-mcp cho project này (chỉ đọc)?", "Allow the get_architecture tool of codebase-memory-mcp to run for this project (read only)?"),
+                    if english { &["Allow", "Deny", "In the app"] } else { &["Đồng ý", "Không đồng ý", "Trong app"] });
+                let notification = Toast { app: "powershell".into(), title: tl("Anh Minh", "Alex").into(), body: tl("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop.").into(),
+                    level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new() };
+                let antigravity_ask = toast("Antigravity", tl("Cho phép mcp", "Allow mcp"), "codebase-memory-mcp/get_architecture", if english { &["Allow", "Deny"] } else { &["Đồng ý", "Không"] });
                 // The Tasks and Notifications pages with made-up entries.
                 let item = |text: &str, done: bool, at: Option<u64>| crate::todo::Item { text: text.into(), done: done.then_some(20261029), at, told_soon: false, told_now: false };
                 let stamp = crate::todo::stamp;
                 let tasks = vec![
-                    item("Nộp báo cáo tuần", false, Some(stamp(20261028, 9, 0))), item("Uống thuốc", false, Some(stamp(20261029, 2, 15))),
-                    item("Họp nhóm dự án", false, Some(stamp(20261029, 21, 0))), item("Mua sữa và trứng", false, None),
-                    item("Khám răng", false, Some(stamp(20261030, 9, 0))), item("Gọi cho khách hàng", true, None),
+                    item(tl("Nộp báo cáo tuần", "Send the weekly report"), false, Some(stamp(20261028, 9, 0))), item(tl("Uống thuốc", "Take vitamins"), false, Some(stamp(20261029, 2, 15))),
+                    item(tl("Họp nhóm dự án", "Project sync"), false, Some(stamp(20261029, 21, 0))), item(tl("Mua sữa và trứng", "Buy milk and eggs"), false, None),
+                    item(tl("Khám răng", "Dentist"), false, Some(stamp(20261030, 9, 0))), item(tl("Gọi cho khách hàng", "Call the client"), true, None),
                 ];
                 let note = |app: &str, title: &str, body: &str, at: u64| Note { id: format!("none.{app}"), app: app.into(), title: title.into(), body: body.into(), at, open: None };
                 let notes = vec![note("ScreenSketch", "Screenshot copied to clipboard", "Automatically saved to screenshots folder.", 202610291557),
-                    note("Zalo", "Anh Minh", "Tối nay 8h họp nhóm nhé", 202610291402), note("DolbySettings", "Headphones (UGREEN HiTune Max5c)", "", 202610290207),
-                    note("Outlook", "Lịch họp tuần", "Phòng 3, 9:00 thứ Hai", 202610281730)];
+                    note("Zalo", tl("Anh Minh", "Alex"), tl("Tối nay 8h họp nhóm nhé", "Team call at 8 tonight"), 202610291402), note("DolbySettings", "Headphones (UGREEN HiTune Max5c)", "", 202610290207),
+                    note("Outlook", tl("Lịch họp tuần", "Weekly planning"), tl("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610281730)];
                 // (file, style, mode, music, page, Limits tab, banner)
-                let extra: [(&str, notch::Style, Mode, Option<&Track>, Page, usize, Option<&Toast>); 10] = [
+                let extra: [(&str, notch::Style, Mode, Option<&Track>, Page, usize, Option<&Toast>); 11] = [
+                    ("banner", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&notification)),
                     ("page-tasks", notch::Style::Ears, Mode::Expanded, None, Page::Todo, 0, None),
                     ("page-notifications", notch::Style::Ears, Mode::Expanded, None, Page::Notify, 0, None),
                     ("style-pill-idle", notch::Style::Pill, Mode::Collapsed, None, Page::Music, 0, None),
@@ -3814,8 +3836,8 @@ mod tests {
                 ];
                 for (name, style, mode, music, page, tab, banner) in extra {
                     let live = music.is_some();
-                    let size = match banner { Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None if mode == Mode::Expanded => { let [w, h] = panel_size(page); [w, h, target(mode, live)[2]] } None => target(mode, live) };
-                    let view = View { mode, size, time: "20:50", date: "T2, 26/10", battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hovered: None, page,
+                    let size = match banner { Some(t) if t.choices.is_empty() => notch::alert_size(1), Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None if mode == Mode::Expanded => { let [w, h] = panel_size(page); [w, h, target(mode, live)[2]] } None => target(mode, live) };
+                    let view = View { mode, size, time: "20:50", date: en_date("T2, 26/10"), battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hovered: None, page,
                         leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C,
                         list: ListView { counts: if page == Page::Todo { (3, 1) } else { (0, 0) }, remind_before: 15, now: crate::todo::stamp(20261029, 2, 5), draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                         health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
