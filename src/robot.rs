@@ -40,11 +40,15 @@ pub enum Face {
     Sleep,
 }
 
+/// Height of a plain open eye in logical px (it is 7 wide).
+pub const EYE_H: f32 = 12.0;
+
 /// Curious face: (left, right) eye heights in logical px for a sideways gaze; the eye on the
-/// side it looks toward is the big one (looking right: right eye 11, left 6).
+/// side it looks toward is the big one (looking right: right eye 14.7, left 8).
 pub fn curious_eyes(gaze_x: f32) -> (f32, f32) {
     let t = gaze_x.clamp(-1.0, 1.0);
-    (8.5 - 2.5 * t, 8.5 + 2.5 * t)
+    let (mid, swing) = (EYE_H * 8.5 / 9.0, EYE_H * 2.5 / 9.0);
+    (mid - swing * t, mid + swing * t)
 }
 
 /// What the battery says about the robot's mood.
@@ -346,6 +350,7 @@ mod tests {
         let (l, r) = curious_eyes(0.0);
         assert_eq!(l, r, "straight ahead: same size");
         assert_eq!(curious_eyes(5.0), curious_eyes(1.0), "clamped");
+        assert!(curious_eyes(1.0).1 < EYE_H * 1.3 && curious_eyes(1.0).0 > EYE_H * 0.6, "big and small stay in scale with the plain eye");
     }
 
     #[test]

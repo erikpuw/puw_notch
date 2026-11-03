@@ -46,7 +46,7 @@ pub fn visible_page(mode: Mode, hidden: bool, page: Page) -> Option<Page> {
 }
 use crate::health::{self, Health, Setting};
 use crate::i18n::tr;
-use crate::robot::{curious_eyes, Eyes, Face};
+use crate::robot::{curious_eyes, Eyes, Face, EYE_H};
 use crate::todo::{self, Item};
 use crate::weather;
 
@@ -1529,12 +1529,12 @@ impl Renderer {
         for side in [-1.0f32, 1.0] {
             let x = fx + side * 14.0 * s;
             match e.face {
-                Face::Normal => block(x, ey, 7.0 * s, lid(9.0)),
+                Face::Normal => block(x, ey, 7.0 * s, lid(EYE_H)),
                 Face::Curious => {
                     let (left, right) = curious_eyes(e.gaze.0);
                     let h = if side < 0.0 { left } else { right };
-                    // Bottoms line up, so the big eye grows upward.
-                    block(x, ey + (4.25 - h / 2.0) * s, 7.0 * s, lid(h))
+                    // Bottoms line up (half the mean height below the centre), so the big eye grows upward.
+                    block(x, ey + ((left + right) / 4.0 - h / 2.0) * s, 7.0 * s, lid(h))
                 }
                 Face::Greet => stroke(&[p(x - 4.0 * u, ey + 2.5 * u), p(x, ey - 2.5 * u), p(x + 4.0 * u, ey + 2.5 * u)], 2.0)?,
                 Face::Happy => {
