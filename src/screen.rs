@@ -73,11 +73,19 @@ fn is_empty_title(answer: isize, drag_bar: Option<RECT>, x: i32) -> bool {
     answer == HTCAPTION && drag_bar.is_none_or(|r| x >= r.left && x < r.right)
 }
 
+/// Office apps (Word, Excel, PowerPoint, OneNote) answer "caption" along the whole title bar, over their
+/// Search box too, and draw it without a window of its own: nothing tells where it is. It sits in the middle,
+/// where the pill is, so a title bar that reaches the pill counts as covered (like an administrator window).
+const OFFICE_CLASSES: [&str; 4] = ["OpusApp", "XLMAIN", "PPTFrameClass", "Framework::CFrame"];
+
 /// Is the pill's body over a tab or a button of `hwnd`? Asks at 5 points across the body, half way down
 /// the pill (`y`). `None` = the window did not answer in time (busy or hung): no verdict. A window that runs
 /// as administrator is not allowed to be asked (Windows refuses at once): Windows Terminal's drag bar still
 /// says where its bare part is (it answers "caption" everywhere anyway); any other counts as covered, the safe side.
 fn covers_something(hwnd: HWND, center_x: i32, half: i32, y: i32) -> Option<bool> {
+    if OFFICE_CLASSES.contains(&class_name(hwnd).as_str()) {
+        return Some(true);
+    }
     let drag_bar = unsafe { FindWindowExW(Some(hwnd), None, w!("DRAG_BAR_WINDOW_CLASS"), None) }.ok().and_then(|bar| {
         let mut r = RECT::default();
         unsafe { GetWindowRect(bar, &mut r) }.ok().map(|_| r)
