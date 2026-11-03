@@ -13,6 +13,8 @@
 
 <p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a></p>
 
+> **Chỉ tải từ nguồn của tác giả.** PUW Notch do tác giả (erikpuw) phát hành duy nhất tại [github.com/erikpuw/puw_notch](https://github.com/erikpuw/puw_notch). Bản tải từ nơi khác (trang chia sẻ, kho khác, bản đóng gói lại, tệp gửi qua mạng) không do tác giả kiểm soát và không được đảm bảo: có thể đã bị sửa đổi hoặc chèn thêm mã. Hãy chỉ dùng bản ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) của kho này.
+
 ## Tính năng
 
 | Tính năng | Làm gì |
@@ -104,7 +106,7 @@ Menu ở khay hệ thống (chuột phải vào biểu tượng):
 
 ## Tải về và chạy
 
-Tải `puw_notch.exe` ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) rồi chạy. App chưa có chữ ký số nên Windows có thể chặn:
+Tải `puw_notch.exe` ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) rồi chạy (chỉ tải ở đây, xem lưu ý ở đầu trang). App chưa có chữ ký số, nên không có gì khác ngoài nguồn này để xác nhận file là của tác giả, và Windows có thể chặn:
 
 - **SmartScreen** ("Windows protected your PC"): bấm **More info** → **Run anyway**.
 - **File bị đánh dấu tải từ mạng**: chuột phải vào file → **Properties** → tick **Unblock** → OK.

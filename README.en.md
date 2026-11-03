@@ -13,6 +13,8 @@
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b></p>
 
+> **Download only from the author's source.** PUW Notch is published by its author (erikpuw) only at [github.com/erikpuw/puw_notch](https://github.com/erikpuw/puw_notch). A copy from anywhere else (file-sharing sites, other repositories, repackaged builds, files sent over the internet) is not controlled by the author and comes with no guarantee: it may have been modified or had code added. Use only the build in this repository's [Releases](https://github.com/erikpuw/puw_notch/releases).
+
 ## Features
 
 | Feature | What it does |
@@ -104,7 +106,7 @@ The tray menu (right-click the icon):
 
 ## Download and run
 
-Get `puw_notch.exe` from [Releases](https://github.com/erikpuw/puw_notch/releases) and run it. The app is not code-signed yet, so Windows may block it:
+Get `puw_notch.exe` from [Releases](https://github.com/erikpuw/puw_notch/releases) and run it (download only from here, see the note at the top). The app is not code-signed, so nothing but this source confirms a file is the author's, and Windows may block it:
 
 - **SmartScreen** ("Windows protected your PC"): click **More info** → **Run anyway**.
 - **File marked as downloaded**: right-click the file → **Properties** → tick **Unblock** → OK.
