@@ -89,6 +89,8 @@ pub struct Eyes {
     pub alpha: f32,
     /// Gaze, about -1..1 sideways and -1..1.2 up / down (down is +).
     pub gaze: (f32, f32),
+    /// The curious glance: -1 left .. 1 right, 0 when not glancing (sizes the two eyes, `curious_eyes`).
+    pub curious: f32,
     /// 1 open, down to 0.1 mid-blink (`blink_open`); 1 for faces whose eyes are already shut.
     pub open: f32,
     /// Seconds since the robot showed (drives the floating z).
@@ -102,6 +104,8 @@ pub struct Robot {
     clock: f32,
     alpha: f32,
     gaze: (f32, f32),
+    /// `Eyes::curious`, easing toward the glance's side.
+    glance: f32,
     next_blink: f32,
     seed: u32,
     /// The curious glance (to `side`, -1 left or 1 right) lasts until `play_until`; the next starts at `next_play`.
@@ -115,7 +119,7 @@ pub struct Robot {
 
 impl Default for Robot {
     fn default() -> Self {
-        Robot { state: State::Off, since: 0.0, clock: 0.0, alpha: 0.0, gaze: (0.0, 0.0), next_blink: 3.0, seed: 0x1234_5678, side: 1.0, play_until: 0.0, next_play: PLAY_EVERY, full_pending: false, happy_until: 0.0 }
+        Robot { state: State::Off, since: 0.0, clock: 0.0, alpha: 0.0, gaze: (0.0, 0.0), glance: 0.0, next_blink: 3.0, seed: 0x1234_5678, side: 1.0, play_until: 0.0, next_play: PLAY_EVERY, full_pending: false, happy_until: 0.0 }
     }
 }
 
@@ -161,8 +165,8 @@ impl Robot {
         (self.seed >> 16) as f32 / 65_535.0
     }
 
-    /// Advance the animation by `dt` seconds. `cursor` = cursor relative to the pill centre in
-    /// logical px, for the glance; `mood` from the battery.
+    /// Advance the animation by `dt` seconds. `cursor` = where the cursor is on the monitor, relative to
+    /// the pill (`toward`); `mood` from the battery.
     pub fn step(&mut self, dt: f32, cursor: Option<(f32, f32)>, mood: Mood) -> Eyes {
         self.since += dt;
         self.clock += dt;
@@ -181,12 +185,12 @@ impl Robot {
             self.full_pending = false;
             self.happy_until = t + HAPPY_S;
         }
-        let toward = |(x, y): (f32, f32)| ((x / 60.0).clamp(-1.2, 1.2), (y / 22.0).clamp(-0.8, 1.2));
+        // The curious glance goes a step to its side from wherever the eyes are looking.
+        let glance_to = if self.state == State::Awake && t < self.play_until && t >= self.happy_until { self.side } else { 0.0 };
         let target = match self.state {
-            // The eyes follow the cursor; the curious glance looks aside whatever the cursor does.
             State::Awake => {
                 let (x, y) = cursor.map_or((0.0, 0.0), toward);
-                (if t < self.play_until && t >= self.happy_until { self.side } else { x }, y)
+                (x + glance_to, y)
             }
             State::Asleep => (0.0, 0.6),
             // Back at work: a glance at the cursor, then the face centres before the clock returns.
@@ -198,6 +202,7 @@ impl Robot {
         let k = (dt * 9.0).min(1.0);
         self.gaze.0 += (target.0 - self.gaze.0) * k;
         self.gaze.1 += (target.1 - self.gaze.1) * k;
+        self.glance += (glance_to - self.glance) * k;
         // A blink every 2-4.5 s, now and then two in a row.
         if t > self.next_blink + BLINK_CLOSE_S + BLINK_OPEN_S {
             let gap = if self.random() < DOUBLE_BLINK { 0.08 } else { 2.0 + self.random() * 2.5 };
@@ -214,8 +219,16 @@ impl Robot {
         // Faces with open eyes blink; ^ ^, > < and sleeping eyes are already shut.
         let blinks = matches!(face, Face::Normal | Face::Curious | Face::Sad);
         let open = if blinks { blink_open(t - self.next_blink) } else { 1.0 };
-        Eyes { face, alpha: self.alpha, gaze: self.gaze, open, time: t }
+        Eyes { face, alpha: self.alpha, gaze: self.gaze, curious: self.glance, open, time: t }
     }
+}
+
+/// Where the face looks for a cursor at `(x, y)`: `x` -1..1 across the half width of the monitor from the
+/// pill, `y` 0..1 down its height. The square root spreads the near positions apart without flattening the
+/// far ones, so every part of the screen, down to its bottom corners, reads differently.
+fn toward((x, y): (f32, f32)) -> (f32, f32) {
+    let root = |v: f32| v.signum() * v.abs().sqrt();
+    ((1.2 * root(x)).clamp(-1.2, 1.2), (1.2 * root(y)).clamp(-0.8, 1.2))
 }
 
 #[cfg(test)]
@@ -233,7 +246,7 @@ mod tests {
         assert_eq!(r.state, State::Asleep);
         r.update(0, true);
         assert_eq!(r.state, State::Look, "input again: glance at the cursor");
-        r.step(1.0, Some((60.0, 0.0)), Mood::Normal);
+        r.step(1.0, Some((0.5, 0.0)), Mood::Normal);
         r.update(0, true);
         assert_eq!(r.state, State::Look);
         r.step(1.0, None, Mood::Normal);
@@ -266,15 +279,15 @@ mod tests {
         let g = r.step(0.05, None, Mood::Normal).gaze;
         assert!(g.0.abs() < 0.2 && g.1.abs() < 0.2, "no cursor: looks straight ahead: {g:?}");
         for _ in 0..20 {
-            r.step(0.05, Some((-30.0, 11.0)), Mood::Normal);
+            r.step(0.05, Some((-0.25, 0.2)), Mood::Normal);
         }
-        let g = r.step(0.05, Some((-30.0, 11.0)), Mood::Normal).gaze;
+        let g = r.step(0.05, Some((-0.25, 0.2)), Mood::Normal).gaze;
         assert!(g.0 < -0.2 && g.1 > 0.2, "awake and idle: the eyes follow the cursor: {g:?}");
         r.update(0, true);
         for _ in 0..20 {
-            r.step(0.05, Some((-200.0, -50.0)), Mood::Normal);
+            r.step(0.05, Some((-1.0, -0.3)), Mood::Normal);
         }
-        let g = r.step(0.05, Some((-200.0, -50.0)), Mood::Normal).gaze;
+        let g = r.step(0.05, Some((-1.0, -0.3)), Mood::Normal).gaze;
         assert!(g.0 < -1.0 && g.1 < -0.5, "looks toward the cursor, clamped: {g:?}");
         r.update(SLEEP_S, true);
         assert_eq!(r.step(0.05, None, Mood::Normal).face, Face::Sleep);
@@ -328,17 +341,40 @@ mod tests {
     }
 
     #[test]
-    fn the_curious_glance_goes_to_both_sides() {
+    fn the_curious_glance_goes_to_both_sides_whatever_the_cursor_does() {
         let mut r = Robot::default();
         r.update(SHOW_S, true);
-        let (mut left, mut right) = (false, false);
+        // Far right and low on the screen: the eyes already look far to the right, a glance there must still move them.
+        let cursor = Some((1.0, 0.5));
+        let (mut base, mut lo, mut hi, mut sizes) = (None, f32::MAX, f32::MIN, (false, false));
         for _ in 0..4800 {
-            let e = r.step(0.05, None, Mood::Normal);
+            let e = r.step(0.05, cursor, Mood::Normal);
             if e.face == Face::Curious {
-                (left, right) = (left || e.gaze.0 < -0.8, right || e.gaze.0 > 0.8);
+                (lo, hi) = (lo.min(e.gaze.0), hi.max(e.gaze.0));
+                sizes = (sizes.0 || e.curious < -0.8, sizes.1 || e.curious > 0.8);
+            } else if e.face == Face::Normal {
+                base = Some(e.gaze.0);
             }
         }
-        assert!(left && right, "glances left and right");
+        let base = base.unwrap();
+        assert!(lo < base - 0.8 && hi > base + 0.8, "glances both ways from where the eyes look: {lo}..{hi} around {base}");
+        assert!(sizes.0 && sizes.1, "the big eye follows the glance");
+    }
+
+    #[test]
+    fn the_eyes_follow_the_cursor_over_the_whole_screen() {
+        let look = |c: (f32, f32)| {
+            let mut r = Robot::default();
+            r.update(SHOW_S, true);
+            for _ in 0..40 {
+                r.step(0.05, Some(c), Mood::Normal);
+            }
+            r.step(0.05, Some(c), Mood::Normal).gaze
+        };
+        let (near, mid, far) = (look((0.1, 0.1)), look((0.4, 0.4)), look((1.0, 0.95)));
+        assert!(near.0 < mid.0 && mid.0 < far.0, "further right, further the eyes turn: {near:?} {mid:?} {far:?}");
+        assert!(near.1 < mid.1 && mid.1 < far.1, "lower on the screen, lower the eyes look");
+        assert!(far.1 > 1.0 && look((-1.0, 0.95)).0 < -1.0 && far.0 > 1.0, "the bottom corners are told apart from the middle");
     }
 
     #[test]
@@ -365,14 +401,14 @@ mod tests {
         // The cursor is far up-left: the face first looks there...
         let mut gaze = (0.0, 0.0);
         for _ in 0..30 {
-            gaze = r.step(0.02, Some((-200.0, -50.0)), Mood::Normal).gaze;
+            gaze = r.step(0.02, Some((-1.0, -0.3)), Mood::Normal).gaze;
         }
         assert!(gaze.0 < -1.0, "glances at the cursor first: {gaze:?}");
         // ...then the eyes settle in the middle by the time the clock comes back.
         let mut frames = 0;
         while r.state == State::Look && frames < 400 {
             r.update(0, true);
-            gaze = r.step(0.02, Some((-200.0, -50.0)), Mood::Normal).gaze;
+            gaze = r.step(0.02, Some((-1.0, -0.3)), Mood::Normal).gaze;
             frames += 1;
         }
         assert_eq!(r.state, State::Off, "the glance ends");

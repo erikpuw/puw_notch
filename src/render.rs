@@ -1531,7 +1531,7 @@ impl Renderer {
             match e.face {
                 Face::Normal => block(x, ey, 7.0 * s, lid(EYE_H)),
                 Face::Curious => {
-                    let (left, right) = curious_eyes(e.gaze.0);
+                    let (left, right) = curious_eyes(e.curious);
                     let h = if side < 0.0 { left } else { right };
                     // Bottoms line up (half the mean height below the centre), so the big eye grows upward.
                     block(x, ey + ((left + right) / 4.0 - h / 2.0) * s, 7.0 * s, lid(h))

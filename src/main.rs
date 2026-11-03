@@ -403,7 +403,9 @@ impl App {
         let cursor = unsafe { GetCursorPos(&mut p) }.is_ok().then(|| {
             let cx = (self.win.0 + self.win.2 / 2) as f32;
             let cy = self.win.1 as f32 + self.top_px() + self.notch.size()[1] * self.scale / 2.0;
-            ((p.x as f32 - cx) / self.scale, (p.y as f32 - cy) / self.scale)
+            // Across the half width of the monitor and down its height, so the eyes follow the cursor over the whole screen.
+            let (half_w, h) = (((self.monitor.right - self.monitor.left) as f32 / 2.0).max(1.0), ((self.monitor.bottom - self.monitor.top) as f32).max(1.0));
+            (((p.x as f32 - cx) / half_w).clamp(-1.0, 1.0), ((p.y as f32 - cy) / h).clamp(-1.0, 1.0))
         });
         let mood = match self.battery {
             Some(b) if b.percent <= 20 && !b.charging => robot::Mood::Low,
