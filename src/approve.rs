@@ -9,9 +9,12 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use windows::core::w;
+use windows::core::{w, PCWSTR, PWSTR};
 use windows::Data::Json::JsonObject;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WPARAM};
+use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
+use windows::Win32::Security::{GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER};
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::Storage::FileSystem::{FlushFileBuffers, ReadFile, WriteFile, PIPE_ACCESS_DUPLEX};
 use windows::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
@@ -75,26 +78,63 @@ pub struct Server {
     enabled: Arc<AtomicBool>,
 }
 
+/// Who may open the pipe: SYSTEM, the administrators, and the user who runs the notch. The pipe's default
+/// would only let in the creator's own group, so a notch that starts elevated (the Start with Windows task)
+/// would turn away Claude Code's hook, which runs with the user's normal rights.
+fn pipe_sddl(user_sid: &str) -> String {
+    format!("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{user_sid})")
+}
+
+/// The string form of the SID of the user this process runs as (the same user with or without elevation).
+fn user_sid() -> Option<String> {
+    unsafe {
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
+        // 8-byte aligned room for a TOKEN_USER and the longest SID.
+        let mut buf = [0u64; 32];
+        let mut len = 0;
+        let got = GetTokenInformation(token, TokenUser, Some(buf.as_mut_ptr().cast()), (buf.len() * 8) as u32, &mut len);
+        let _ = CloseHandle(token);
+        got.ok()?;
+        let mut text = PWSTR::null();
+        ConvertSidToStringSidW((*(buf.as_ptr() as *const TOKEN_USER)).User.Sid, &mut text).ok()?;
+        // ponytail: the string Windows allocated is never freed: made once per run, a few bytes.
+        text.to_string().ok()
+    }
+}
+
+/// The pipe's security attributes, None when they cannot be made (the default then applies, as before).
+/// The descriptor lives as long as the process: the pipe is made again for every client.
+fn pipe_security() -> Option<SECURITY_ATTRIBUTES> {
+    let sddl: Vec<u16> = pipe_sddl(&user_sid()?).encode_utf16().chain([0]).collect();
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl.as_ptr()), SDDL_REVISION_1, &mut descriptor, None) }.ok()?;
+    Some(SECURITY_ATTRIBUTES { nLength: size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: descriptor.0, bInheritHandle: false.into() })
+}
+
 impl Server {
     pub fn start(hwnd: HWND) -> Server {
         let queue = Arc::new(Mutex::new(VecDeque::new()));
         let (shared, target) = (queue.clone(), hwnd.0 as isize);
-        crate::system::spawn("approve-accept", move || loop {
-            let pipe = unsafe {
-                CreateNamedPipeW(w!("\\\\.\\pipe\\puw-notch-approve"), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                    PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, None)
-            };
-            if pipe == INVALID_HANDLE_VALUE {
-                std::thread::sleep(Duration::from_secs(5));
-                continue;
+        crate::system::spawn("approve-accept", move || {
+            let security = pipe_security();
+            loop {
+                let pipe = unsafe {
+                    CreateNamedPipeW(w!("\\\\.\\pipe\\puw-notch-approve"), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                        PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, security.as_ref().map(|s| s as *const SECURITY_ATTRIBUTES))
+                };
+                if pipe == INVALID_HANDLE_VALUE {
+                    std::thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
+                let connected = unsafe { ConnectNamedPipe(pipe, None).is_ok() || GetLastError() == ERROR_PIPE_CONNECTED };
+                if !connected {
+                    unsafe { let _ = CloseHandle(pipe); }
+                    continue;
+                }
+                let (shared, pipe) = (shared.clone(), pipe.0 as isize);
+                crate::system::spawn("approve-serve", move || serve(HANDLE(pipe as _), &shared, target));
             }
-            let connected = unsafe { ConnectNamedPipe(pipe, None).is_ok() || GetLastError() == ERROR_PIPE_CONNECTED };
-            if !connected {
-                unsafe { let _ = CloseHandle(pipe); }
-                continue;
-            }
-            let (shared, pipe) = (shared.clone(), pipe.0 as isize);
-            crate::system::spawn("approve-serve", move || serve(HANDLE(pipe as _), &shared, target));
         });
         Server { queue, cancelled: Arc::default(), enabled: Arc::new(AtomicBool::new(true)) }
     }
@@ -191,6 +231,14 @@ pub fn parse_request(text: &str) -> Option<(String, String, String, Vec<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pipe_is_open_to_the_user_who_runs_the_notch_elevated_or_not() {
+        assert_eq!(pipe_sddl("S-1-5-21-1-2-3-1001"), "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;S-1-5-21-1-2-3-1001)");
+        assert!(user_sid().is_some_and(|s| s.starts_with("S-1-5-")), "the SID of this user");
+        let security = pipe_security().expect("the descriptor is made");
+        assert!(!security.lpSecurityDescriptor.is_null());
+    }
 
     #[test]
     fn a_request_is_one_line_of_json() {
