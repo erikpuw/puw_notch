@@ -3,11 +3,18 @@
 //! question Windows itself asks it for every mouse move. A bare bit of title bar answers "caption" (the window
 //! can be dragged by it); a tab or a button answers something else. So the notch is not left out of screen
 //! capture and shows in remote desktop and screen sharing.
+//!
+//! The one exception is a window that runs as administrator: Windows does not let the notch ask it. Its pixels
+//! under the pill's body are read instead (`pixels_say_busy`), on a thread of its own, leaving the notch out
+//! of the capture for that moment only.
 
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::Mutex;
 
 use windows::core::w;
 use windows::Win32::Foundation::{GetLastError, ERROR_ACCESS_DENIED, HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::DwmFlush;
+use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -73,11 +80,21 @@ fn is_empty_title(answer: isize, drag_bar: Option<RECT>, x: i32) -> bool {
     answer == HTCAPTION && drag_bar.is_none_or(|r| x >= r.left && x < r.right)
 }
 
+/// What came of asking a window about the pill's body.
+enum Asked {
+    /// It answered: a tab or a button is under the pill (`true`) or not.
+    Answer(bool),
+    /// It did not answer in time (busy or hung): no verdict.
+    Silent,
+    /// It is not allowed to be asked (it runs as administrator).
+    Refused,
+}
+
 /// Is the pill's body over a tab or a button of `hwnd`? Asks at 5 points across the body, half way down
-/// the pill (`y`). `None` = the window did not answer in time (busy or hung): no verdict. A window that runs
-/// as administrator is not allowed to be asked (Windows refuses at once): Windows Terminal's drag bar still
-/// says where its bare part is (it answers "caption" everywhere anyway); any other counts as covered, the safe side.
-fn covers_something(hwnd: HWND, center_x: i32, half: i32, y: i32) -> Option<bool> {
+/// the pill (`y`). A window that runs as administrator is not allowed to be asked (Windows refuses at once):
+/// Windows Terminal's drag bar still says where its bare part is (it answers "caption" everywhere anyway);
+/// any other is `Refused`.
+fn covers_something(hwnd: HWND, center_x: i32, half: i32, y: i32) -> Asked {
     let drag_bar = unsafe { FindWindowExW(Some(hwnd), None, w!("DRAG_BAR_WINDOW_CLASS"), None) }.ok().and_then(|bar| {
         let mut r = RECT::default();
         unsafe { GetWindowRect(bar, &mut r) }.ok().map(|_| r)
@@ -90,17 +107,100 @@ fn covers_something(hwnd: HWND, center_x: i32, half: i32, y: i32) -> Option<bool
         let answer = if sent.0 != 0 {
             answer as i16 as isize
         } else if unsafe { GetLastError() } != ERROR_ACCESS_DENIED {
-            return None;
+            return Asked::Silent;
         } else if drag_bar.is_some() {
             HTCAPTION
         } else {
-            return Some(true);
+            return Asked::Refused;
         };
         if !is_empty_title(answer, drag_bar, x) {
-            return Some(true);
+            return Asked::Answer(true);
         }
     }
-    Some(false)
+    Asked::Answer(false)
+}
+
+/// A pixel is "edge" when a channel differs from its left neighbour by at least this much.
+const EDGE_DELTA: u8 = 14;
+/// Edge pixels under the pill that make it "covering something": a tab title, a tab's edge.
+const BUSY_EDGES: usize = 12;
+
+/// Count edge pixels in a top-down BGRA buffer `w` pixels wide.
+fn edge_pixels(px: &[u8], w: usize) -> usize {
+    let mut n = 0;
+    for row in px.chunks_exact(w * 4) {
+        for pair in row.windows(8).step_by(4) {
+            let d = (0..3).map(|c| pair[c].abs_diff(pair[c + 4])).max().unwrap_or(0);
+            if d >= EDGE_DELTA {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Edge pixels in the screen's `w` x `h` area at (`x`, `y`). The notch's window is dropped from the capture for
+/// the moment (display affinity), else it would hide exactly what is being looked for.
+unsafe fn grab_edges(own: HWND, x: i32, y: i32, w: i32, h: i32) -> usize {
+    let _ = SetWindowDisplayAffinity(own, WDA_EXCLUDEFROMCAPTURE);
+    // The compositor drops the window from what it hands to capture on its next frame.
+    let _ = DwmFlush();
+    let screen = GetDC(None);
+    let mem = CreateCompatibleDC(Some(screen));
+    let mut bmi = BITMAPINFO::default();
+    bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    let mut bits = std::ptr::null_mut();
+    let mut edges = 0;
+    if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+        let old = SelectObject(mem, bmp.into());
+        if BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_ok() && !bits.is_null() {
+            edges = edge_pixels(std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize), w as usize);
+        }
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+    }
+    let _ = DeleteDC(mem);
+    ReleaseDC(None, screen);
+    let _ = SetWindowDisplayAffinity(own, WDA_NONE);
+    edges
+}
+
+/// What the last read of an administrator window found: (the window, where it stood, tabs or text under the pill).
+static PIXELS: Mutex<Option<(isize, RECT, bool)>> = Mutex::new(None);
+static READING: AtomicBool = AtomicBool::new(false);
+/// An administrator window already read is read again after this long (a tab opened or closed in it), not at
+/// every look: each read takes the notch out of screen capture for a moment, which a remote viewer would see.
+const READ_AGAIN: std::time::Duration = std::time::Duration::from_secs(2);
+static READ_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// The verdict for an administrator window `fg` standing at `r` from its pixels in the area (`x`, `y`, `w` x `h`).
+/// The read (a frame's wait and a screen copy) runs on its own thread, so the notch's frames never wait for it;
+/// the answer of the read before stands meanwhile, and the notch is woken when a read changes it. A window not
+/// read yet (or moved) is read at once, one that was, every `READ_AGAIN`.
+fn pixels_say_busy(own: HWND, fg: HWND, r: RECT, x: i32, y: i32, w: i32, h: i32) -> Check {
+    let known = PIXELS.lock().ok().and_then(|v| v.filter(|(win, at, _)| *win == fg.0 as isize && *at == r).map(|v| v.2));
+    let due = known.is_none() || READ_AT.lock().ok().and_then(|t| *t).is_none_or(|t| t.elapsed() >= READ_AGAIN);
+    if due && !READING.swap(true, Ordering::Relaxed) {
+        if let Ok(mut t) = READ_AT.lock() {
+            *t = Some(std::time::Instant::now());
+        }
+        let (own, win) = (own.0 as isize, fg.0 as isize);
+        crate::system::spawn("pixels", move || {
+            let busy = unsafe { grab_edges(HWND(own as _), x, y, w, h) } >= BUSY_EDGES;
+            if let Ok(mut v) = PIXELS.lock() {
+                *v = Some((win, r, busy));
+            }
+            READING.store(false, Ordering::Relaxed);
+            if known != Some(busy) {
+                unsafe { let _ = PostMessageW(Some(HWND(HOOK_TARGET.load(Ordering::Relaxed) as _)), WM_SCREENEVENT, WPARAM(0), LPARAM(0)); }
+            }
+        });
+    }
+    known.map_or(Check::Unknown, Check::Busy)
 }
 
 /// Is an ordinary (not topmost) visible window stacked above `own`? A topmost window is never
@@ -190,9 +290,20 @@ pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, s
         let now = crate::unix_ms() as isize;
         if asked.elapsed().as_millis() > 15 && now - SAID.load(Ordering::Relaxed) > 10_000 {
             SAID.store(now, Ordering::Relaxed);
-            crate::system::log(&format!("slow hit test: {} ms, {} ({})", asked.elapsed().as_millis(), class_name(fg), if answer.is_some() { "answered" } else { "timed out" }));
+            crate::system::log(&format!("slow hit test: {} ms, {} ({})", asked.elapsed().as_millis(), class_name(fg), if matches!(answer, Asked::Silent) { "timed out" } else { "answered" }));
         }
-        answer.map_or(Check::Unknown, Check::Busy)
+        match answer {
+            Asked::Answer(busy) => Check::Busy(busy),
+            Asked::Silent => Check::Unknown,
+            Asked::Refused => {
+                // The body of the pill, from the top of the window (or the screen) down to the pill's height.
+                let (top, h) = (r.top.max(monitor.top), monitor.top + (PILL_H * scale) as i32 - r.top.max(monitor.top));
+                match clip_span(center_x - half, center_x + half, r.left, r.right).filter(|_| h > 3) {
+                    Some((from, to)) => pixels_say_busy(own, fg, r, from, top, to - from, h),
+                    None => Check::Busy(false),
+                }
+            }
+        }
     }
 }
 
@@ -205,7 +316,7 @@ fn reaches_pill(r: RECT, center_x: i32, top: i32, scale: f32, pill_w: f32) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::{body_half, clip_span, is_empty_title, reaches_pill, HTCAPTION};
+    use super::{body_half, clip_span, edge_pixels, is_empty_title, reaches_pill, BUSY_EDGES, HTCAPTION};
     use windows::Win32::Foundation::RECT;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
@@ -222,6 +333,16 @@ mod tests {
         assert!(!is_empty_title(HTCAPTION, bar, 960), "left of the drag bar: a tab");
         assert!(is_empty_title(HTCAPTION, bar, 1500), "inside the drag bar: bare");
         assert!(!is_empty_title(HTCLIENT, bar, 1500), "a button inside the bare part still answers client");
+    }
+
+    #[test]
+    fn flat_is_quiet_stripes_are_busy() {
+        let w = 8;
+        let flat = vec![40u8; w * 2 * 4];
+        assert_eq!(edge_pixels(&flat, w), 0);
+        let stripes: Vec<u8> = (0..w * 2).flat_map(|i| if i % 2 == 0 { [0, 0, 0, 255] } else { [200, 200, 200, 255] }).collect();
+        assert_eq!(edge_pixels(&stripes, w), 2 * (w - 1));
+        assert!(2 * (w - 1) >= 12 && BUSY_EDGES == 12, "a tab edge running down the pill's height is busy, a few stray pixels are not");
     }
 
     #[test]
