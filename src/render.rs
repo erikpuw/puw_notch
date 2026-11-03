@@ -3715,7 +3715,8 @@ mod tests {
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
             let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
             // (file, mode, music, page, lyrics open, weather, battery, time, date)
-            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 11] = [
+            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 12] = [
+                ("page-nav", Mode::Expanded, Some(&playing), Page::Music, false, &none, charging(70), "23:16", "T7, 24/10"),
                 ("pill-idle", Mode::Collapsed, None, Page::Music, false, &none, charging(76), "20:50", ""),
                 ("robot", Mode::Collapsed, None, Page::Music, false, &none, on_battery, "20:50", ""),
                 ("robot-happy", Mode::Collapsed, None, Page::Music, false, &none, charging(100), "20:50", ""),
@@ -3740,10 +3741,16 @@ mod tests {
                 if lyrics {
                     size[0] += LYRICS_EXTRA_W;
                 }
+                // The mouse on the page dots: they open into a row of page icons (the panel grows by NAV_EXTRA), one under the mouse.
+                let nav = name == "page-nav";
+                set_nav_open(nav);
+                if nav {
+                    size[1] += NAV_EXTRA;
+                }
                 // The idle robot: plain eyes looking around below, and the cheer for a full battery.
                 let eyes = |face, gaze: (f32, f32)| Some(Eyes { face, alpha: 1.0, gaze, curious: 0.0, open: 1.0, time: 0.4 });
                 let robot = match name { "robot" => eyes(Face::Normal, (0.5, 0.9)), "robot-happy" => eyes(Face::Happy, (0.0, 0.0)), _ => None };
-                let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: None, page,
+                let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: nav.then_some(Button::GoPage(Page::Todo)), page,
                     leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };

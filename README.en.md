@@ -58,6 +58,8 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 ![Music with lyrics](assets/screenshots/page-music-lyrics.png)<br>**Music** with lyrics: the panel widens, the line being sung lit in the middle, the aurora line swaying along the bottom
 
+![Quick page picker](assets/screenshots/page-nav.png)<br>**Quick page picker**: put the mouse on the page dots and they open into a row of icons, click one to jump straight to that page (they come back as dots when the mouse leaves)
+
 ![Weather](assets/screenshots/page-weather.png)<br>**Weather**: large icon, temperature, the next 5 slots, one line of figures, °C | °F buttons
 
 **Limits** of Claude, Codex and Antigravity (Claude shows what is used; Codex and Antigravity show what is left, counting down like their own apps). The Codex tab names the plan of the account in use; a free plan counts 30 days:
