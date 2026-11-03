@@ -406,8 +406,7 @@ impl App {
             ((p.x as f32 - cx) / self.scale, (p.y as f32 - cy) / self.scale)
         });
         let mood = match self.battery {
-            Some(b) if b.charging => robot::Mood::Charging,
-            Some(b) if b.percent <= 20 => robot::Mood::Low,
+            Some(b) if b.percent <= 20 && !b.charging => robot::Mood::Low,
             _ => robot::Mood::Normal,
         };
         Some(self.robot.step(dt, cursor, mood))
@@ -653,6 +652,11 @@ impl App {
         let mut changed = (&time, &date, battery) != (&self.time, &self.date, self.battery);
         if let (Some(old), Some(new)) = (self.battery, battery) {
             for e in system::power_events(old, new) {
+                match e {
+                    system::PowerEvent::Full => self.robot.full_battery(true),
+                    system::PowerEvent::Unplugged => self.robot.full_battery(false),
+                    _ => {}
+                }
                 self.show_banner(power_toast(e, new), STATUS_MS * 2);
             }
         }

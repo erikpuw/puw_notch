@@ -1466,14 +1466,18 @@ impl Renderer {
         }
     }
 
-    /// Idle robot's LED face centred on (cx, cy): eyes 14 px either side, the mouth below, the
-    /// whole face shifted along `e.gaze`. Strokes have round ends like the glowing lines of an LED
-    /// face; asleep a pixel "z" drifts up beside it.
+    /// Idle robot's LED face centred on (cx, cy): eyes 14 px either side, the whole face shifted along
+    /// `e.gaze`. Strokes have round ends like the glowing lines of an LED face, and each eye sits in a halo
+    /// of three widening, fainter layers that reads as a blur. Asleep a pixel "z" drifts up beside the
+    /// face, cheering two sparkles twinkle there.
     fn draw_face(&self, e: &Eyes, cx: f32, cy: f32, s: f32, a: f32) -> Result<()> {
         let rt = &self.rt;
-        let led = |alpha: f32| unsafe { rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, alpha), None) };
+        // The cheering face is green, like the battery ring while it charges.
+        let ink = if e.face == Face::Happy { GREEN } else { LED };
+        let led = |alpha: f32| unsafe { rt.CreateSolidColorBrush(&color(ink.0, ink.1, ink.2, alpha), None) };
         let lit = led(a)?;
-        let glow = led(a * 0.12)?;
+        // (how far the layer grows past the shape in logical px, its opacity), the widest and faintest last.
+        let halo: Vec<(f32, ID2D1SolidColorBrush)> = [(1.2, 0.16), (2.6, 0.09), (4.4, 0.045)].into_iter().map(|(grow, alpha)| led(a * alpha).map(|b| (grow, b))).collect::<Result<_>>()?;
         let p = |x: f32, y: f32| Vector2 { X: x, Y: y };
         // Quadratic curve from `a` through control `c` to `b`, as points.
         let quad = |a: Vector2, c: Vector2, b: Vector2| -> Vec<Vector2> {
@@ -1495,63 +1499,71 @@ impl Renderer {
             }
         };
         let stroke = |pts: &[Vector2], width: f32| -> Result<()> {
-            unsafe { rt.DrawGeometry(&path(pts, false)?, &lit, width * s, &self.round) };
+            let geo = path(pts, false)?;
+            unsafe {
+                for (grow, b) in &halo {
+                    rt.DrawGeometry(&geo, b, (width + 2.0 * grow) * s, &self.round);
+                }
+                rt.DrawGeometry(&geo, &lit, width * s, &self.round);
+            }
             Ok(())
         };
         let block = |x: f32, y: f32, w: f32, h: f32| unsafe {
-            // A glowing square eye: a faint larger block behind the bright one.
-            let g = 2.0 * s;
-            rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0 - g, y - h / 2.0 - g, x + w / 2.0 + g, y + h / 2.0 + g), 3.0 * s), &glow);
+            for (grow, b) in &halo {
+                let g = grow * s;
+                rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0 - g, y - h / 2.0 - g, x + w / 2.0 + g, y + h / 2.0 + g), 1.5 * s + g), b);
+            }
             rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0), 1.5 * s), &lit);
         };
-        let (fx, fy) = (cx + e.gaze.0 * 3.0 * s, cy + e.gaze.1 * 2.4 * s);
-        let (ey, my) = (fy - 3.0 * s, fy + 6.5 * s);
+        // The eyes sit on the pill's centre line; the face moves along the gaze.
+        let (fx, ey) = (cx + e.gaze.0 * 3.0 * s, cy + e.gaze.1 * 2.4 * s);
         // An open eye `h` logical px tall, squeezed by a blink (never below a thin bar).
         let lid = |h: f32| (h * e.open).max(1.6) * s;
         let u = s;
         for side in [-1.0f32, 1.0] {
             let x = fx + side * 14.0 * s;
             match e.face {
-                Face::Normal | Face::Greet => block(x, ey, 7.0 * s, lid(9.0)),
+                Face::Normal => block(x, ey, 7.0 * s, lid(9.0)),
                 Face::Curious => {
                     let (left, right) = curious_eyes(e.gaze.0);
                     let h = if side < 0.0 { left } else { right };
                     // Bottoms line up, so the big eye grows upward.
-                    block(x, ey + (4.5 - h / 2.0) * s, 7.0 * s, lid(h))
+                    block(x, ey + (4.25 - h / 2.0) * s, 7.0 * s, lid(h))
                 }
-                Face::Wink if side < 0.0 => block(x, ey, 7.0 * s, lid(9.0)),
-                Face::Happy | Face::Wink => stroke(&[p(x - 4.0 * u, ey + 3.0 * u), p(x, ey - 2.0 * u), p(x + 4.0 * u, ey + 3.0 * u)], 2.0)?,
-                Face::Excited => {
+                Face::Greet => stroke(&[p(x - 4.0 * u, ey + 2.5 * u), p(x, ey - 2.5 * u), p(x + 4.0 * u, ey + 2.5 * u)], 2.0)?,
+                Face::Happy => {
                     let d = -side; // '>' on the left, '<' on the right
-                    stroke(&[p(x - 3.0 * d * u, ey - 3.5 * u), p(x + 3.0 * d * u, ey + 0.5 * u), p(x - 3.0 * d * u, ey + 4.5 * u)], 2.0)?
+                    stroke(&[p(x - 3.0 * d * u, ey - 4.0 * u), p(x + 3.0 * d * u, ey), p(x - 3.0 * d * u, ey + 4.0 * u)], 2.0)?
                 }
                 Face::Sad => {
                     let d = -side; // inner corner lower: droopy eyes
                     // Blinking squeezes the eye toward its middle (ey + 1).
                     let v = |dy: f32| ey + 1.0 * u + (dy - 1.0) * u * e.open.max(0.18);
                     let pts = [p(x - 3.5 * u, v(-2.0 - d * 1.5)), p(x + 3.5 * u, v(-2.0 + d * 1.5)), p(x + 3.5 * u, v(4.0)), p(x - 3.5 * u, v(4.0))];
-                    unsafe { rt.FillGeometry(&path(&pts, true)?, &lit, None) };
+                    let geo = path(&pts, true)?;
+                    unsafe {
+                        for (grow, b) in &halo {
+                            rt.DrawGeometry(&geo, b, 2.0 * grow * s, &self.round);
+                        }
+                        rt.FillGeometry(&geo, &lit, None);
+                    }
                 }
-                Face::Sleep => stroke(&quad(p(x - 4.0 * u, ey + 1.0 * u), p(x, ey + 5.0 * u), p(x + 4.0 * u, ey + 1.0 * u)), 2.0)?,
+                Face::Sleep => stroke(&quad(p(x - 4.0 * u, ey - 1.0 * u), p(x, ey + 3.0 * u), p(x + 4.0 * u, ey - 1.0 * u)), 2.0)?,
             }
         }
-        let m = |dx: f32, dy: f32| p(fx + dx * u, my + dy * u);
-        match e.face {
-            Face::Normal | Face::Wink => stroke(&quad(m(-3.0, -1.0), m(0.0, 2.0), m(3.0, -1.0)), 1.6)?,
-            Face::Happy => stroke(&quad(m(-4.0, -2.0), m(0.0, 3.0), m(4.0, -2.0)), 1.6)?,
-            Face::Excited => {
-                let mut pts = quad(m(-4.0, -1.0), m(-2.0, 2.0), m(0.0, -1.0));
-                pts.extend(quad(m(0.0, -1.0), m(2.0, 2.0), m(4.0, -1.0)).into_iter().skip(1));
-                stroke(&pts, 1.6)?
+        if e.face == Face::Happy {
+            // Two white sparkles beside the green eyes, twinkling out of step.
+            let white = |alpha: f32| unsafe { rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, alpha), None) };
+            let (spark, glow) = (white(a)?, white(a * 0.14)?);
+            for (k, (dx, dy, size)) in [(35.0f32, -4.0f32, 3.2f32), (42.0, 4.0, 2.4)].into_iter().enumerate() {
+                let r = size * (0.75 + 0.25 * (e.time * 7.0 + k as f32 * 2.0).sin()) * s;
+                let (x, y, c) = (cx + dx * s, cy + dy * s, 0.3 * r);
+                let star = path(&[p(x, y - r), p(x + c, y - c), p(x + r, y), p(x + c, y + c), p(x, y + r), p(x - c, y + c), p(x - r, y), p(x - c, y - c)], true)?;
+                unsafe {
+                    rt.DrawGeometry(&star, &glow, 3.0 * s, &self.round);
+                    rt.FillGeometry(&star, &spark, None);
+                }
             }
-            Face::Greet => {
-                // Big open grin: a flat top and a deep curve under it, filled ("D" on its side).
-                let mut pts = vec![m(-5.5, -2.0)];
-                pts.extend(quad(m(5.5, -2.0), m(0.0, 9.0), m(-5.5, -2.0)));
-                unsafe { rt.FillGeometry(&path(&pts, true)?, &lit, None) };
-            }
-            Face::Curious | Face::Sleep => stroke(&[m(-2.5, 0.0), m(2.5, 0.0)], 1.6)?,
-            Face::Sad => stroke(&quad(m(-3.0, 1.0), m(0.0, -2.0), m(3.0, 1.0)), 1.6)?,
         }
         if e.face == Face::Sleep {
             // Pixel "z" on a 4x4 grid: top row, two steps down the diagonal, bottom row.
@@ -3995,7 +4007,7 @@ mod tests {
                 if leaving.is_some_and(|(_, k, _)| k >= 1.0) {
                     page_anim = None;
                 }
-                let eyes = robot.visible().then(|| robot.step(1.0 / fps, None, Mood::Charging));
+                let eyes = robot.visible().then(|| robot.step(1.0 / fps, None, Mood::Normal));
                 let track = song(64_000 + ((now - 4.0).max(0.0) * 1000.0) as u64);
                 let mode = notch.mode;
                 let view = View { mode, size: notch.size(), time: "09:41", date: &date, battery: Some(Battery { percent: 82, charging, saver: false }),

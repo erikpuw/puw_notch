@@ -1,7 +1,7 @@
-//! Idle robot: when nobody touches the PC, an LED face (eyes and mouth, `Face`) takes the resting
-//! pill. It looks around below after `SHOW_S` seconds idle, plays a face now and then (often a
-//! happy one while charging), frowns on a low battery, falls asleep after `SLEEP_S`, and when work starts again it
-//! grins at the cursor for `LOOK_S` before handing the pill back to clock and battery.
+//! Idle robot: when nobody touches the PC, an LED face (eyes only, `Face`) takes the resting pill. It
+//! follows the cursor with its eyes after `SHOW_S` seconds idle, glances aside curious now and then,
+//! cheers once when the battery has filled up, frowns on a low battery, falls asleep after `SLEEP_S`, and
+//! when work starts again it smiles at the cursor for `LOOK_S` before handing the pill back to clock and battery.
 
 /// Seconds without input before the eyes show / fall asleep; seconds of the glance on waking.
 pub const SHOW_S: u32 = 30;
@@ -26,21 +26,17 @@ pub enum State {
 /// Expression on the robot's LED face.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Face {
-    /// Square eyes, small smile.
+    /// Square eyes.
     Normal,
-    /// ^ ^ eyes, big smile.
+    /// The battery is full: green > < eyes and two sparkles.
     Happy,
-    /// One square eye, one ^.
-    Wink,
-    /// > < eyes, w mouth.
-    Excited,
-    /// You are back: plain square eyes, a big open grin.
+    /// You are back: ^ ^ eyes.
     Greet,
-    /// The eye on the side it looks toward big, the other small (`curious_eyes`), flat mouth.
+    /// The eye on the side it looks toward big, the other small (`curious_eyes`).
     Curious,
-    /// Drooping eyes, frown.
+    /// Drooping eyes.
     Sad,
-    /// Closed arcs, flat mouth, a z drifting up.
+    /// Closed arcs, a z drifting up.
     Sleep,
 }
 
@@ -55,16 +51,16 @@ pub fn curious_eyes(gaze_x: f32) -> (f32, f32) {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mood {
     Normal,
-    /// Plugged in: happy faces now and then.
-    Charging,
     /// Low and not charging.
     Low,
 }
 
-/// The plain face gets a playful one every `PLAY_EVERY` (+ up to `PLAY_JITTER`) s for `PLAY_S`.
+/// The plain face glances aside curious every `PLAY_EVERY` (+ up to `PLAY_JITTER`) s for `PLAY_S`.
 const PLAY_EVERY: f32 = 4.0;
 const PLAY_JITTER: f32 = 3.0;
 const PLAY_S: f32 = 1.8;
+/// The cheer for a full battery lasts this long, once.
+const HAPPY_S: f32 = 1.8;
 
 /// A blink: the lid shuts in `BLINK_CLOSE_S` and opens again a little slower, in `BLINK_OPEN_S`.
 const BLINK_CLOSE_S: f32 = 0.07;
@@ -104,15 +100,18 @@ pub struct Robot {
     gaze: (f32, f32),
     next_blink: f32,
     seed: u32,
-    /// Playful face shown now, until `play_until`; the next one starts at `next_play`.
-    play: Face,
+    /// The curious glance (to `side`, -1 left or 1 right) lasts until `play_until`; the next starts at `next_play`.
+    side: f32,
     play_until: f32,
     next_play: f32,
+    /// The battery filled up and the cheer has not been shown yet / is shown until `happy_until`.
+    full_pending: bool,
+    happy_until: f32,
 }
 
 impl Default for Robot {
     fn default() -> Self {
-        Robot { state: State::Off, since: 0.0, clock: 0.0, alpha: 0.0, gaze: (0.0, 0.0), next_blink: 3.0, seed: 0x1234_5678, play: Face::Normal, play_until: 0.0, next_play: PLAY_EVERY }
+        Robot { state: State::Off, since: 0.0, clock: 0.0, alpha: 0.0, gaze: (0.0, 0.0), next_blink: 3.0, seed: 0x1234_5678, side: 1.0, play_until: 0.0, next_play: PLAY_EVERY, full_pending: false, happy_until: 0.0 }
     }
 }
 
@@ -136,14 +135,16 @@ impl Robot {
         };
         let changed = next != self.state;
         if changed {
-            // Coming back to work: a blink right away, as if waking up.
-            if next == State::Look {
-                self.next_blink = self.clock;
-            }
             self.state = next;
             self.since = 0.0;
         }
         changed
+    }
+
+    /// The battery filled up (`true`): the robot cheers once, the first time its eyes are up. Unplugged
+    /// before that (`false`): the cheer is dropped.
+    pub fn full_battery(&mut self, full: bool) {
+        self.full_pending = full;
     }
 
     /// Whether frames must keep coming (eyes on screen or fading out).
@@ -165,16 +166,28 @@ impl Robot {
         let fade = (if on { dt } else { -dt }) / FADE_S;
         self.alpha = (self.alpha + fade).clamp(0.0, 1.0);
         let t = self.clock;
+        // Now and then a curious glance to a random side for a moment.
+        if t >= self.next_play {
+            self.side = if self.random() < 0.5 { -1.0 } else { 1.0 };
+            self.play_until = t + PLAY_S;
+            self.next_play = self.play_until + PLAY_EVERY + self.random() * PLAY_JITTER;
+        }
+        // The battery filled up: one cheer, the first time the eyes are up.
+        if self.full_pending && self.state == State::Awake {
+            self.full_pending = false;
+            self.happy_until = t + HAPPY_S;
+        }
+        let toward = |(x, y): (f32, f32)| ((x / 60.0).clamp(-1.2, 1.2), (y / 22.0).clamp(-0.8, 1.2));
         let target = match self.state {
-            // Wandering, mostly down: the robot looks at the desk.
-            State::Awake => ((t * 0.7).sin() * 1.0 + (t * 1.9).sin() * 0.3, 0.9 + (t * 1.3).sin() * 0.25),
+            // The eyes follow the cursor; the curious glance looks aside whatever the cursor does.
+            State::Awake => {
+                let (x, y) = cursor.map_or((0.0, 0.0), toward);
+                (if t < self.play_until && t >= self.happy_until { self.side } else { x }, y)
+            }
             State::Asleep => (0.0, 0.6),
             // Back at work: a glance at the cursor, then the face centres before the clock returns.
             State::Look if self.since >= GLANCE_S => (0.0, 0.0),
-            State::Look => match cursor {
-                Some((x, y)) => ((x / 60.0).clamp(-1.2, 1.2), (y / 22.0).clamp(-0.8, 1.2)),
-                None => ((self.since * 3.0).sin() * 0.9, 0.3),
-            },
+            State::Look => cursor.map_or(((self.since * 3.0).sin() * 0.9, 0.3), toward),
             // Handed back: fade out where it is centred, no wandering.
             State::Off => (0.0, 0.0),
         };
@@ -186,27 +199,16 @@ impl Robot {
             let gap = if self.random() < DOUBLE_BLINK { 0.08 } else { 2.0 + self.random() * 2.5 };
             self.next_blink = t + gap;
         }
-        // Now and then a playful face for a moment.
-        if t >= self.next_play {
-            // Charging adds a happy face to the mix.
-            let plays: &[Face] = if mood == Mood::Charging {
-                &[Face::Curious, Face::Wink, Face::Excited, Face::Happy, Face::Happy]
-            } else {
-                &[Face::Curious, Face::Wink, Face::Excited]
-            };
-            self.play = plays[((self.random() * plays.len() as f32) as usize).min(plays.len() - 1)];
-            self.play_until = t + PLAY_S;
-            self.next_play = self.play_until + PLAY_EVERY + self.random() * PLAY_JITTER;
-        }
         let face = match (self.state, mood) {
             (State::Asleep, _) => Face::Sleep,
             (State::Look, _) => Face::Greet,
             (_, Mood::Low) => Face::Sad,
-            _ if t < self.play_until => self.play,
+            _ if t < self.happy_until => Face::Happy,
+            _ if t < self.play_until => Face::Curious,
             _ => Face::Normal,
         };
         // Faces with open eyes blink; ^ ^, > < and sleeping eyes are already shut.
-        let blinks = matches!(face, Face::Normal | Face::Greet | Face::Wink | Face::Curious | Face::Sad);
+        let blinks = matches!(face, Face::Normal | Face::Curious | Face::Sad);
         let open = if blinks { blink_open(t - self.next_blink) } else { 1.0 };
         Eyes { face, alpha: self.alpha, gaze: self.gaze, open, time: t }
     }
@@ -257,7 +259,13 @@ mod tests {
             r.step(0.05, None, Mood::Normal);
         }
         assert_eq!(r.step(0.05, None, Mood::Normal).alpha, 1.0);
-        assert!(r.step(0.05, None, Mood::Normal).gaze.1 > 0.3, "looks down at the desk");
+        let g = r.step(0.05, None, Mood::Normal).gaze;
+        assert!(g.0.abs() < 0.2 && g.1.abs() < 0.2, "no cursor: looks straight ahead: {g:?}");
+        for _ in 0..20 {
+            r.step(0.05, Some((-30.0, 11.0)), Mood::Normal);
+        }
+        let g = r.step(0.05, Some((-30.0, 11.0)), Mood::Normal).gaze;
+        assert!(g.0 < -0.2 && g.1 > 0.2, "awake and idle: the eyes follow the cursor: {g:?}");
         r.update(0, true);
         for _ in 0..20 {
             r.step(0.05, Some((-200.0, -50.0)), Mood::Normal);
@@ -279,25 +287,54 @@ mod tests {
         let mut r = Robot::default();
         r.update(SHOW_S, true);
         assert_eq!(face(&mut r, Mood::Low), Face::Sad, "battery low, not charging: sad");
-        let charging: Vec<Face> = (0..2400).map(|_| face(&mut r, Mood::Charging)).collect();
-        assert!(charging.contains(&Face::Happy), "charging: happy now and then");
-        assert!(charging.iter().filter(|f| **f == Face::Normal).count() > charging.len() / 2, "but not a face stuck on happy");
         r.update(SLEEP_S, true);
         assert_eq!(face(&mut r, Mood::Low), Face::Sleep);
         r.update(0, true);
-        assert_eq!(face(&mut r, Mood::Normal), Face::Greet, "you are back: plain eyes, a big grin");
+        assert_eq!(face(&mut r, Mood::Normal), Face::Greet, "you are back: ^ ^ eyes");
     }
 
     #[test]
-    fn idle_face_is_mostly_normal_with_a_little_play() {
+    fn full_battery_cheers_once_when_the_eyes_are_up() {
+        let mut r = Robot::default();
+        r.full_battery(true);
+        assert_eq!(r.step(0.05, None, Mood::Normal).face, Face::Normal, "working: nobody to cheer for");
+        r.update(SHOW_S, true);
+        let faces: Vec<Face> = (0..2400).map(|_| r.step(0.05, None, Mood::Normal).face).collect();
+        let happy = faces.iter().filter(|f| **f == Face::Happy).count();
+        assert!(happy > 0 && faces[0] == Face::Happy, "cheers as soon as the eyes are up");
+        assert!((HAPPY_S / 0.05) as usize - 2 <= happy && happy <= (HAPPY_S / 0.05) as usize + 2, "for about {HAPPY_S} s: {happy} frames");
+        assert!(faces[happy..].iter().all(|f| *f != Face::Happy), "and only once");
+        let mut r = Robot::default();
+        r.full_battery(true);
+        r.full_battery(false);
+        r.update(SHOW_S, true);
+        assert!((0..2400).all(|_| r.step(0.05, None, Mood::Normal).face != Face::Happy), "unplugged first: no cheer");
+    }
+
+    #[test]
+    fn idle_face_is_mostly_normal_with_a_little_curiosity() {
         let mut r = Robot::default();
         r.update(SHOW_S, true);
         let faces: Vec<Face> = (0..1200).map(|_| r.step(0.05, None, Mood::Normal).face).collect();
         let normal = faces.iter().filter(|f| **f == Face::Normal).count();
-        let play = faces.iter().filter(|f| matches!(f, Face::Curious | Face::Wink | Face::Excited)).count();
+        let curious = faces.iter().filter(|f| **f == Face::Curious).count();
         assert!(normal > faces.len() / 2, "mostly the plain face: {normal}/{}", faces.len());
-        assert!(play > 0, "now and then curious / wink / excited");
-        assert_eq!(normal + play, faces.len(), "no other face while idle and fine");
+        assert!(curious > 0, "now and then curious");
+        assert_eq!(normal + curious, faces.len(), "no other face while idle and fine");
+    }
+
+    #[test]
+    fn the_curious_glance_goes_to_both_sides() {
+        let mut r = Robot::default();
+        r.update(SHOW_S, true);
+        let (mut left, mut right) = (false, false);
+        for _ in 0..4800 {
+            let e = r.step(0.05, None, Mood::Normal);
+            if e.face == Face::Curious {
+                (left, right) = (left || e.gaze.0 < -0.8, right || e.gaze.0 > 0.8);
+            }
+        }
+        assert!(left && right, "glances left and right");
     }
 
     #[test]
@@ -326,7 +363,7 @@ mod tests {
             gaze = r.step(0.02, Some((-200.0, -50.0)), Mood::Normal).gaze;
         }
         assert!(gaze.0 < -1.0, "glances at the cursor first: {gaze:?}");
-        // ...then eyes and mouth settle in the middle by the time the clock comes back.
+        // ...then the eyes settle in the middle by the time the clock comes back.
         let mut frames = 0;
         while r.state == State::Look && frames < 400 {
             r.update(0, true);
@@ -362,14 +399,14 @@ mod tests {
     }
 
     #[test]
-    fn every_open_eyed_face_blinks_and_coming_back_blinks_at_once() {
+    fn open_eyes_blink_and_shut_ones_do_not() {
         let mut r = Robot::default();
         r.update(SHOW_S, true);
         r.step(1.0, None, Mood::Normal);
         r.update(0, true);
-        let greet: Vec<Eyes> = (0..8).map(|_| r.step(0.02, None, Mood::Normal)).collect();
+        let greet: Vec<Eyes> = (0..80).map(|_| r.step(0.02, None, Mood::Normal)).collect();
         assert_eq!(greet[0].face, Face::Greet);
-        assert!(greet.iter().any(|e| e.open < 0.5), "a blink as you come back");
+        assert!(greet.iter().all(|e| e.open == 1.0), "^ ^ is already shut");
         let mut r = Robot::default();
         r.update(SHOW_S, true);
         let sad = (0..400).filter(|_| r.step(0.025, None, Mood::Low).open < 0.5).count();
