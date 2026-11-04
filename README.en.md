@@ -68,6 +68,12 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 |---|---|---|
 | ![](assets/screenshots/en/page-usage-claude.png) | ![](assets/screenshots/en/page-usage-codex.png) | ![](assets/screenshots/en/page-usage-antigravity.png) |
 
+**Water and stand-up reminders**: the banner only informs (× closes it); to log a drink or that you stood up, press the round button on the Health page ("Later, 10 min" is there too):
+
+| Time to drink | Goal reached | Sitting too long |
+|---|---|---|
+| ![](assets/screenshots/en/banner-water.png) | ![](assets/screenshots/en/banner-water-goal.png) | ![](assets/screenshots/en/banner-standup.png) |
+
 **Approve on the notch**: questions from Claude, Codex and Antigravity show as banners, a click answers:
 
 | Claude (a multiple-choice question) | Antigravity (permission to use a tool) |

@@ -68,6 +68,12 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 |---|---|---|
 | ![](assets/screenshots/page-usage-claude.png) | ![](assets/screenshots/page-usage-codex.png) | ![](assets/screenshots/page-usage-antigravity.png) |
 
+**Nhắc uống nước và đứng dậy**: banner chỉ báo (nút × để đóng); ghi nhận uống nước hay đã đứng dậy thì bấm nút tròn ở trang Sức khỏe (có sẵn "Để sau 10 phút"):
+
+| Đến giờ uống | Đạt mục tiêu | Ngồi lâu |
+|---|---|---|
+| ![](assets/screenshots/banner-water.png) | ![](assets/screenshots/banner-water-goal.png) | ![](assets/screenshots/banner-standup.png) |
+
 **Duyệt ngay trên notch**: câu hỏi của Claude, Codex và Antigravity hiện thành banner, bấm là trả lời:
 
 | Claude (câu hỏi chọn) | Antigravity (xin quyền dùng công cụ) |

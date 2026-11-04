@@ -31,7 +31,7 @@ SIZES = {
     "page-usage-claude": (580, 218), "page-usage-codex": (580, 218), "page-usage-antigravity": (580, 218),
     "style-pill-page": (580, 224),
     "page-music-lyrics": (900, 218),
-    "banner": (500, None), "banner-approve-claude": (580, None), "banner-approve-antigravity": (580, None),
+    "banner": (500, None), "banner-water": (500, None), "banner-water-goal": (500, None), "banner-standup": (500, None), "banner-approve-claude": (580, None), "banner-approve-antigravity": (580, None),
 }
 
 
@@ -56,7 +56,7 @@ def backdrop(width, height):
 
 
 # The pictures that carry words (page titles, dates, sample content, buttons): each language has its own.
-TEXTUAL = [n for n in SIZES if n.startswith(("page-", "banner-approve")) or n in ("style-pill-page", "banner")]
+TEXTUAL = [n for n in SIZES if n.startswith(("page-", "banner-approve")) or n in ("style-pill-page", "banner", "banner-water", "banner-water-goal", "banner-standup")]
 
 
 def main(names):

@@ -3857,6 +3857,13 @@ mod tests {
                     if english { &["Allow", "Deny", "In the app"] } else { &["Đồng ý", "Không đồng ý", "Trong app"] });
                 let notification = Toast { app: "powershell".into(), title: tl("Anh Minh", "Alex").into(), body: tl("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop.").into(),
                     level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new() };
+                // The reminders of the Health page: a status banner each (icon, title, a bar of today's water or a second line).
+                let status = |app: &str, title: &str, body: &str, level: Option<f32>, icon: &'static str| Toast { app: app.into(), title: title.into(), body: body.into(), level,
+                    icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new() };
+                let water = status(tl("Uống nước", "Water"), tl("Đến giờ uống 250 ml nước", "Time to drink 250 ml"), "", Some(0.375), ICON_DROP);
+                let water_goal = status(tl("Uống nước", "Water"), tl("Đạt mục tiêu 2.0 L hôm nay", "Goal of 2.0 L reached today"), "", Some(1.0), ICON_DROP);
+                let stand = status(tl("Đứng dậy đi lại", "Stand up and move"), tl("Bạn đã ngồi 45 phút liền", "You have been sitting for 45 min"),
+                    tl("Vận động vài phút nhé", "Walk around for a few minutes"), None, ICON_WALK);
                 let antigravity_ask = toast("Antigravity", tl("Cho phép mcp", "Allow mcp"), "codebase-memory-mcp/get_architecture", if english { &["Allow", "Deny"] } else { &["Đồng ý", "Không"] });
                 // The Tasks and Notifications pages with made-up entries.
                 let item = |text: &str, done: bool, at: Option<u64>| crate::todo::Item { text: text.into(), done: done.then_some(20261029), at, told_soon: false, told_now: false };
@@ -3871,8 +3878,11 @@ mod tests {
                     note("Zalo", tl("Anh Minh", "Alex"), tl("Tối nay 8h họp nhóm nhé", "Team call at 8 tonight"), 202610291402), note("DolbySettings", "Headphones (UGREEN HiTune Max5c)", "", 202610290207),
                     note("Outlook", tl("Lịch họp tuần", "Weekly planning"), tl("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610281730)];
                 // (file, style, mode, music, page, Limits tab, banner)
-                let extra: [(&str, notch::Style, Mode, Option<&Track>, Page, usize, Option<&Toast>); 11] = [
+                let extra: [(&str, notch::Style, Mode, Option<&Track>, Page, usize, Option<&Toast>); 14] = [
                     ("banner", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&notification)),
+                    ("banner-water", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&water)),
+                    ("banner-water-goal", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&water_goal)),
+                    ("banner-standup", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&stand)),
                     ("page-tasks", notch::Style::Ears, Mode::Expanded, None, Page::Todo, 0, None),
                     ("page-notifications", notch::Style::Ears, Mode::Expanded, None, Page::Notify, 0, None),
                     ("style-pill-idle", notch::Style::Pill, Mode::Collapsed, None, Page::Music, 0, None),
@@ -3886,7 +3896,7 @@ mod tests {
                 ];
                 for (name, style, mode, music, page, tab, banner) in extra {
                     let live = music.is_some();
-                    let size = match banner { Some(t) if t.choices.is_empty() => notch::alert_size(1), Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None if mode == Mode::Expanded => { let [w, h] = panel_size(page); [w, h, target(mode, live)[2]] } None => target(mode, live) };
+                    let size = match banner { Some(t) if t.choices.is_empty() => notch::alert_size(if t.icon.is_some() { 0 } else { 1 }), Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None if mode == Mode::Expanded => { let [w, h] = panel_size(page); [w, h, target(mode, live)[2]] } None => target(mode, live) };
                     let view = View { mode, size, time: "20:50", date: en_date("T2, 26/10"), battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hovered: None, page,
                         leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C,
                         list: ListView { counts: if page == Page::Todo { (3, 1) } else { (0, 0) }, remind_before: 15, now: crate::todo::stamp(20261029, 2, 5), draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
