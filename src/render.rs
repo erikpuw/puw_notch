@@ -687,13 +687,8 @@ pub const ICON_DROP: &str = "\u{1}drop";
 const ICON_GEAR: &str = "\u{E713}";
 const ICON_MINUS: &str = "\u{E738}";
 const ICON_PLUS: &str = "\u{E710}";
-const ICON_PREV: &str = "\u{E892}";
 const ICON_PLAY: &str = "\u{E768}";
 const ICON_PAUSE: &str = "\u{E769}";
-const ICON_NEXT: &str = "\u{E893}";
-const ICON_SHUFFLE: &str = "\u{E8B1}";
-const ICON_REPEAT: &str = "\u{E8EE}";
-const ICON_REPEAT_ONE: &str = "\u{E8ED}";
 const ICON_NOTE: &str = "\u{E8D6}";
 pub const ICON_WARN: &str = "\u{E7BA}";
 pub const ICON_BELL: &str = "\u{EA8F}";
@@ -1791,6 +1786,11 @@ impl Renderer {
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();
+        // The Music page's player icons (shuffle, previous, next, repeat all, repeat one) with their paths as geometry.
+        let player_icons: Vec<(&'static icons::Icon, Vec<ID2D1PathGeometry>)> = if page == Some(Page::Music) {
+            [&icons::PLAYER_SHUFFLE, &icons::PLAYER_PREV, &icons::PLAYER_NEXT, &icons::PLAYER_REPEAT, &icons::PLAYER_REPEAT_ONE].into_iter()
+                .filter_map(|ic| Some((ic, ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?))).collect()
+        } else { Vec::new() };
         // Height of each wrapped lyric line, while the panel is wider than the player.
         let lyric_heights: Vec<f32> = match v.music {
             Some(t) if page == Some(Page::Music) && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
@@ -2394,16 +2394,9 @@ impl Renderer {
                                     }
                                     continue;
                                 }
-                                let icon = match b {
-                                    Button::Previous => ICON_PREV,
-                                    Button::PlayPause => if playing { ICON_PAUSE } else { ICON_PLAY },
-                                    Button::Next => ICON_NEXT,
-                                    Button::Shuffle => ICON_SHUFFLE,
-                                    Button::Repeat => if v.music.is_some_and(|t| t.repeat == Repeat::One) { ICON_REPEAT_ONE } else { ICON_REPEAT },
-                                    _ => continue,
-                                };
                                 if b == Button::PlayPause {
                                     // The main action: a white disc with a dark glyph.
+                                    let icon = if playing { ICON_PAUSE } else { ICON_PLAY };
                                     let fill = if !on { grey(0.25, a) } else if hovered == Some(b) { grey(0.85, a) } else { grey(1.0, a) };
                                     let disc = D2D1_ELLIPSE { point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
                                         radiusX: (br.right - br.left) / 2.0, radiusY: (br.bottom - br.top) / 2.0 };
@@ -2414,17 +2407,21 @@ impl Renderer {
                                     micon("play", icon, F_ICON, rect(br.left + nudge, br.top, br.right + nudge, br.bottom), if on { grey(0.05, a) } else { grey(0.5, a) })?;
                                     continue;
                                 }
-                                // Only the play button has a disc. Shuffle and repeat are plain glyphs: dimmer at rest, green
-                                // while they are on (no other mark), white under the mouse.
-                                let (slot, active) = match b {
-                                    Button::Previous => ("prev", false),
-                                    Button::Shuffle => ("shuffle", v.music.is_some_and(|t| t.shuffle)),
-                                    Button::Repeat => ("repeat", v.music.is_some_and(|t| t.repeat != Repeat::Off)),
-                                    _ => ("next", false),
+                                // Previous, next, shuffle and repeat are plain Tabler line icons (no disc): shuffle and repeat dimmer at
+                                // rest, green while they are on (no other mark), white under the mouse.
+                                let (which, active) = match b {
+                                    Button::Shuffle => (0, v.music.is_some_and(|t| t.shuffle)),
+                                    Button::Previous => (1, false),
+                                    Button::Next => (2, false),
+                                    Button::Repeat => (if v.music.is_some_and(|t| t.repeat == Repeat::One) { 4 } else { 3 }, v.music.is_some_and(|t| t.repeat != Repeat::Off)),
+                                    _ => continue,
                                 };
-                                let c = if !on { grey(0.3, a) } else if active { color(0.25, 0.85, 0.5, a) }
-                                    else if hovered == Some(b) || !matches!(b, Button::Shuffle | Button::Repeat) { grey(1.0, a) } else { grey(0.78, a) };
-                                micon(slot, icon, F_ICON, br, c)?;
+                                let Some((ic, geoms)) = player_icons.get(which) else { continue };
+                                let ((r, g, bl), alpha) = if !on { ((1.0, 1.0, 1.0), 0.3) } else if active { ((0.25, 0.85, 0.5), 1.0) }
+                                    else if hovered == Some(b) || !matches!(b, Button::Shuffle | Button::Repeat) { ((1.0, 1.0, 1.0), 1.0) } else { ((0.78, 0.78, 0.78), 1.0) };
+                                let size = 17.0 * s;
+                                let (cx0, cy0) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
+                                draw_wx_icon(ic, geoms, cx0 - size / 2.0, cy0 - size / 2.0, size, Some(((r, g, bl), (r, g, bl))), a * alpha, icons::DUR)?;
                             }
                             // Lyrics beside the player, fading in as the panel widens: the line being
                             // sung is bright and centred, the others dim; the whole column glides up

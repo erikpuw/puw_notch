@@ -75,6 +75,23 @@ pub struct Icon {
 
 const MID: [(f32, f32); 4] = [(12.0, 12.0); 4];
 
+/// The Music page's player controls (Tabler Icons, MIT): previous, next, shuffle, repeat all and repeat one. They do not
+/// move (`anim` is only a placeholder), they are drawn like the banner icons so every line icon has the same stroke.
+pub static PLAYER_PREV: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M20 5v14l-12 -7z"), p("M4 5l0 14")] };
+pub static PLAYER_NEXT: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M4 5v14l12 -7z"), p("M20 5l0 14")] };
+pub static PLAYER_SHUFFLE: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[p("M18 4l3 3l-3 3"), p("M18 20l3 -3l-3 -3"), p("M3 7h3a5 5 0 0 1 5 5a5 5 0 0 0 5 5h5"), p("M21 7h-5a4.978 4.978 0 0 0 -3 1m-4 8a4.984 4.984 0 0 1 -3 1h-3")],
+};
+pub static PLAYER_REPEAT: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[p("M4 12v-3a3 3 0 0 1 3 -3h13m-3 -3l3 3l-3 3"), p("M20 12v3a3 3 0 0 1 -3 3h-13m3 3l-3 -3l3 -3")],
+};
+pub static PLAYER_REPEAT_ONE: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[p("M4 12v-3a3 3 0 0 1 3 -3h13m-3 -3l3 3l-3 3"), p("M20 12v3a3 3 0 0 1 -3 3h-13m3 3l-3 -3l3 -3"), p("M11 11l1 -1v4")],
+};
+
 static BLUETOOTH: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Bluetooth, origins: [(12.0, 12.0), (4.5, 12.0), (18.5, 12.0), (0.0, 0.0)],
     parts: &[moves("M7 8l10 8l-5 4l0 -16l5 4l-10 8", 0), moves("M4 12l1 0", 1), moves("M18 12l1 0", 2)],
@@ -637,6 +654,15 @@ pub fn parse(d: &str) -> Option<Vec<Seg>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_player_icons_parse() {
+        for ic in [&PLAYER_PREV, &PLAYER_NEXT, &PLAYER_SHUFFLE, &PLAYER_REPEAT, &PLAYER_REPEAT_ONE] {
+            for part in ic.parts {
+                assert!(parse(part.d).is_some_and(|segs| segs.len() >= 2), "{}", part.d);
+            }
+        }
+    }
 
     #[test]
     fn parses_lines_relative_and_absolute() {
