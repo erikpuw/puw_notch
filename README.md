@@ -33,7 +33,7 @@
 |---|---|
 | **Nhạc** | Ảnh bìa, lời đồng bộ (LRCLIB), ⏮ ⏯ ⏭, trộn bài và lặp (tắt, tất cả, một bài: xanh lá khi đang bật; chỉ khi trình phát có: iTunes có, foobar2000 thì để mờ), kéo thanh để tua (Windows media controls, iTunes, foobar2000). Nút lời mở rộng bảng; nền và đường aurora theo màu bìa. |
 | **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách, vòng tiến độ cho biết còn bao nhiêu. Gõ "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0–60 phút; nút sửa và xóa hiện khi rê chuột. |
-| **Tập trung** | Pomodoro: cả chu kỳ (4 vòng tập trung 25 phút, nghỉ ngắn 5, nghỉ dài 15) là một thanh chia đoạn, số giờ lớn, ba chip chọn chế độ, nút đặt lại / bắt đầu / sang đoạn kế. Hết đoạn thì banner báo và đoạn kế chờ bạn bấm bắt đầu; khi đang chạy, pill có một vạch mỏng ở đáy. |
+| **Tập trung** | Pomodoro: cả chu kỳ (4 vòng tập trung 25 phút, nghỉ ngắn 5, nghỉ dài 15) là một thanh chia đoạn, số giờ lớn, ba chip chọn chế độ, nút đặt lại / bắt đầu / sang đoạn kế. Hết đoạn thì banner báo và đoạn kế tự chạy tiếp (sau nghỉ dài thì dừng chờ chu kỳ mới); khi đang chạy, pill có một vạch mỏng ở đáy. |
 | **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng; số lượng ở bên trái; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy: số lớn, thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy; chỉnh giờ và mức ở ⚙. |
 | **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Dữ liệu Open-Meteo, làm mới 30 phút. |

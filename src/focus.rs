@@ -28,7 +28,7 @@ impl Kind {
     }
 }
 
-/// A segment ran out: the one that ended and the one that is now waiting (paused) to be started.
+/// A segment ran out: the one that ended and the one that comes now.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Done {
     pub ended: Kind,
@@ -118,13 +118,15 @@ impl Focus {
         }
     }
 
-    /// A running segment that has run out moves to the next one and waits there, paused.
+    /// A running segment that has run out moves on to the next one, which starts at once: the user is told at
+    /// every change. After the long break the cycle is over: it waits at the start, paused, for a new one.
     pub fn tick(&mut self, now: Instant) -> Option<Done> {
         if !self.running() || !self.remaining(now).is_zero() {
             return None;
         }
         let ended = self.kind();
-        *self = Focus { seg: (self.seg + 1) % CYCLE.len(), left: seg_len((self.seg + 1) % CYCLE.len()), since: None };
+        let seg = (self.seg + 1) % CYCLE.len();
+        *self = Focus { seg, left: seg_len(seg), since: (seg != 0).then_some(now) };
         Some(Done { ended, next: self.kind() })
     }
 }
@@ -156,19 +158,21 @@ mod tests {
     }
 
     #[test]
-    fn a_segment_runs_out_waits_paused_and_the_cycle_wraps() {
+    fn a_segment_runs_out_the_next_starts_and_the_cycle_ends_paused() {
         let t0 = Instant::now();
         let mut f = Focus::default();
         f.toggle(t0);
         assert_eq!(f.tick(t0 + Duration::from_secs(60)), None);
         let done = f.tick(t0 + Duration::from_secs(25 * 60)).unwrap();
         assert_eq!(done, Done { ended: Kind::Focus, next: Kind::Short });
-        assert!(!f.running(), "the next one waits for a press");
+        assert!(f.running(), "the break starts by itself");
+        assert_eq!(f.remaining(t0 + Duration::from_secs(25 * 60)), Duration::from_secs(5 * 60));
         f.seg = 7;
         f.left = Duration::ZERO;
-        f.toggle(t0);
+        f.since = Some(t0);
         assert_eq!(f.tick(t0).unwrap().next, Kind::Focus);
         assert_eq!(f.seg, 0);
+        assert!(!f.running(), "after the long break a new cycle waits to be started");
     }
 
     #[test]

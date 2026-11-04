@@ -811,7 +811,7 @@ impl App {
     /// Task reminders (early and on time) whose moment has come, then water / stand-up. One that
     /// cannot show now (fullscreen game, panel open) rings at the next chance. A banner that shows
     /// switches the panel to its page, so resting on it opens the right one.
-    /// A Pomodoro segment that ran out: a banner says so and what comes next; the next segment waits to be started.
+    /// A Pomodoro segment that ran out: a banner says so and what comes next; the next one has started by itself (after the long break the cycle waits for a new start).
     fn focus_tick(&mut self) {
         if !render::page_shown(Page::Focus) {
             return;
@@ -1653,6 +1653,8 @@ fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, ico
 fn focus_toast(done: focus::Done) -> Toast {
     let min = |k: focus::Kind| k.minutes();
     let (title, body) = match (done.ended, done.next) {
+        (focus::Kind::Long, _) if i18n::english() => ("4 rounds done".to_string(), "Press start for a new cycle".to_string()),
+        (focus::Kind::Long, _) => ("Xong 4 vòng".to_string(), "Bấm bắt đầu để làm chu kỳ mới".to_string()),
         (focus::Kind::Focus, next) if i18n::english() => (format!("{} min of focus done", min(focus::Kind::Focus)),
             format!("Take a {} min {}", min(next), if next == focus::Kind::Long { "long break" } else { "break" })),
         (focus::Kind::Focus, next) => (format!("Hết {} phút tập trung", min(focus::Kind::Focus)),
