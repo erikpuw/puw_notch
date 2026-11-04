@@ -2362,8 +2362,9 @@ impl Renderer {
                             let playing = v.music.is_some_and(|t| t.playing);
                             for (b, br) in buttons_from(l / s, s) {
                                 let on = b.enabled(v.music);
-                                // The skip and lyrics buttons sit on a soft disc, a little brighter under the mouse.
-                                if matches!(b, Button::Previous | Button::Next | Button::Lyrics) {
+                                // The skip buttons sit on a soft disc, a little brighter under the mouse (the lyrics speech bubble
+                                // has no ring: it is already a shape, and it lights up green instead).
+                                if matches!(b, Button::Previous | Button::Next) {
                                     let disc = D2D1_ELLIPSE { point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 }, radiusX: (br.right - br.left) / 2.0, radiusY: (br.bottom - br.top) / 2.0 };
                                     rt.FillEllipse(&disc, &self.brush(grey(1.0, a * if !on { 0.04 } else if hovered == Some(b) { 0.2 } else { 0.1 }))?);
                                 }
@@ -2371,7 +2372,7 @@ impl Renderer {
                                     // A speech bubble with two lines; filled while the lyrics are open.
                                     let (bx, by) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
                                     let bubble = rect(bx - 9.0 * s, by - 7.0 * s, bx + 9.0 * s, by + 7.0 * s);
-                                    let ink = if !on { grey(0.3, a) } else if v.lyrics { grey(0.05, a) } else { grey(1.0, a) };
+                                    let ink = if !on { grey(0.3, a) } else if v.lyrics { grey(0.05, a) } else if hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
                                     if on && v.lyrics {
                                         rt.FillRoundedRectangle(&rounded(bubble, 4.0 * s), &self.brush(grey(1.0, a))?);
                                     } else {
