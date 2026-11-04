@@ -170,6 +170,8 @@ pub fn command(cmd: &Cmd) -> bool {
             let mut args = [Variant::f64(*position_ms as f64 / 1000.0)];
             invoke(&app, "PlayerPosition", DISPATCH_PROPERTYPUT, &mut args).is_some()
         }
+        // iTunes keeps shuffle and repeat on its playlist: not read here, so its track says it cannot.
+        Cmd::Shuffle(_) | Cmd::Repeat(_) => false,
     }
 }
 

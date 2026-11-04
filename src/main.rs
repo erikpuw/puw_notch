@@ -900,6 +900,8 @@ impl App {
             Button::Previous => self.music.send(music::Cmd::Previous),
             Button::PlayPause => self.music.send(music::Cmd::PlayPause),
             Button::Next => self.music.send(music::Cmd::Next),
+            Button::Shuffle => if let Some(t) = self.music.snapshot() { self.music.send(music::Cmd::Shuffle(!t.shuffle)) },
+            Button::Repeat => if let Some(t) = self.music.snapshot() { self.music.send(music::Cmd::Repeat(t.repeat.next())) },
             Button::Seek => return, // Committed only by the captured press/drag/release gesture.
             Button::Lyrics => {
                 self.lyrics_open = !self.lyrics_open;
@@ -1926,7 +1928,7 @@ mod tests {
         for wide in [false, true] {
             for scale in [1.0, 1.5, 2.0] {
                 let cx = 410.0 * scale;
-                let (_, bar) = render::buttons(cx, scale, wide)[3];
+                let bar = render::seek_bar(cx, scale, wide);
                 drag.update(cx, scale, (bar.left + bar.right) / 2.0, wide);
                 assert_eq!(drag.track.position_ms(), 60_000);
                 assert!(drag.track.playing && drag.track.at.is_none());

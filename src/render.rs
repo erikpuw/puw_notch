@@ -30,7 +30,7 @@ use crate::approve;
 use crate::connectivity::DeviceKind;
 use crate::icons::{self, Seg};
 use crate::lyrics;
-use crate::music::Track;
+use crate::music::{Repeat, Track};
 use crate::notch::{self, target, Mode, LYRICS_EXTRA_W};
 use crate::notify::{Note, Toast};
 use crate::system::Battery;
@@ -184,6 +184,9 @@ pub enum Button {
     Previous,
     PlayPause,
     Next,
+    /// Shuffle on / off, and repeat off, all, one (the next mode on each click).
+    Shuffle,
+    Repeat,
     Seek,
     /// Show / hide the lyrics beside the player.
     Lyrics,
@@ -229,6 +232,7 @@ impl Button {
             Self::Previous => tr("Bài trước", "Previous"), Self::PlayPause => tr("Phát / Tạm dừng", "Play / Pause"),
             Self::Next => tr("Bài tiếp theo", "Next"), Self::Seek => tr("Bấm để tua", "Click to seek"),
             Self::Lyrics => tr("Lời bài hát", "Lyrics"),
+            Self::Shuffle => tr("Trộn bài", "Shuffle"), Self::Repeat => tr("Lặp lại", "Repeat"),
             _ => "",
         }
     }
@@ -239,6 +243,8 @@ impl Button {
             Self::Next => track.is_some_and(|t| t.can_next),
             Self::Seek => track.is_some_and(|t| t.can_seek && t.duration_ms > 0),
             Self::Lyrics => track.is_some_and(|t| !t.lyrics.is_empty()),
+            Self::Shuffle => track.is_some_and(|t| t.can_shuffle),
+            Self::Repeat => track.is_some_and(|t| t.can_repeat),
             _ => true,
         }
     }
@@ -254,8 +260,8 @@ const COVER_GAP: f32 = 16.0;
 const PLAY_BTN: f32 = 36.0;
 const SKIP_BTN: f32 = 28.0;
 const LYRICS_BTN: f32 = 28.0;
-/// Distance of the skip buttons' centres from the play button's.
-const SKIP_GAP: f32 = 44.0;
+/// Distance between the centres of neighbouring player buttons: shuffle, previous, play, next, repeat.
+const SKIP_GAP: f32 = 40.0;
 const CONTROLS_Y: f32 = 148.0;
 const BAR_Y: f32 = 108.0;
 /// Page content sits between the side arrows (logical px from the panel edge).
@@ -394,21 +400,23 @@ pub fn panel_w(wide: bool) -> f32 {
 /// Media controls of the music page, in window px for the settled panel centred at `cx`. The
 /// player is the left 480 px of the panel; with the lyrics open (`wide`) the panel is wider and
 /// the lyrics take the part on the right.
-pub fn buttons(cx: f32, scale: f32, wide: bool) -> [(Button, D2D_RECT_F); 5] {
+pub fn buttons(cx: f32, scale: f32, wide: bool) -> [(Button, D2D_RECT_F); 7] {
     buttons_from(cx / scale - panel_w(wide) / 2.0, scale)
 }
 
 /// The same controls for a panel whose left edge is at `left` (logical px): follows the panel
 /// while it grows or shrinks.
-fn buttons_from(left: f32, scale: f32) -> [(Button, D2D_RECT_F); 5] {
+fn buttons_from(left: f32, scale: f32) -> [(Button, D2D_RECT_F); 7] {
     let (x0, x1) = (SIDE + COVER + COVER_GAP, target(Mode::Expanded, false)[0] - SIDE);
     let mid = (x0 + x1) / 2.0;
     let round = |x: f32, size: f32| rect((left + x - size / 2.0) * scale, (CONTROLS_Y - size / 2.0) * scale, (left + x + size / 2.0) * scale, (CONTROLS_Y + size / 2.0) * scale);
     let seek = rect((left + x0) * scale, (BAR_Y - 8.0) * scale, (left + x1) * scale, (BAR_Y + 8.0) * scale);
     [
+        (Button::Shuffle, round(mid - 2.0 * SKIP_GAP, SKIP_BTN)),
         (Button::Previous, round(mid - SKIP_GAP, SKIP_BTN)),
         (Button::PlayPause, round(mid, PLAY_BTN)),
         (Button::Next, round(mid + SKIP_GAP, SKIP_BTN)),
+        (Button::Repeat, round(mid + 2.0 * SKIP_GAP, SKIP_BTN)),
         (Button::Seek, seek),
         (Button::Lyrics, round(x1 - LYRICS_BTN / 2.0, LYRICS_BTN)),
     ]
@@ -519,8 +527,13 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     out
 }
 
+/// The seek bar's hit area (window px).
+pub fn seek_bar(cx: f32, scale: f32, wide: bool) -> D2D_RECT_F {
+    buttons(cx, scale, wide).into_iter().find(|(b, _)| *b == Button::Seek).map(|(_, r)| r).unwrap_or_default()
+}
+
 pub fn seek_at(cx: f32, scale: f32, x: f32, duration: u64, wide: bool) -> u64 {
-    let (_, r) = buttons(cx, scale, wide)[3];
+    let r = seek_bar(cx, scale, wide);
     (((x - r.left) / (r.right - r.left)).clamp(0.0, 1.0) as f64 * duration as f64) as u64
 }
 
@@ -678,6 +691,9 @@ const ICON_PREV: &str = "\u{E892}";
 const ICON_PLAY: &str = "\u{E768}";
 const ICON_PAUSE: &str = "\u{E769}";
 const ICON_NEXT: &str = "\u{E893}";
+const ICON_SHUFFLE: &str = "\u{E8B1}";
+const ICON_REPEAT: &str = "\u{E8EE}";
+const ICON_REPEAT_ONE: &str = "\u{E8ED}";
 const ICON_NOTE: &str = "\u{E8D6}";
 pub const ICON_WARN: &str = "\u{E7BA}";
 pub const ICON_BELL: &str = "\u{EA8F}";
@@ -2362,12 +2378,6 @@ impl Renderer {
                             let playing = v.music.is_some_and(|t| t.playing);
                             for (b, br) in buttons_from(l / s, s) {
                                 let on = b.enabled(v.music);
-                                // The skip buttons sit on a soft disc, a little brighter under the mouse (the lyrics speech bubble
-                                // has no ring: it is already a shape, and it lights up green instead).
-                                if matches!(b, Button::Previous | Button::Next) {
-                                    let disc = D2D1_ELLIPSE { point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 }, radiusX: (br.right - br.left) / 2.0, radiusY: (br.bottom - br.top) / 2.0 };
-                                    rt.FillEllipse(&disc, &self.brush(grey(1.0, a * if !on { 0.04 } else if hovered == Some(b) { 0.2 } else { 0.1 }))?);
-                                }
                                 if b == Button::Lyrics {
                                     // A speech bubble with two lines; filled while the lyrics are open.
                                     let (bx, by) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
@@ -2388,6 +2398,8 @@ impl Renderer {
                                     Button::Previous => ICON_PREV,
                                     Button::PlayPause => if playing { ICON_PAUSE } else { ICON_PLAY },
                                     Button::Next => ICON_NEXT,
+                                    Button::Shuffle => ICON_SHUFFLE,
+                                    Button::Repeat => if v.music.is_some_and(|t| t.repeat == Repeat::One) { ICON_REPEAT_ONE } else { ICON_REPEAT },
                                     _ => continue,
                                 };
                                 if b == Button::PlayPause {
@@ -2402,8 +2414,17 @@ impl Renderer {
                                     micon("play", icon, F_ICON, rect(br.left + nudge, br.top, br.right + nudge, br.bottom), if on { grey(0.05, a) } else { grey(0.5, a) })?;
                                     continue;
                                 }
-                                let c = if !on { grey(0.3, a) } else { grey(1.0, a) };
-                                micon(if b == Button::Previous { "prev" } else { "next" }, icon, F_ICON, br, c)?;
+                                // Only the play button has a disc. Shuffle and repeat are plain glyphs: dimmer at rest, green
+                                // while they are on (no other mark), white under the mouse.
+                                let (slot, active) = match b {
+                                    Button::Previous => ("prev", false),
+                                    Button::Shuffle => ("shuffle", v.music.is_some_and(|t| t.shuffle)),
+                                    Button::Repeat => ("repeat", v.music.is_some_and(|t| t.repeat != Repeat::Off)),
+                                    _ => ("next", false),
+                                };
+                                let c = if !on { grey(0.3, a) } else if active { color(0.25, 0.85, 0.5, a) }
+                                    else if hovered == Some(b) || !matches!(b, Button::Shuffle | Button::Repeat) { grey(1.0, a) } else { grey(0.78, a) };
+                                micon(slot, icon, F_ICON, br, c)?;
                             }
                             // Lyrics beside the player, fading in as the panel widens: the line being
                             // sung is bright and centred, the others dim; the whole column glides up
@@ -3286,7 +3307,7 @@ mod tests {
             lyrics: Arc::new(vec![(0, "la la".into())]), ..Default::default() };
         for scale in [1.0, 1.5, 2.0] {
             let cx = 265.0 * scale;
-            let [(_, prev), (_, play), (_, next), (_, seek), (_, lyr)] = buttons(cx, scale, false);
+            let [(_, shuffle), (_, prev), (_, play), (_, next), (_, repeat), (_, seek), (_, lyr)] = buttons(cx, scale, false);
             let mid = |r: D2D_RECT_F| ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0);
             assert_eq!(seek_at(cx, scale, seek.left - 100.0, track.duration_ms, false), 0);
             assert_eq!(seek_at(cx, scale, seek.right + 100.0, track.duration_ms, false), 120_000);
@@ -3302,10 +3323,15 @@ mod tests {
             // Controls live in the right column: right of the cover, left of the side arrow, no overlaps.
             let left = cx - 240.0 * scale;
             let cover_right = left + (SIDE + COVER) * scale;
-            for r in [prev, play, next, seek, lyr] {
+            for r in [shuffle, prev, play, next, repeat, seek, lyr] {
                 assert!(r.left > cover_right && r.right <= left + (480.0 - SIDE) * scale, "{r:?}");
             }
-            assert!(prev.right <= play.left && play.right <= next.left && next.right <= lyr.left, "buttons must not overlap");
+            assert!(shuffle.right <= prev.left && prev.right <= play.left && play.right <= next.left && next.right <= repeat.left && repeat.right <= lyr.left, "buttons must not overlap");
+            // Shuffle and repeat answer only when the player can do them.
+            assert_eq!(hit_button(cx, scale, mid(shuffle).0, mid(shuffle).1, Some(&track), Page::Music, 0, 0, None, false), None);
+            let both = Track { can_shuffle: true, can_repeat: true, ..track.clone() };
+            assert_eq!(hit_button(cx, scale, mid(shuffle).0, mid(shuffle).1, Some(&both), Page::Music, 0, 0, None, false), Some(Button::Shuffle));
+            assert_eq!(hit_button(cx, scale, mid(repeat).0, mid(repeat).1, Some(&both), Page::Music, 0, 0, None, false), Some(Button::Repeat));
             assert!(seek.bottom <= prev.top.min(play.top).min(lyr.top), "bar above the buttons");
             // The lyrics button works only when the song has lyrics.
             let bare = Track { lyrics: Arc::new(Vec::new()), ..track.clone() };
@@ -3339,7 +3365,7 @@ mod tests {
                 assert!((n.left - shift - w.left).abs() < 0.01 && (n.right - shift - w.right).abs() < 0.01 && n.top == w.top, "{b:?}: moves left by half the extra width");
             }
             // Clicks follow it.
-            let (_, play) = wide[1];
+            let (_, play) = wide[2];
             let (px, py) = ((play.left + play.right) / 2.0, (play.top + play.bottom) / 2.0);
             assert_eq!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, true), Some(Button::PlayPause));
             assert_ne!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, false), Some(Button::PlayPause), "the old place is no longer the button");
@@ -3739,7 +3765,8 @@ mod tests {
             // A cover image for the glow and the cover slot: PUW_PREVIEW_COVER=path.
             let art = std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new);
             let song = |position_ms| Track { title: tl("Bài hát mẫu", "Sample song").into(), artist: tl("Nghệ sĩ mẫu", "Sample artist").into(), duration_ms: 210_000, position_ms, playing: true,
-                can_toggle: true, can_next: true, can_previous: true, can_seek: true, art: art.clone(), art_key: 1,
+                can_toggle: true, can_next: true, can_previous: true, can_seek: true, can_shuffle: true, can_repeat: true,
+                repeat: crate::music::Repeat::All, art: art.clone(), art_key: 1,
                 lyrics: Arc::new(lines.iter().map(|(t, s)| (*t as u64, s.to_string())).collect()), ..Default::default() };
             let (playing, singing) = (song(64_000), song(14_000));
             let place = Some(Place { name: tl("Đà Nẵng", "Da Nang").into(), lat: 16.0, lon: 108.0 });

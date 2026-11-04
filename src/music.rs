@@ -35,6 +35,42 @@ pub fn shows_pill(playing: bool, paused_for: Option<Duration>) -> bool {
     playing || paused_for.is_some_and(|d| d < PAUSE_KEEP)
 }
 
+/// What the player repeats: nothing, the whole list, or the one track.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Repeat {
+    #[default]
+    Off,
+    All,
+    One,
+}
+
+impl Repeat {
+    /// What a click asks for next: off, all, one, off.
+    pub fn next(self) -> Repeat {
+        match self {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        }
+    }
+
+    fn from_windows(mode: windows::Media::MediaPlaybackAutoRepeatMode) -> Repeat {
+        match mode {
+            windows::Media::MediaPlaybackAutoRepeatMode::List => Repeat::All,
+            windows::Media::MediaPlaybackAutoRepeatMode::Track => Repeat::One,
+            _ => Repeat::Off,
+        }
+    }
+
+    fn to_windows(self) -> windows::Media::MediaPlaybackAutoRepeatMode {
+        match self {
+            Repeat::Off => windows::Media::MediaPlaybackAutoRepeatMode::None,
+            Repeat::All => windows::Media::MediaPlaybackAutoRepeatMode::List,
+            Repeat::One => windows::Media::MediaPlaybackAutoRepeatMode::Track,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Track {
     pub source_id: String,
@@ -53,6 +89,11 @@ pub struct Track {
     pub can_next: bool,
     pub can_previous: bool,
     pub can_seek: bool,
+    /// The player says it can shuffle / repeat, and what it does now.
+    pub can_shuffle: bool,
+    pub can_repeat: bool,
+    pub shuffle: bool,
+    pub repeat: Repeat,
     pub command_error: Option<&'static str>,
     /// When `position_ms` was read; the UI extrapolates from here while playing.
     pub(crate) at: Option<Instant>,
@@ -114,6 +155,9 @@ pub enum Cmd {
     Next,
     Previous,
     Seek(u64),
+    /// Shuffle on (true) or off.
+    Shuffle(bool),
+    Repeat(Repeat),
 }
 
 /// What wakes the worker.
@@ -223,6 +267,8 @@ fn session_command(s: &GlobalSystemMediaTransportControlsSession, cmd: &Cmd, tra
         Cmd::Next => s.TrySkipNextAsync(),
         Cmd::Previous => s.TrySkipPreviousAsync(),
         Cmd::Seek(position) => s.TryChangePlaybackPositionAsync(track.seek_ticks(*position)),
+        Cmd::Shuffle(on) => s.TryChangeShuffleActiveAsync(*on),
+        Cmd::Repeat(mode) => s.TryChangeAutoRepeatModeAsync(mode.to_windows()),
     };
     let accepted = op.and_then(|o| o.get()) == Ok(true);
     accepted || match cmd {
@@ -394,7 +440,8 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Msg>, wake: Sender<Msg
             art_key += 1;
         }
         t.art_key = art_key;
-        let visible_change = (detailed && resync) || had_command || prev.as_ref().is_none_or(|p| changed_track || p.playing != t.playing || p.duration_ms != t.duration_ms);
+        let visible_change = (detailed && resync) || had_command || prev.as_ref().is_none_or(|p| changed_track || p.playing != t.playing || p.duration_ms != t.duration_ms
+            || p.shuffle != t.shuffle || p.repeat != t.repeat);
         if let Ok(mut g) = shared.lock() {
             if let Some(p) = g.as_ref().filter(|p| !changed_track && p.art_key == art_key) {
                 t.inherit_cached(p, matches!(cmd, Some((Cmd::Seek(_), _))));
@@ -502,6 +549,10 @@ fn read(s: &GlobalSystemMediaTransportControlsSession) -> Option<Track> {
         can_next: controls.as_ref().is_some_and(|c| c.IsNextEnabled().unwrap_or(false)),
         can_previous: controls.as_ref().is_some_and(|c| c.IsPreviousEnabled().unwrap_or(false)),
         can_seek: duration_ms > 0 && controls.as_ref().is_some_and(|c| c.IsPlaybackPositionEnabled().unwrap_or(false)),
+        can_shuffle: controls.as_ref().is_some_and(|c| c.IsShuffleEnabled().unwrap_or(false)),
+        can_repeat: controls.as_ref().is_some_and(|c| c.IsRepeatEnabled().unwrap_or(false)),
+        shuffle: info.IsShuffleActive().and_then(|v| v.Value()).unwrap_or(false),
+        repeat: info.AutoRepeatMode().and_then(|v| v.Value()).map_or(Repeat::Off, Repeat::from_windows),
         at: Some(Instant::now()),
         ..Default::default()
     };
@@ -726,6 +777,16 @@ pub fn current_line(lines: &[(u64, String)], pos_ms: u64) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeat_goes_off_all_one_off_and_maps_to_windows_modes() {
+        let mut r = Repeat::Off;
+        let seen: Vec<Repeat> = (0..4).map(|_| { r = r.next(); r }).collect();
+        assert_eq!(seen, [Repeat::All, Repeat::One, Repeat::Off, Repeat::All]);
+        for mode in [Repeat::Off, Repeat::All, Repeat::One] {
+            assert_eq!(Repeat::from_windows(mode.to_windows()), mode);
+        }
+    }
 
     #[test]
     #[ignore = "read-only live measurement of playback clock corrections over six seconds"]
