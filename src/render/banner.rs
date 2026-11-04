@@ -39,7 +39,7 @@ impl Renderer {
             let (pop_scale, pop_alpha) = icons::pop(age);
             let pop = translate(-mx, -my) * scaling(pop_scale) * translate(mx, my);
             if let Some((ic, geoms)) = &banner_line {
-                icon_busy = age < icons::DUR;
+                icon_busy = age < anim::ICON_MOTION_S;
                 let size = LINE_ICON * s;
                 let view = scaling(size / ic.vb) * translate(mx - size / 2.0, my - size / 2.0);
                 let groups = icons::motion(ic.anim, age);
@@ -53,7 +53,7 @@ impl Renderer {
                 }
                 rt.SetTransform(&base);
             } else if icon == ICON_DROP {
-                icon_busy = age < icons::DUR;
+                icon_busy = age < anim::ICON_MOTION_S;
                 let hop = icons::drop_motion(age).dy * (LINE_ICON * s / 24.0);
                 rt.SetTransform(&(pop * translate(0.0, hop) * base));
                 let g = self.water_drop(mx, my, 24.0 * s)?;

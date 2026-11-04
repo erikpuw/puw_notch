@@ -108,7 +108,7 @@ impl Renderer {
                     else if hovered == Some(b) || !matches!(b, Button::Shuffle | Button::Repeat) { ((1.0, 1.0, 1.0), 1.0) } else { ((0.78, 0.78, 0.78), 1.0) };
                 let size = 17.0 * s;
                 let (cx0, cy0) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
-                wx_icon(ic, geoms, cx0 - size / 2.0, cy0 - size / 2.0, size, Some(((r, g, bl), (r, g, bl))), a * alpha, icons::DUR)?;
+                wx_icon(ic, geoms, cx0 - size / 2.0, cy0 - size / 2.0, size, Some(((r, g, bl), (r, g, bl))), a * alpha, anim::ICON_MOTION_S)?;
             }
             // Lyrics beside the player, fading in as the panel widens: the line being
             // sung is bright and centred, the others dim; the whole column glides up

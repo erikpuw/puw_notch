@@ -48,7 +48,7 @@ impl Renderer {
                     let size = 17.0 * s;
                     let g = if hovered == Some(b) { 1.0 } else { 0.78 };
                     let (cx0, cy0) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
-                    wx_icon(ic, geoms, cx0 - size / 2.0, cy0 - size / 2.0, size, Some(((g, g, g), (g, g, g))), a, icons::DUR)?;
+                    wx_icon(ic, geoms, cx0 - size / 2.0, cy0 - size / 2.0, size, Some(((g, g, g), (g, g, g))), a, anim::ICON_MOTION_S)?;
                 }
                 let fill = if hovered == Some(Button::FocusPlay) { grey(0.85, a) } else { grey(1.0, a) };
                 let disc = D2D1_ELLIPSE { point: Vector2 { X: (pb.left + pb.right) / 2.0, Y: (pb.top + pb.bottom) / 2.0 }, radiusX: (pb.right - pb.left) / 2.0, radiusY: (pb.bottom - pb.top) / 2.0 };

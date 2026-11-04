@@ -5,6 +5,7 @@
 //! animated set on itshover.com; the motion is written here. Parts that move on their own sit in
 //! a group (0..3, each with an origin to turn and scale about); a group also carries an opacity.
 
+use crate::anim::{self, bump, ease_out, ease_out_back, lerp_in};
 use crate::render::*;
 
 /// One path of an icon: `g` = the group that moves it, `a` = the group whose opacity fades it
@@ -368,9 +369,6 @@ pub fn lookup(glyph: &str) -> Option<&'static Icon> {
 
 // ---- motion ----------------------------------------------------------------------------------
 
-/// Seconds an icon moves for after its banner appears; still (as drawn) after that.
-pub const DUR: f32 = 1.0;
-
 /// How one group is moved: turn (degrees) and scale about the group's origin, then shift (grid
 /// units), and its opacity.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -386,23 +384,10 @@ impl Motion {
     pub const STILL: Motion = Motion { rot: 0.0, scale: 1.0, dx: 0.0, dy: 0.0, alpha: 1.0 };
 }
 
-fn lerp_in(t: f32, from: f32, len: f32) -> f32 {
-    ((t - from) / len).clamp(0.0, 1.0)
-}
-
-/// 0 -> 1 -> 0 over `len` seconds from `from`.
-fn bump(t: f32, from: f32, len: f32) -> f32 {
-    (std::f32::consts::PI * lerp_in(t, from, len)).sin()
-}
-
-fn ease_out(x: f32) -> f32 {
-    1.0 - (1.0 - x.clamp(0.0, 1.0)).powi(3)
-}
-
 /// The four groups of `anim` at `age` seconds.
 pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
     let mut g = [Motion::STILL; 4];
-    if age >= DUR {
+    if age >= anim::ICON_MOTION_S {
         return g;
     }
     let t = age.max(0.0);
@@ -490,7 +475,7 @@ pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
             g[0].alpha = 1.0 - 0.5 * bump(t, 0.2, 0.5);
         }
         Anim::Drift => {
-            let sway = (tau * t).sin() * (1.0 - t / DUR);
+            let sway = (tau * t).sin() * (1.0 - t / anim::ICON_MOTION_S);
             (g[0].dx, g[1].dx) = (1.2 * sway, -1.2 * sway);
         }
         Anim::Fall => {
@@ -504,15 +489,12 @@ pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
 
 /// The whole icon pops in: scale and opacity at `age`.
 pub fn pop(age: f32) -> (f32, f32) {
-    let x = (age / 0.3).clamp(0.0, 1.0);
-    let (c1, y) = (1.3, x - 1.0);
-    let back = 1.0 + (c1 + 1.0) * y * y * y + c1 * y * y;
-    (0.75 + 0.25 * back, (age / 0.15).clamp(0.0, 1.0))
+    (0.75 + 0.25 * ease_out_back(age / 0.3), (age / 0.15).clamp(0.0, 1.0))
 }
 
 /// Water drop (drawn by the renderer itself): pops in, then hops.
 pub fn drop_motion(age: f32) -> Motion {
-    if age >= DUR {
+    if age >= anim::ICON_MOTION_S {
         return Motion::STILL;
     }
     Motion { dy: -1.4 * (-4.0 * age).exp() * (std::f32::consts::TAU * 2.5 * age).sin().abs(), ..Motion::STILL }
@@ -737,10 +719,10 @@ mod tests {
     #[test]
     fn every_motion_ends_as_drawn_and_stays_in_bounds() {
         for anim in ALL {
-            assert_eq!(motion(anim, DUR), [Motion::STILL; 4], "{anim:?} rests when over");
+            assert_eq!(motion(anim, anim::ICON_MOTION_S), [Motion::STILL; 4], "{anim:?} rests when over");
             assert_eq!(motion(anim, 9.0), [Motion::STILL; 4]);
             for i in 0..=100 {
-                for m in motion(anim, i as f32 * DUR / 100.0) {
+                for m in motion(anim, i as f32 * anim::ICON_MOTION_S / 100.0) {
                     assert!(m.rot.is_finite() && m.scale > 0.0 && m.scale <= 1.55 && (0.0..=1.0).contains(&m.alpha) && m.dx.abs() < 30.0 && m.dy.abs() < 30.0, "{anim:?} t={i}: {m:?}");
                 }
             }
@@ -794,6 +776,6 @@ mod tests {
         assert!(s < 0.8 && a == 0.0);
         let (s, a) = pop(0.5);
         assert!((s - 1.0).abs() < 1e-5 && a == 1.0);
-        assert!(drop_motion(0.0) == Motion::STILL && drop_motion(0.1).dy < 0.0 && drop_motion(DUR) == Motion::STILL);
+        assert!(drop_motion(0.0) == Motion::STILL && drop_motion(0.1).dy < 0.0 && drop_motion(anim::ICON_MOTION_S) == Motion::STILL);
     }
 }

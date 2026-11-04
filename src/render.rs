@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicU8, Ordering};
 use std::time::Instant;
 
+use crate::anim::{self, ease_out, ease_out_back, page_fades};
 use crate::approve;
 use crate::connectivity::DeviceKind;
 use crate::icons::{self, Seg};
@@ -291,8 +292,6 @@ impl Button {
 }
 
 const PAD: f32 = 24.0;
-/// Icon glyph change animation length.
-const ICON_MORPH_S: f32 = 0.25;
 /// Music page: cover on the left, a column of text, bar and controls on its right.
 const COVER: f32 = 120.0;
 const COVER_TOP: f32 = 40.0;
@@ -662,12 +661,6 @@ pub fn approve_buttons(cx: f32, scale: f32, width: f32, height: f32, labels: &[S
     out
 }
 
-/// Opacity of the page leaving and the page arriving at progress `t` (0..1) of a page change.
-/// The old page is gone before the new one shows, so their text never overlaps (ghosting).
-fn page_fades(t: f32) -> (f32, f32) {
-    ((1.0 - t * 3.5).clamp(0.0, 1.0), ((t - 0.2) * 2.5).clamp(0.0, 1.0))
-}
-
 /// Side in px of a banner's line icon (its grid is scaled to this).
 const LINE_ICON: f32 = 26.0;
 
@@ -683,18 +676,6 @@ fn scaling(k: f32) -> Matrix3x2 {
 fn rotation(degrees: f32) -> Matrix3x2 {
     let (sin, cos) = degrees.to_radians().sin_cos();
     Matrix3x2 { M11: cos, M12: sin, M21: -sin, M22: cos, M31: 0.0, M32: 0.0 }
-}
-
-/// Easing for the page slide: fast at first, settles without going past (a bounce there reads as
-/// the page being loaded twice).
-fn ease_out(t: f32) -> f32 {
-    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
-}
-
-/// Overshoot easing for the notification pop: arrives a touch past and settles back.
-fn ease_out_back(t: f32) -> f32 {
-    let (c1, t) = (1.3, t.clamp(0.0, 1.0) - 1.0);
-    1.0 + (c1 + 1.0) * t * t * t + c1 * t * t
 }
 
 /// Text styles, indexed by these constants.
@@ -894,13 +875,10 @@ fn soft_text((r, g, b): (f32, f32, f32), level: f32, grey_v: f32, a: f32) -> D2D
     color(mix(r), mix(g), mix(b), a)
 }
 
-/// Seconds for the glow to fade in or out and to move to a new cover's colour.
-const GLOW_FADE_S: f32 = 0.3;
-
 /// One animation step of the Music-page glow towards `target` (None: fade out, keeping the last
 /// colour). Returns the new (colour, level) and whether it still has somewhere to go.
 fn glow_step(color: (f32, f32, f32), level: f32, target: Option<(f32, f32, f32)>, dt: f32) -> ((f32, f32, f32), f32, bool) {
-    let k = 1.0 - (-3.0 * dt / GLOW_FADE_S).exp();
+    let k = anim::approach(dt, anim::GLOW_FADE_S);
     let lerp = |a: f32, b: f32| a + (b - a) * k;
     match target {
         Some(t) => {
@@ -1899,7 +1877,7 @@ impl Renderer {
         self.glow = (tint, level, now);
         // The equaliser rises when playing starts and settles flat when it stops, not in one frame.
         let bars_to = if v.music.is_some_and(|t| t.playing) { 1.0 } else { 0.0 };
-        self.bars += (bars_to - self.bars) * (1.0 - (-dt * 9.0).exp());
+        self.bars = anim::follow(self.bars, bars_to, dt, anim::BARS_RATE);
         let bars_busy = (bars_to - self.bars).abs() > 0.01;
         if !bars_busy {
             self.bars = bars_to;
@@ -2045,7 +2023,7 @@ impl Renderer {
             };
 
             // Icon in a named slot; when the glyph changes the old one shrinks away and the new one
-            // pops in past full size and settles (ICON_MORPH_S).
+            // pops in past full size and settles (anim::ICON_MORPH_S).
             let morphing = std::cell::Cell::new(false);
             let micon = |slot: &'static str, icon: &'static str, f: usize, b: D2D_RECT_F, c: D2D1_COLOR_F| -> Result<()> {
                 let (prev, t) = {
@@ -2054,7 +2032,7 @@ impl Renderer {
                     if e.0 != icon {
                         *e = (icon, e.0, Instant::now());
                     }
-                    (e.1, e.2.elapsed().as_secs_f32() / ICON_MORPH_S)
+                    (e.1, e.2.elapsed().as_secs_f32() / anim::ICON_MORPH_S)
                 };
                 if t >= 1.0 || prev == icon {
                     return text(icon, f, b, center, c);
@@ -2171,7 +2149,7 @@ impl Renderer {
             self.slow_frames = lyrics_run;
             // Icon completion posts WM_ICONS; waiting for I/O never keeps animation alive.
             // The Weather page's icon moves for a moment when the panel or the page opens.
-            let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && v.page_age < icons::DUR;
+            let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && v.page_age < anim::ICON_MOTION_S;
             Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving)
         }
     }
@@ -2446,16 +2424,6 @@ mod tests {
         assert_eq!(square_crop(640, 360), (140, 0, 360));
         assert_eq!(square_crop(300, 301), (0, 0, 300));
         assert_eq!(square_crop(100, 400), (0, 150, 100));
-    }
-
-    #[test]
-    fn page_change_never_shows_both_pages_strongly() {
-        assert_eq!(page_fades(0.0), (1.0, 0.0));
-        assert_eq!(page_fades(1.0), (0.0, 1.0));
-        for i in 0..=100 {
-            let (out_a, in_a) = page_fades(i as f32 / 100.0);
-            assert!(out_a * in_a <= 0.05, "t={}: old {out_a:.2} over new {in_a:.2}", i as f32 / 100.0);
-        }
     }
 
     #[test]

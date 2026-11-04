@@ -1,13 +1,10 @@
 //! Select lyrics from the media clock; advance their motion from the frame clock.
 
+use crate::anim::{smooth, Spring, Tuning};
+
 const LEAD_MS: u64 = 80;
 /// Brightness of a line that is not the one being sung.
 pub const DIM: f32 = 0.42;
-
-fn smooth(x: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    x * x * (3.0 - 2.0 * x)
-}
 
 pub fn current_index(lines: &[(u64, String)], pos_ms: u64) -> Option<usize> {
     lines.partition_point(|(t, _)| *t <= pos_ms.saturating_add(LEAD_MS)).checked_sub(1)
@@ -19,32 +16,6 @@ pub fn phase(lines: &[(u64, String)], pos_ms: u64) -> f32 {
 }
 
 #[derive(Default)]
-struct Spring {
-    x: f32,
-    v: f32,
-}
-
-impl Spring {
-    fn step(&mut self, goal: f32, dt: f32, k: f32, c: f32) -> bool {
-        // Match the notch's small integration slices so low-refresh frames stay stable.
-        let mut left = dt.clamp(0.0, 0.1);
-        while left > 0.0 {
-            let h = left.min(0.004);
-            self.v += (k * (goal - self.x) - c * self.v) * h;
-            self.x += self.v * h;
-            left -= h;
-        }
-        if (self.x - goal).abs() < 0.002 && self.v.abs() < 0.05 {
-            self.x = goal;
-            self.v = 0.0;
-            false
-        } else {
-            true
-        }
-    }
-}
-
-#[derive(Default)]
 pub struct Motion {
     scroll: Spring,
     highlight: Spring,
@@ -52,8 +23,8 @@ pub struct Motion {
 }
 
 impl Motion {
-    pub fn focus(&self) -> f32 { self.scroll.x }
-    pub fn phase(&self) -> f32 { self.highlight.x }
+    pub fn focus(&self) -> f32 { self.scroll.pos }
+    pub fn phase(&self) -> f32 { self.highlight.pos }
 
     /// First display and real seeks land directly; ordinary playback retargets the springs.
     pub fn step(&mut self, focus: f32, phase: f32, position: u64, dt: f32, rate: f64) -> bool {
@@ -62,12 +33,14 @@ impl Motion {
             || dt > 0.25;
         self.position = Some(position);
         if reset {
-            self.scroll = Spring { x: focus, v: 0.0 };
-            self.highlight = Spring { x: phase, v: 0.0 };
+            self.scroll = Spring::at(focus);
+            self.highlight = Spring::at(phase);
             return false;
         }
-        let moving = self.scroll.step(focus, dt, 150.0, 21.0);
-        self.highlight.step(phase, dt, 220.0, 28.0) || moving
+        // A late frame is cut short so the lines never jump.
+        let dt = dt.clamp(0.0, 0.1);
+        let moving = self.scroll.step(focus, dt, Tuning::LYRIC_SCROLL);
+        self.highlight.step(phase, dt, Tuning::LYRIC_HIGHLIGHT) || moving
     }
 }
 

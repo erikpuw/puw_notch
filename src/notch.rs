@@ -1,6 +1,8 @@
 //! Notch state machine and spring animation. Pure logic, no Win32.
 //! All sizes are logical pixels (multiply by DPI scale to draw).
 
+use crate::anim::{Spring, Tuning};
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mode {
     /// Normal pill under the top edge.
@@ -130,37 +132,6 @@ pub fn hover_stale(mode: Mode, hover_in: bool, editing: bool, inside: bool) -> b
 
 /// How long the mouse must stay before Peek turns into Expanded.
 pub const DWELL_MS: u32 = 80;
-
-#[derive(Clone, Copy, Default)]
-struct Spring {
-    pos: f32,
-    vel: f32,
-}
-
-impl Spring {
-    /// Damping ratio ~0.78 keeps a subtle bounce (under 2% of the travel) in both directions.
-    const K: f32 = 320.0;
-    const C: f32 = 28.0;
-    /// Integrate in small slices so a late frame does not change the motion.
-    const SLICE: f32 = 0.004;
-
-    fn step(&mut self, target: f32, dt: f32) -> bool {
-        let mut left = dt;
-        while left > 0.0 {
-            let h = left.min(Self::SLICE);
-            let acc = Self::K * (target - self.pos) - Self::C * self.vel;
-            self.vel += acc * h;
-            self.pos += self.vel * h;
-            left -= h;
-        }
-        if (target - self.pos).abs() < 0.05 && self.vel.abs() < 0.5 {
-            self.pos = target;
-            self.vel = 0.0;
-            return false;
-        }
-        true
-    }
-}
 
 pub struct Notch {
     pub mode: Mode,
@@ -354,7 +325,7 @@ impl Notch {
         let t = self.goal();
         let mut moving = false;
         for (s, t) in self.size.iter_mut().zip(t) {
-            moving |= s.step(t, dt);
+            moving |= s.step(t, dt, Tuning::NOTCH);
         }
         moving
     }
@@ -527,7 +498,7 @@ mod tests {
                         let mut spring = Spring { pos: start, vel: 0.0 };
                         let margin = (goal - start).abs() * 0.02 + 0.001;
                         for _ in 0..(2.0 / dt) as usize {
-                            spring.step(goal, dt);
+                            spring.step(goal, dt, Tuning::NOTCH);
                             assert!(spring.pos >= start.min(goal) - margin
                                 && spring.pos <= start.max(goal) + margin,
                                 "{start} -> {goal}, dt={dt}: {}", spring.pos);

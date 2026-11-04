@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod anim;
 mod antigravity;
 mod approve;
 mod audio;
@@ -67,7 +68,6 @@ const T_CARET: usize = 6;
 const T_SETTLE: usize = 7;
 const SETTLE_MS: u32 = 120;
 /// Page switch morph length.
-const PAGE_MORPH_S: f32 = 0.32;
 /// Notifications kept on the Notifications page.
 const NOTES_MAX: usize = 30;
 const CARET_MS: u32 = 530;
@@ -321,7 +321,7 @@ impl App {
             lyrics: self.lyrics_wide(),
             hovered: self.hovered_button,
             page: self.page,
-            leaving: self.page_anim.map(|(from, t0, dir)| (from, (t0.elapsed().as_secs_f32() / PAGE_MORPH_S).min(1.0), dir)),
+            leaving: self.page_anim.map(|(from, t0, dir)| (from, (t0.elapsed().as_secs_f32() / anim::PAGE_MORPH_S).min(1.0), dir)),
             list: ListView {
                 counts: self.todo.counts(self.today),
                 remind_before: self.todo.remind_before,
@@ -452,7 +452,7 @@ impl App {
         // The Notifications list glides to the row the wheel asked for.
         let goal = self.note_scroll as f32;
         if self.note_pos != goal {
-            self.note_pos += (goal - self.note_pos) * (1.0 - (-dt * 14.0).exp());
+            self.note_pos = anim::follow(self.note_pos, goal, dt, anim::LIST_GLIDE_RATE);
             if (goal - self.note_pos).abs() < 0.01 {
                 self.note_pos = goal;
             }
@@ -460,7 +460,7 @@ impl App {
         }
         // The page morph runs on the same frames; drop it once it has played out.
         let morphing = match self.page_anim {
-            Some((_, t0, _)) if t0.elapsed().as_secs_f32() < PAGE_MORPH_S => true,
+            Some((_, t0, _)) if t0.elapsed().as_secs_f32() < anim::PAGE_MORPH_S => true,
             Some(_) => {
                 self.page_anim = None;
                 false

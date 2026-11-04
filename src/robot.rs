@@ -78,7 +78,7 @@ pub fn blink_open(t: f32) -> f32 {
         return 1.0;
     }
     let x = if t < BLINK_CLOSE_S { t / BLINK_CLOSE_S } else { 1.0 - (t - BLINK_CLOSE_S) / BLINK_OPEN_S };
-    1.0 - 0.9 * x * x * (3.0 - 2.0 * x)
+    1.0 - 0.9 * crate::anim::smooth(x)
 }
 
 /// What the painter needs.
