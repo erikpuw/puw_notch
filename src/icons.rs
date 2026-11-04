@@ -89,7 +89,9 @@ pub static PLAYER_REPEAT: Icon = Icon {
 };
 pub static PLAYER_REPEAT_ONE: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
-    parts: &[p("M4 12v-3a3 3 0 0 1 3 -3h13m-3 -3l3 3l-3 3"), p("M20 12v3a3 3 0 0 1 -3 3h-13m3 3l-3 -3l3 -3"), p("M11 11l1 -1v4")],
+    parts: &[p("M4 12v-3a3 3 0 0 1 3 -3h13m-3 -3l3 3l-3 3"), p("M20 12v3a3 3 0 0 1 -3 3h-13m3 3l-3 -3l3 -3"),
+        // The "1": bigger than Tabler's (7 units tall, not 4) and its stem drawn twice, 0.8 apart, so it reads at 17 px.
+        p("M10.2 10.2l2.1 -1.4v7.2"), p("M13.1 9.2v6.8")],
 };
 
 static BLUETOOTH: Icon = Icon {
