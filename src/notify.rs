@@ -7,6 +7,17 @@ use std::ffi::{c_char, c_int, c_void, CString};
 use windows::core::{s, w};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
+/// What a banner is, which decides how it is drawn: its own layout each.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum BannerKind {
+    /// An icon and its line (volume, a device, a reminder).
+    Status,
+    /// An app's message.
+    Notification,
+    /// A question with buttons and a countdown.
+    Approval,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Toast {
     pub app: String,
@@ -24,6 +35,18 @@ pub struct Toast {
     pub badge: Option<String>,
     /// An approval request or a question: the banner carries these buttons (labels) and waits for a click.
     pub choices: Vec<String>,
+}
+
+impl Toast {
+    pub fn kind(&self) -> BannerKind {
+        if !self.choices.is_empty() {
+            BannerKind::Approval
+        } else if self.icon.is_some() {
+            BannerKind::Status
+        } else {
+            BannerKind::Notification
+        }
+    }
 }
 
 /// One notification on the panel's Notifications page.

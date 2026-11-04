@@ -32,7 +32,7 @@ use crate::icons::{self, Seg};
 use crate::lyrics;
 use crate::music::{Repeat, Track};
 use crate::notch::{self, target, Mode, LYRICS_EXTRA_W};
-use crate::notify::{Note, Toast};
+use crate::notify::{BannerKind, Note, Toast};
 use crate::system::Battery;
 
 mod aurora;
@@ -1033,10 +1033,17 @@ unsafe fn bgra_pixels(wic: &IWICImagingFactory, src: &IWICBitmapSource) -> Optio
     Some((w, h, pixels))
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Owner {
+    Pill,
+    Panel,
+    Banner,
+}
+
 pub struct Renderer {
-    /// A banner was the last thing shown and no panel has opened since: the pill shrinking back is not an open panel,
-    /// so no page (and no glow) is drawn on the way down, however tall the banner was.
-    after_alert: bool,
+    /// What owns the notch now: it stays the panel (or the banner) while the pill shrinks back, until it is a pill again.
+    /// Only the panel draws pages and the glow, so a banner that shrinks back shows none of them, however tall it was.
+    owner: Owner,
     factory: ID2D1Factory,
     d3d: ID3D11Device,
     /// The Direct2D context on `d3d`: binds the swap chain's buffer as the target.
@@ -1190,7 +1197,7 @@ impl Renderer {
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
-                after_alert: false,
+                owner: Owner::Pill,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
@@ -1914,12 +1921,14 @@ impl Renderer {
         let note_icons: Vec<Option<ID2D1Bitmap>> = if page.is_some() { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
         let banner_image: Option<ID2D1Bitmap> = v.banner.filter(|_| v.mode == Mode::Alert).and_then(|b| b.image.as_deref()).and_then(|p| self.app_icon(&format!("img:{p}")));
-        if v.mode == Mode::Alert {
-            self.after_alert = true;
-        } else if v.mode == Mode::Expanded {
-            self.after_alert = false;
+        match v.mode {
+            Mode::Expanded => self.owner = Owner::Panel,
+            Mode::Alert => self.owner = Owner::Banner,
+            // Back to a resting pill (the size at which the panel's content has faded out).
+            _ if v.size[1] <= 39.0 => self.owner = Owner::Pill,
+            _ => {}
         }
-        let panel_ok = v.mode != Mode::Alert && !self.after_alert;
+        let panel_ok = self.owner == Owner::Panel;
         let rt = &self.rt;
         let s = scale;
         let [nw, nh, nr] = v.size.map(|d| d * s);
@@ -2147,89 +2156,132 @@ impl Renderer {
             }
 
             let mut icon_busy = false;
-            if v.mode == Mode::Alert {
-                if let Some(t) = v.banner {
-                    let a = fade(30.0, 18.0);
-                    // Icon on the left, text beside it. Status and device icons, and a notification's
-                    // bell, are line icons whose parts move for a moment after the banner appears
-                    // (icons.rs); the water drop hops.
-                    let d = 36.0 * s;
-                    let status = t.icon.is_some() && t.choices.is_empty();
-                    // A question's icon sits level with its text (app name down to the last line), not the
-                    // banner with its buttons.
-                    let icon_mid = if t.choices.is_empty() { nh / 2.0 + if status { 0.0 } else { 2.0 * s } } else { (10.0 + v.size[1] - 42.0) / 2.0 * s };
-                    let (ix, iy) = (l + 18.0 * s, icon_mid - d / 2.0);
-                    let icon = t.icon.unwrap_or(ICON_BELL);
-                    let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
-                    let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
-                    let age = v.banner_age;
-                    let (pop_scale, pop_alpha) = icons::pop(age);
-                    let pop = translate(-mx, -my) * scaling(pop_scale) * translate(mx, my);
-                    if let Some((ic, geoms)) = &banner_line {
-                        icon_busy = age < icons::DUR;
-                        let size = LINE_ICON * s;
-                        let view = scaling(size / ic.vb) * translate(mx - size / 2.0, my - size / 2.0);
-                        let groups = icons::motion(ic.anim, age);
-                        for (part, geo) in ic.parts.iter().zip(geoms) {
-                            let g = groups.get(part.g as usize).copied().unwrap_or(icons::Motion::STILL);
-                            let (ox, oy) = ic.origins.get(part.g as usize).copied().unwrap_or((0.0, 0.0));
-                            let local = translate(-ox, -oy) * rotation(g.rot) * scaling(g.scale) * translate(ox + g.dx, oy + g.dy);
-                            let alpha = a * pop_alpha * g.alpha * groups.get(part.a as usize).map_or(1.0, |m| m.alpha);
-                            rt.SetTransform(&(local * view * pop * base));
-                            rt.DrawGeometry(geo, &self.brush(grey(1.0, alpha))?, ic.sw, &self.round);
-                        }
-                        rt.SetTransform(&base);
-                    } else if icon == ICON_DROP {
-                        icon_busy = age < icons::DUR;
-                        let hop = icons::drop_motion(age).dy * (LINE_ICON * s / 24.0);
-                        rt.SetTransform(&(pop * translate(0.0, hop) * base));
-                        let g = self.water_drop(mx, my, 24.0 * s)?;
-                        rt.FillGeometry(&g, &self.brush(color(BLUE.0, BLUE.1, BLUE.2, a * pop_alpha))?, None);
-                        rt.SetTransform(&base);
-                    } else {
-                        micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
+            // A banner is one of three things, each drawn on its own: a status (an icon and its line), a
+            // notification (an app's message), an approval (a question with buttons and a countdown).
+            if let (Mode::Alert, Some(t)) = (v.mode, v.banner) {
+                let a = fade(30.0, 18.0);
+                let kind = t.kind();
+                // Icon on the left, text beside it. Status and device icons, and a notification's
+                // bell, are line icons whose parts move for a moment after the banner appears
+                // (icons.rs); the water drop hops.
+                let d = 36.0 * s;
+                // A question's icon sits level with its text (app name down to the last line), not the
+                // banner with its buttons.
+                let icon_mid = match kind {
+                    BannerKind::Approval => (10.0 + v.size[1] - 42.0) / 2.0 * s,
+                    BannerKind::Status => nh / 2.0,
+                    BannerKind::Notification => nh / 2.0 + 2.0 * s,
+                };
+                let (ix, iy) = (l + 18.0 * s, icon_mid - d / 2.0);
+                let icon = t.icon.unwrap_or(ICON_BELL);
+                let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
+                let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
+                let age = v.banner_age;
+                let (pop_scale, pop_alpha) = icons::pop(age);
+                let pop = translate(-mx, -my) * scaling(pop_scale) * translate(mx, my);
+                if let Some((ic, geoms)) = &banner_line {
+                    icon_busy = age < icons::DUR;
+                    let size = LINE_ICON * s;
+                    let view = scaling(size / ic.vb) * translate(mx - size / 2.0, my - size / 2.0);
+                    let groups = icons::motion(ic.anim, age);
+                    for (part, geo) in ic.parts.iter().zip(geoms) {
+                        let g = groups.get(part.g as usize).copied().unwrap_or(icons::Motion::STILL);
+                        let (ox, oy) = ic.origins.get(part.g as usize).copied().unwrap_or((0.0, 0.0));
+                        let local = translate(-ox, -oy) * rotation(g.rot) * scaling(g.scale) * translate(ox + g.dx, oy + g.dy);
+                        let alpha = a * pop_alpha * g.alpha * groups.get(part.a as usize).map_or(1.0, |m| m.alpha);
+                        rt.SetTransform(&(local * view * pop * base));
+                        rt.DrawGeometry(geo, &self.brush(grey(1.0, alpha))?, ic.sw, &self.round);
                     }
-                    let (tl, mut tr) = (ix + d + 12.0 * s, r - 22.0 * s);
-                    if t.image.is_some() {
-                        // The picture sits at the right edge, centred on the banner; text ends before it.
-                        let (bw, bh) = (BANNER_IMAGE_W * s, BANNER_IMAGE_H * s);
-                        let (bx, by) = (r - 18.0 * s - bw, nh / 2.0 - bh / 2.0 + 2.0 * s);
-                        tr = bx - BANNER_IMAGE_GAP * s;
-                        match &banner_image {
-                            Some(img) => {
-                                let size = img.GetSize();
-                                let k = (bw / size.width).min(bh / size.height);
-                                let (w, h) = (size.width * k, size.height * k);
-                                let (x, y) = (bx + (bw - w) / 2.0, by + (bh - h) / 2.0);
-                                let brush = rt.CreateBitmapBrush(img, None, None)?;
-                                brush.SetTransform(&(scaling(k) * translate(x, y)));
-                                brush.SetOpacity(a);
-                                rt.FillRoundedRectangle(&rounded(rect(x, y, x + w, y + h), 5.0 * s), &brush);
+                    rt.SetTransform(&base);
+                } else if icon == ICON_DROP {
+                    icon_busy = age < icons::DUR;
+                    let hop = icons::drop_motion(age).dy * (LINE_ICON * s / 24.0);
+                    rt.SetTransform(&(pop * translate(0.0, hop) * base));
+                    let g = self.water_drop(mx, my, 24.0 * s)?;
+                    rt.FillGeometry(&g, &self.brush(color(BLUE.0, BLUE.1, BLUE.2, a * pop_alpha))?, None);
+                    rt.SetTransform(&base);
+                } else {
+                    micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
+                }
+                let tl = ix + d + 12.0 * s;
+                let mut tr = r - 22.0 * s;
+                match kind {
+                    // A status banner (the icon says what it is) is just its lines, centred on the icon.
+                    BannerKind::Status => {
+                        // A badge (a Bluetooth device's battery) stands large at the right end; text stops before it.
+                        if let Some(b) = &t.badge {
+                            text(b, F_BADGE, rect(tr - 80.0 * s, 0.0, tr, nh + 4.0 * s), trail, grey(1.0, a))?;
+                            tr -= 86.0 * s;
+                        }
+                        let mid = nh / 2.0;
+                        let (title_top, body_top, bar_y) = if t.level.is_some() {
+                            (mid - 15.0 * s, 0.0, mid + 9.0 * s)
+                        } else if t.body.is_empty() {
+                            (mid - 9.0 * s, 0.0, 0.0)
+                        } else {
+                            (mid - 17.0 * s, mid + 1.0 * s, 0.0)
+                        };
+                        text(&t.title, F_TITLE, rect(tl, title_top, tr, title_top + 18.0 * s), lead, grey(1.0, a))?;
+                        match t.level {
+                            Some(level) => {
+                                let th = 5.0 * s;
+                                let bar = |right: f32| rounded(rect(tl, bar_y - th / 2.0, right, bar_y + th / 2.0), th / 2.0);
+                                rt.FillRoundedRectangle(&bar(tr), &self.brush(grey(0.25, a))?);
+                                rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &self.brush(grey(1.0, a))?);
                             }
-                            // Still loading (or gone): a quiet placeholder of the same size.
-                            None => rt.FillRoundedRectangle(&rounded(rect(bx, by, bx + bw, by + bh), 5.0 * s), &self.brush(grey(0.2, a))?),
+                            // One line under the title.
+                            None => text(&t.body, F_BODY, rect(tl, body_top, tr, body_top + 16.0 * s), lead, grey(0.75, a))?,
                         }
                     }
-                    // A badge (a Bluetooth device's battery) stands large at the right end; text stops before it.
-                    if let Some(b) = &t.badge {
-                        text(b, F_BADGE, rect(tr - 80.0 * s, 0.0, tr, nh + 4.0 * s), trail, grey(1.0, a))?;
-                        tr -= 86.0 * s;
-                    }
-                    // A notification banner (one a click opens) gets an x to close it early. Status
-                    // banners have none: resting on them opens the panel within a moment.
-                    if t.image.is_some() || t.open.is_some() {
-                        let b = banner_close(cx, s, v.size[0], self.style == notch::Style::Pill);
-                        let (x, y, k) = ((b.left + b.right) / 2.0, (b.top + b.bottom) / 2.0, 4.0 * s);
-                        if self.close_hot {
-                            rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: 10.0 * s, radiusY: 10.0 * s }, &self.brush(grey(0.22, a))?);
+                    // A notification names its app above the title and wraps its text over the banner's height.
+                    BannerKind::Notification => {
+                        if t.image.is_some() {
+                            // The picture sits at the right edge, centred on the banner; text ends before it.
+                            let (bw, bh) = (BANNER_IMAGE_W * s, BANNER_IMAGE_H * s);
+                            let (bx, by) = (r - 18.0 * s - bw, nh / 2.0 - bh / 2.0 + 2.0 * s);
+                            tr = bx - BANNER_IMAGE_GAP * s;
+                            match &banner_image {
+                                Some(img) => {
+                                    let size = img.GetSize();
+                                    let k = (bw / size.width).min(bh / size.height);
+                                    let (w, h) = (size.width * k, size.height * k);
+                                    let (x, y) = (bx + (bw - w) / 2.0, by + (bh - h) / 2.0);
+                                    let brush = rt.CreateBitmapBrush(img, None, None)?;
+                                    brush.SetTransform(&(scaling(k) * translate(x, y)));
+                                    brush.SetOpacity(a);
+                                    rt.FillRoundedRectangle(&rounded(rect(x, y, x + w, y + h), 5.0 * s), &brush);
+                                }
+                                // Still loading (or gone): a quiet placeholder of the same size.
+                                None => rt.FillRoundedRectangle(&rounded(rect(bx, by, bx + bw, by + bh), 5.0 * s), &self.brush(grey(0.2, a))?),
+                            }
                         }
-                        let ink = self.brush(grey(if self.close_hot { 0.95 } else { 0.55 }, a))?;
-                        rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
-                        rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
+                        if let Some(b) = &t.badge {
+                            text(b, F_BADGE, rect(tr - 80.0 * s, 0.0, tr, nh + 4.0 * s), trail, grey(1.0, a))?;
+                            tr -= 86.0 * s;
+                        }
+                        // A notification a click opens gets an x to close it early. Status
+                        // banners have none: resting on them opens the panel within a moment.
+                        if t.image.is_some() || t.open.is_some() {
+                            let b = banner_close(cx, s, v.size[0], self.style == notch::Style::Pill);
+                            let (x, y, k) = ((b.left + b.right) / 2.0, (b.top + b.bottom) / 2.0, 4.0 * s);
+                            if self.close_hot {
+                                rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: 10.0 * s, radiusY: 10.0 * s }, &self.brush(grey(0.22, a))?);
+                            }
+                            let ink = self.brush(grey(if self.close_hot { 0.95 } else { 0.55 }, a))?;
+                            rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
+                            rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
+                        }
+                        text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
+                        text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
+                        // Wraps over the banner's height (sized to its lines, at most `BANNER_MAX_LINES`);
+                        // what still does not fit ends with "…".
+                        let top = notch::BANNER_TEXT_TOP * s;
+                        let bottom = (nh - 7.0 * s).max(top + notch::BANNER_LINE_H * s);
+                        text(&t.body, F_BODY_WRAP, rect(tl, top, tr, bottom), lead, grey(0.75, a))?;
                     }
                     // An approval waits `approve::BANNER`: a bright bar along the very bottom edge runs
                     // down meanwhile, and when it is gone the question goes back to its app.
-                    if !t.choices.is_empty() {
+                    BannerKind::Approval => {
                         let left = (1.0 - age / approve::BANNER.as_secs_f32()).clamp(0.0, 1.0);
                         icon_busy |= left > 0.0;
                         if left > 0.0 {
@@ -2246,8 +2298,6 @@ impl Renderer {
                             rt.PopLayer();
                             drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
                         }
-                    }
-                    if !t.choices.is_empty() {
                         for (k, (b, label)) in approve_buttons(cx, s, v.size[0], v.size[1], &t.choices).into_iter().zip(&t.choices).enumerate() {
                             // The first answer is the filled one, the others are outlined.
                             let ink = if k == 0 { color(0.02, 0.13, 0.04, a) } else { grey(1.0, a) };
@@ -2261,42 +2311,10 @@ impl Renderer {
                             // The font sits a little low in its line box: lift the label by a pixel to the pill's middle.
                             text(label, F_LABEL, rect(b.left, b.top - 1.0 * s, b.right, b.bottom - 1.0 * s), center, ink)?;
                         }
-                    }
-                    // A status banner (the icon says what it is) is just its lines, centred on the
-                    // icon; a notification names its app above the title.
-                    let mid = nh / 2.0;
-                    let (title_top, body_top, bar_y) = if t.level.is_some() {
-                        (mid - 15.0 * s, 0.0, mid + 9.0 * s)
-                    } else if t.body.is_empty() {
-                        (mid - 9.0 * s, 0.0, 0.0)
-                    } else {
-                        (mid - 17.0 * s, mid + 1.0 * s, 0.0)
-                    };
-                    if status {
-                        text(&t.title, F_TITLE, rect(tl, title_top, tr, title_top + 18.0 * s), lead, grey(1.0, a))?;
-                    } else {
                         text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
                         text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
-                    }
-                    match t.level {
-                        Some(level) => {
-                            let th = 5.0 * s;
-                            let my = bar_y;
-                            let bar = |right: f32| rounded(rect(tl, my - th / 2.0, right, my + th / 2.0), th / 2.0);
-                            rt.FillRoundedRectangle(&bar(tr), &self.brush(grey(0.25, a))?);
-                            rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &self.brush(grey(1.0, a))?);
-                        }
-                        // A question with buttons: wraps over up to 3 lines, the buttons below.
-                        None if !t.choices.is_empty() => text(&t.body, F_BODY_WRAP, rect(tl, notch::BANNER_TEXT_TOP * s, tr, (nh - 40.0 * s).max(notch::BANNER_TEXT_TOP * s + notch::BANNER_LINE_H * s)), lead, grey(0.75, a))?,
-                        // Status banner (icon): one line under the title.
-                        None if t.icon.is_some() => text(&t.body, F_BODY, rect(tl, body_top, tr, body_top + 16.0 * s), lead, grey(0.75, a))?,
-                        // Notification: wraps over the banner's height (sized to its lines, at most
-                        // `BANNER_MAX_LINES`); what still does not fit ends with "…".
-                        None => {
-                            let top = notch::BANNER_TEXT_TOP * s;
-                            let bottom = (nh - 7.0 * s).max(top + notch::BANNER_LINE_H * s);
-                            text(&t.body, F_BODY_WRAP, rect(tl, top, tr, bottom), lead, grey(0.75, a))?
-                        }
+                        // A question wraps over up to 3 lines, the buttons below.
+                        text(&t.body, F_BODY_WRAP, rect(tl, notch::BANNER_TEXT_TOP * s, tr, (nh - 40.0 * s).max(notch::BANNER_TEXT_TOP * s + notch::BANNER_LINE_H * s)), lead, grey(0.75, a))?;
                     }
                 }
             }
