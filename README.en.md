@@ -31,7 +31,7 @@
 
 | Page | What it does |
 |---|---|
-| **Music** | Cover, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, shuffle and repeat (off, all, one; green while on; only when the player offers them, so they stay dim for iTunes and foobar2000), drag the bar to seek (Windows media controls, iTunes, foobar2000). The lyrics button widens the panel; background and aurora follow the cover. |
+| **Music** | Cover, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, shuffle and repeat (off, all, one; green while on; only when the player has them: iTunes does, foobar2000 stays dim), drag the bar to seek (Windows media controls, iTunes, foobar2000). The lyrics button widens the panel; background and aurora follow the cover. |
 | **Notes** | Notes and appointments in one list, a progress ring says how many are left. Type "Call 20:00", "Dentist 28/10 14:30", "Call mom tomorrow 9h". Overdue shows red "Late"; ⚙ picks a reminder 0–60 min ahead; edit and delete show under the mouse. |
 | **Notifications** | The ~30 latest Windows notifications, each with its app icon and two lines; the count on the left; click to open the app; "Clear all" hides what is there (Windows keeps it). |
 | **Health** | Water and stand-up reminders: a big figure, the day's progress as a bar, a round button to log a drink or having stood up; times and amounts under ⚙. |

@@ -1,6 +1,6 @@
 //! iTunes COM media source.
 
-use crate::music::{Cmd, Track};
+use crate::music::{Cmd, Repeat, Track};
 use std::{
     fs,
     path::PathBuf,
@@ -10,12 +10,13 @@ use std::{
 use windows::{
     core::{w, BSTR, GUID, PCWSTR},
     Win32::{
+        Foundation::VARIANT_BOOL,
         System::{
             Com::{
                 CoCreateInstance, CLSCTX_LOCAL_SERVER, DISPATCH_FLAGS, DISPATCH_METHOD,
                 DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPPARAMS, IDispatch,
             },
-            Variant::{VariantClear, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BSTR,
+            Variant::{VariantClear, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL, VT_BSTR,
                 VT_DISPATCH, VT_I4, VT_I8, VT_R8},
         },
         UI::WindowsAndMessaging::FindWindowW,
@@ -45,6 +46,13 @@ impl Variant {
         }) } })
     }
 
+    fn bool(value: bool) -> Self {
+        Self(VARIANT { Anonymous: VARIANT_0 { Anonymous: std::mem::ManuallyDrop::new(VARIANT_0_0 {
+            vt: VT_BOOL, wReserved1: 0, wReserved2: 0, wReserved3: 0,
+            Anonymous: VARIANT_0_0_0 { boolVal: VARIANT_BOOL(if value { -1 } else { 0 }) },
+        }) } })
+    }
+
     fn f64(value: f64) -> Self {
         Self(VARIANT { Anonymous: VARIANT_0 { Anonymous: std::mem::ManuallyDrop::new(VARIANT_0_0 {
             vt: VT_R8, wReserved1: 0, wReserved2: 0, wReserved3: 0,
@@ -70,6 +78,13 @@ impl Variant {
         unsafe {
             (self.0.Anonymous.Anonymous.vt == VT_BSTR)
                 .then(|| self.0.Anonymous.Anonymous.Anonymous.bstrVal.to_string())
+        }
+    }
+
+    fn as_bool(&self) -> Option<bool> {
+        unsafe {
+            let value = &self.0.Anonymous.Anonymous;
+            (value.vt == VT_BOOL).then(|| value.Anonymous.boolVal.0 != 0)
         }
     }
 
@@ -134,6 +149,23 @@ fn app() -> Option<IDispatch> {
     }
 }
 
+/// `IITPlaylist.SongRepeat` (ITPlaylistRepeatMode): 0 off, 1 one song, 2 all.
+fn repeat_from(code: i32) -> Repeat {
+    match code {
+        1 => Repeat::One,
+        2 => Repeat::All,
+        _ => Repeat::Off,
+    }
+}
+
+fn repeat_code(mode: Repeat) -> i32 {
+    match mode {
+        Repeat::Off => 0,
+        Repeat::One => 1,
+        Repeat::All => 2,
+    }
+}
+
 fn seconds_to_ms(seconds: f64) -> u64 {
     if seconds.is_finite() && seconds > 0.0 { (seconds * 1000.0).round() as u64 } else { 0 }
 }
@@ -151,11 +183,16 @@ pub fn read() -> Option<Track> {
     let duration_ms = property(&current, "Duration")?.as_seconds().map(seconds_to_ms)?;
     let position_ms = property(&app, "PlayerPosition")?.as_seconds().map(seconds_to_ms)?;
     let playing = property(&app, "PlayerState")?.as_i32()? == 1;
+    // Shuffle and repeat belong to the playlist that is playing.
+    let playlist = dispatch_property(&app, "CurrentPlaylist");
+    let shuffle = playlist.as_ref().and_then(|p| property(p, "Shuffle")?.as_bool()).unwrap_or(false);
+    let repeat = playlist.as_ref().and_then(|p| property(p, "SongRepeat")?.as_i32()).map_or(Repeat::Off, repeat_from);
     Some(Track {
         source_id: SOURCE_ID.to_owned(), title, artist, playing, duration_ms, position_ms,
         start_ticks: 0, rate: 1.0, reported_position: (position_ms as i64).saturating_mul(10_000),
         updated_ticks: 0, at: Some(Instant::now()),
         can_toggle: true, can_next: true, can_previous: true, can_seek: duration_ms > 0,
+        can_shuffle: playlist.is_some(), can_repeat: playlist.is_some(), shuffle, repeat,
         ..Track::default()
     })
 }
@@ -170,8 +207,10 @@ pub fn command(cmd: &Cmd) -> bool {
             let mut args = [Variant::f64(*position_ms as f64 / 1000.0)];
             invoke(&app, "PlayerPosition", DISPATCH_PROPERTYPUT, &mut args).is_some()
         }
-        // iTunes keeps shuffle and repeat on its playlist: not read here, so its track says it cannot.
-        Cmd::Shuffle(_) | Cmd::Repeat(_) => false,
+        Cmd::Shuffle(on) => dispatch_property(&app, "CurrentPlaylist")
+            .is_some_and(|playlist| invoke(&playlist, "Shuffle", DISPATCH_PROPERTYPUT, &mut [Variant::bool(*on)]).is_some()),
+        Cmd::Repeat(mode) => dispatch_property(&app, "CurrentPlaylist")
+            .is_some_and(|playlist| invoke(&playlist, "SongRepeat", DISPATCH_PROPERTYPUT, &mut [Variant::i32(repeat_code(*mode))]).is_some()),
     }
 }
 
@@ -207,6 +246,15 @@ mod tests {
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
     #[test]
+    fn repeat_codes_match_itunes_and_round_trip() {
+        assert_eq!((repeat_code(Repeat::Off), repeat_code(Repeat::One), repeat_code(Repeat::All)), (0, 1, 2));
+        for mode in [Repeat::Off, Repeat::One, Repeat::All] {
+            assert_eq!(repeat_from(repeat_code(mode)), mode);
+        }
+        assert_eq!(repeat_from(7), Repeat::Off, "an unknown code is off");
+    }
+
+    #[test]
     fn converts_seconds_to_milliseconds() {
         assert_eq!(seconds_to_ms(66.125), 66_125);
         assert_eq!(seconds_to_ms(-1.0), 0);
@@ -224,5 +272,6 @@ mod tests {
         eprintln!("{} | {} | playing={} | position={}ms / {}ms", track.title, track.artist,
             track.playing, track.position_ms, track.duration_ms);
         eprintln!("artwork bytes={}", art.as_ref().map_or(0, Vec::len));
+        eprintln!("shuffle={} repeat={:?} (can: {} {})", track.shuffle, track.repeat, track.can_shuffle, track.can_repeat);
     }
 }
