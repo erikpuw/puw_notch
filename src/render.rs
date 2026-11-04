@@ -326,10 +326,10 @@ fn card_bottom(panel_h: f32) -> f32 {
     panel_h - 28.0
 }
 /// The row of page icons is open where the page dots are (the panel is `NAV_EXTRA` taller meanwhile): its cells
-/// start at the dots' top, so the gap above them is the dots' (7 px from the controls) and the gap under them is
-/// the same.
+/// start at the dots' top, 7 px under the controls, and 5 px of panel is left under them (the glyph is smaller
+/// than its cell, so the clear space under it reads as about 8).
 static NAV_OPEN: AtomicBool = AtomicBool::new(false);
-pub const NAV_EXTRA: f32 = 17.0;
+pub const NAV_EXTRA: f32 = 15.0;
 
 pub fn set_nav_open(open: bool) {
     NAV_OPEN.store(open, Ordering::Relaxed);
@@ -3700,15 +3700,16 @@ mod tests {
     }
 
     #[test]
-    fn the_page_icons_sit_where_the_dots_are_with_the_dots_gap_under_them() {
+    fn the_page_icons_sit_where_the_dots_are_with_a_thin_margin_under_them() {
         let ph = 186.0;
         let cells = nav_cells(240.0, 1.0, ph);
         let first = cells[0].1;
         assert_eq!(first.top, dots_y(ph), "they open where the dots are");
         assert_eq!(first.bottom - first.top, 22.0);
-        // The dots rest 7 px above the panel's bottom (ph - (dots_y + 5)); the opened panel leaves the icons the same.
+        // The dots rest 7 px above the panel's bottom (ph - (dots_y + 5)); the opened panel leaves 5 px under the cells
+        // (7 was too thick to the eye: the glyph is 16 px in a 22 px cell).
         assert_eq!(ph - (dots_y(ph) + 5.0), 7.0);
-        assert_eq!(ph + NAV_EXTRA - first.bottom, 7.0, "balanced like the dots");
+        assert_eq!(ph + NAV_EXTRA - first.bottom, 5.0);
     }
 
     #[test]
