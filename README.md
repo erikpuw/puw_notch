@@ -25,7 +25,7 @@
 | **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity (xin quyền dùng công cụ, câu hỏi chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt; banner tự đóng sau 20 giây (app hỏi lại như thường) và đóng ngay khi bạn trả lời trong app, tắt hẳn ở tray. Cách thiết lập ở [dưới](#thiết-lập-cho-claude-code-tuỳ-chọn). |
 | **Robot** | 30 giây không đụng máy thì mặt LED (chỉ có đôi mắt) thay đồng hồ: nhìn quanh, thỉnh thoảng liếc sang bên, mừng một lần (mắt `> <` xanh, hai ngôi sao) khi pin vừa đầy, buồn (mắt đỏ, phích cắm nhấp nháy) khi pin từ 20% trở xuống mà chưa sạc. Động chuột lại thì `^ ^` và liếc theo chuột; 5 phút thì ngủ. Bật / tắt ở tray. |
 | **Nhẹ** | Chỉ tải phần đang hiện: lời bài hát khi mở trang Nhạc, icon khi mở trang Thông báo; ẩn toàn màn hình thì ngừng tải. Khi nghỉ chỉ chừng 7 MB RAM và 0% CPU, đang phát nhạc ở dạng pill chừng 14 MB, mở trang Nhạc có aurora chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
-| **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị (chỉ giữ trang bạn dùng; trang ẩn thì hoàn toàn ngừng: không nhắc việc, uống nước, đứng dậy, không đọc nhạc, thời tiết, hạn mức, thông báo), Tính năng khác (Duyệt ngay trên notch, Ẩn bảng âm lượng Windows: mặc định tắt), Khởi động cùng Windows (hỏi quyền quản trị một lần để tạo tác vụ `PuwNotch` trong Task Scheduler; từ đó notch tự chạy với quyền quản trị 15 giây sau khi đăng nhập, không hỏi lại, đọc được cả cửa sổ chạy admin; bỏ tick thì tác vụ bị xóa), Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát. |
+| **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị (chỉ giữ trang bạn dùng; trang ẩn thì hoàn toàn ngừng: không nhắc việc, uống nước, đứng dậy, không đếm Pomodoro, không đọc nhạc, thời tiết, hạn mức, thông báo), Tính năng khác (Duyệt ngay trên notch, Ẩn bảng âm lượng Windows: mặc định tắt), Khởi động cùng Windows (hỏi quyền quản trị một lần để tạo tác vụ `PuwNotch` trong Task Scheduler; từ đó notch tự chạy với quyền quản trị 15 giây sau khi đăng nhập, không hỏi lại, đọc được cả cửa sổ chạy admin; bỏ tick thì tác vụ bị xóa), Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát. |
 
 **6 trang** (chuyển bằng ‹ ›, hoặc rê chuột vào chấm trang: chấm mở thành hàng biểu tượng để chọn thẳng một trang, rời ra thì trả về chấm):
 
@@ -33,6 +33,7 @@
 |---|---|
 | **Nhạc** | Ảnh bìa, lời đồng bộ (LRCLIB), ⏮ ⏯ ⏭, trộn bài và lặp (tắt, tất cả, một bài: xanh lá khi đang bật; chỉ khi trình phát có: iTunes có, foobar2000 thì để mờ), kéo thanh để tua (Windows media controls, iTunes, foobar2000). Nút lời mở rộng bảng; nền và đường aurora theo màu bìa. |
 | **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách, vòng tiến độ cho biết còn bao nhiêu. Gõ "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0–60 phút; nút sửa và xóa hiện khi rê chuột. |
+| **Tập trung** | Pomodoro: cả chu kỳ (4 vòng tập trung 25 phút, nghỉ ngắn 5, nghỉ dài 15) là một thanh chia đoạn, số giờ lớn, ba chip chọn chế độ, nút đặt lại / bắt đầu / sang đoạn kế. Hết đoạn thì banner báo và đoạn kế chờ bạn bấm bắt đầu; khi đang chạy, pill có một vạch mỏng ở đáy. |
 | **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng; số lượng ở bên trái; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy: số lớn, thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy; chỉnh giờ và mức ở ⚙. |
 | **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Dữ liệu Open-Meteo, làm mới 30 phút. |
@@ -54,6 +55,7 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 |---|---|
 | ![Nhạc](assets/screenshots/page-music.png)<br>**Nhạc**: ảnh bìa, tên bài, lời, nền và đường aurora theo màu ảnh bìa | ![Nhạc khi không phát](assets/screenshots/page-music-empty.png)<br>**Nhạc** khi chưa phát gì |
 | ![Ghi chú](assets/screenshots/page-tasks.png)<br>**Ghi chú**: ghi chú và lịch hẹn trong một danh sách | ![Thông báo](assets/screenshots/page-notifications.png)<br>**Thông báo**: kèm icon của từng app |
+| ![Tập trung](assets/screenshots/page-focus.png)<br>**Tập trung**: cả chu kỳ Pomodoro trên một thanh | ![Pill đang đếm giờ](assets/screenshots/pill-focus.png)<br>**Pill** khi đang đếm: một vạch mỏng ở đáy, không chiếm chỗ của nhạc hay thời tiết |
 | ![Sức khỏe](assets/screenshots/page-health.png)<br>**Sức khỏe**: nhắc uống nước, đứng dậy | ![Banner](assets/screenshots/banner.png)<br>**Banner** thông báo |
 
 ![Nhạc với lời](assets/screenshots/page-music-lyrics.png)<br>**Nhạc** với lời bài hát: bảng giãn ngang, dòng đang hát sáng ở giữa, đường aurora lượn dọc đáy bảng

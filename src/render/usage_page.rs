@@ -237,7 +237,7 @@ mod tests {
                     phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Usage, leaving: None, todos: &[], notes: &[],
                     weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                    focus: &crate::focus::Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..40 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                     std::thread::sleep(std::time::Duration::from_millis(10));

@@ -6,6 +6,7 @@ mod audio;
 mod connectivity;
 mod music;
 mod foobar;
+mod focus;
 mod health;
 mod i18n;
 mod icons;
@@ -50,6 +51,7 @@ use status::{WM_LOCKKEY, WM_VOLUMEKEY};
 use screen::WM_SCREENEVENT;
 use notify::Toast;
 use weather::WM_WEATHER;
+use focus::Focus;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, NOTE_ROWS, PAGES};
 
 const WM_TRAY: u32 = WM_APP + 1;
@@ -226,6 +228,7 @@ struct App {
     /// Where the Notifications list is drawn, in rows: eases toward `note_scroll`.
     note_pos: f32,
     health: health::Health,
+    focus: Focus,
     /// Health card showing its settings.
     settings_open: Option<Card>,
     /// Page switch in progress: (page leaving, start, direction).
@@ -332,7 +335,7 @@ impl App {
             },
             todos: &self.todo.items,
             notes: &self.notes,
-            health: HealthView { h: &self.health, now: todo::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
+            focus: &self.focus, health: HealthView { h: &self.health, now: todo::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
             weather: &self.wx,
             page_age: self.page_since.elapsed().as_secs_f32(),
             unit: self.unit,
@@ -680,6 +683,8 @@ impl App {
         mark(2, &mut lap);
         // Progress bar and lyric line move on their own while the panel is open.
         changed |= self.notch.mode == Mode::Expanded && self.track.as_ref().is_some_and(|t| t.playing);
+        // The Pomodoro clock and the line along the pill move on their own once a second while it runs.
+        changed |= self.focus.running() && self.audio_ticks % 2 == 0;
 
         // The verdict about what is under the pill only counts while the pill rests, still and alone.
         let sample = self.notch.is_settled_rest();
@@ -691,6 +696,7 @@ impl App {
 
         mark(3, &mut lap);
         self.remind();
+        self.focus_tick();
         self.usage_banner();
         mark(4, &mut lap);
 
@@ -805,6 +811,18 @@ impl App {
     /// Task reminders (early and on time) whose moment has come, then water / stand-up. One that
     /// cannot show now (fullscreen game, panel open) rings at the next chance. A banner that shows
     /// switches the panel to its page, so resting on it opens the right one.
+    /// A Pomodoro segment that ran out: a banner says so and what comes next; the next segment waits to be started.
+    fn focus_tick(&mut self) {
+        if !render::page_shown(Page::Focus) {
+            return;
+        }
+        if let Some(done) = self.focus.tick(Instant::now()) {
+            if self.show_banner(focus_toast(done), ALERT_MS) {
+                self.page = Page::Focus;
+            }
+        }
+    }
+
     fn remind(&mut self) {
         let now = system::now_stamp();
         let hhmm = |d: u64| format!("{:02}:{:02}", d / 100 % 100, d % 100);
@@ -995,6 +1013,11 @@ impl App {
             Button::Stood => self.health.stood_up(todo::minutes(system::now_stamp())),
             Button::Step(set, dir) => self.health.change(set, dir),
             Button::Toggle(set) => self.health.change(set, 1),
+            Button::FocusPlay => self.focus.toggle(Instant::now()),
+            Button::FocusReset => self.focus.reset(),
+            Button::FocusSkip => self.focus.skip(Instant::now()),
+            Button::FocusMode(kind) => self.focus.pick(kind, Instant::now()),
+            Button::FocusSeg(seg) => self.focus.jump(seg, Instant::now()),
         }
         self.hovered_button = self.hit(x, y);
         self.redraw();
@@ -1176,8 +1199,8 @@ impl App {
                 let mask = render::pages_on();
                 for (i, p) in PAGES.iter().enumerate() {
                     // The last page kept cannot be switched off.
-                    let last = mask == 1 << i;
-                    let _ = AppendMenuW(pages, MF_STRING | check(mask >> i & 1 == 1) | if last { MF_GRAYED } else { MF_ENABLED }, MENU_PAGE + i, &text(p.name()));
+                    let last = mask == p.bit();
+                    let _ = AppendMenuW(pages, MF_STRING | check(mask & p.bit() != 0) | if last { MF_GRAYED } else { MF_ENABLED }, MENU_PAGE + i, &text(p.name()));
                 }
                 let _ = AppendMenuW(menu, MF_POPUP, pages.0 as usize, &text(tr("Trang hiển thị", "Pages shown")));
             }
@@ -1214,13 +1237,16 @@ impl App {
                     self.kick();
                 }
                 c if (MENU_PAGE..MENU_PAGE + PAGES.len()).contains(&c) => {
-                    render::set_pages_on(render::pages_on() ^ (1 << (c - MENU_PAGE)));
+                    render::set_pages_on(render::pages_on() ^ PAGES[c - MENU_PAGE].bit());
                     if !render::page_shown(self.page) {
                         self.page = PAGES.into_iter().find(|p| render::page_shown(*p)).unwrap_or(Page::Music);
                         self.page_since = Instant::now();
                         self.settings_open = None;
                     }
                     // A page switched off leaves nothing waiting; one switched on starts fresh.
+                    if !render::page_shown(Page::Focus) {
+                        self.focus = Focus::default();
+                    }
                     if !render::page_shown(Page::Usage) {
                         self.usage_alerts.clear();
                     }
@@ -1623,6 +1649,20 @@ fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, ico
     Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new() }
 }
 
+/// The banner for a Pomodoro segment that ended.
+fn focus_toast(done: focus::Done) -> Toast {
+    let min = |k: focus::Kind| k.minutes();
+    let (title, body) = match (done.ended, done.next) {
+        (focus::Kind::Focus, next) if i18n::english() => (format!("{} min of focus done", min(focus::Kind::Focus)),
+            format!("Take a {} min {}", min(next), if next == focus::Kind::Long { "long break" } else { "break" })),
+        (focus::Kind::Focus, next) => (format!("Hết {} phút tập trung", min(focus::Kind::Focus)),
+            format!("{} {} phút", if next == focus::Kind::Long { "Nghỉ dài" } else { "Nghỉ" }, min(next))),
+        (_, next) if i18n::english() => ("Break is over".to_string(), format!("Ready for {} min of focus", min(next))),
+        (_, next) => ("Hết giờ nghỉ".to_string(), format!("Sẵn sàng tập trung {} phút", min(next))),
+    };
+    status_toast(tr("Tập trung", "Focus"), title, &body, None, render::ICON_REMINDER)
+}
+
 fn on_off(on: bool) -> &'static str {
     if on { tr("Bật", "On") } else { tr("Tắt", "Off") }
 }
@@ -1869,6 +1909,7 @@ fn run() -> windows::core::Result<()> {
             note_scroll: 0,
             note_pos: 0.0,
             health: health::Health::load(system::today()),
+            focus: Focus::default(),
             settings_open: None,
             page_anim: None,
             icons_morphing: false,

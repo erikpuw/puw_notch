@@ -79,6 +79,7 @@ const MID: [(f32, f32); 4] = [(12.0, 12.0); 4];
 /// move (`anim` is only a placeholder), they are drawn like the banner icons so every line icon has the same stroke.
 pub static PLAYER_PREV: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M20 5v14l-12 -7z"), p("M4 5l0 14")] };
 pub static PLAYER_NEXT: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M4 5v14l12 -7z"), p("M20 5l0 14")] };
+pub static FOCUS_RESET: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M19.95 11a8 8 0 1 0 -.5 4"), p("M20 20v-5h-5")] };
 pub static PLAYER_SHUFFLE: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
     parts: &[p("M18 4l3 3l-3 3"), p("M18 20l3 -3l-3 -3"), p("M3 7h3a5 5 0 0 1 5 5a5 5 0 0 0 5 5h5"), p("M21 7h-5a4.978 4.978 0 0 0 -3 1m-4 8a4.984 4.984 0 0 1 -3 1h-3")],
@@ -659,7 +660,7 @@ mod tests {
 
     #[test]
     fn the_player_icons_parse() {
-        for ic in [&PLAYER_PREV, &PLAYER_NEXT, &PLAYER_SHUFFLE, &PLAYER_REPEAT, &PLAYER_REPEAT_ONE] {
+        for ic in [&PLAYER_PREV, &PLAYER_NEXT, &PLAYER_SHUFFLE, &PLAYER_REPEAT, &PLAYER_REPEAT_ONE, &FOCUS_RESET] {
             for part in ic.parts {
                 assert!(parse(part.d).is_some_and(|segs| segs.len() >= 2), "{}", part.d);
             }

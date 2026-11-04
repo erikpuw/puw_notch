@@ -44,6 +44,7 @@ pub const WM_ICONS: u32 = WM_APP + 10;
 pub fn visible_page(mode: Mode, hidden: bool, page: Page) -> Option<Page> {
     (mode == Mode::Expanded && !hidden).then_some(page)
 }
+use crate::focus::{self, Focus};
 use crate::health::{self, Health, Setting};
 use crate::i18n::tr;
 use crate::robot::{curious_eyes, Eyes, Face, EYE_H};
@@ -83,6 +84,8 @@ pub struct View<'a> {
     /// Notifications page, newest first.
     pub notes: &'a [Note],
     pub health: HealthView<'a>,
+    /// The Pomodoro timer: its page and the line along the pill's bottom.
+    pub focus: &'a Focus,
     /// The weather's city and current conditions (shown on the pill and the Weather page).
     pub weather: &'a weather::State,
     /// Seconds since the open panel or its page appeared: the Weather page's icon moves for a moment.
@@ -97,6 +100,8 @@ pub enum Page {
     Music,
     /// Tasks and appointments in one list.
     Todo,
+    /// Pomodoro: the timer of focus and break segments.
+    Focus,
     /// Windows notifications, to read back.
     Notify,
     Health,
@@ -106,9 +111,9 @@ pub enum Page {
     Usage,
 }
 
-pub const PAGES: [Page; 6] = [Page::Music, Page::Todo, Page::Notify, Page::Health, Page::Weather, Page::Usage];
+pub const PAGES: [Page; 7] = [Page::Music, Page::Todo, Page::Focus, Page::Notify, Page::Health, Page::Weather, Page::Usage];
 
-/// Which pages (bit per `PAGES` index) the user keeps: the arrows and dots only go through those.
+/// Which pages (a bit each, see `Page::bit`) the user keeps: the arrows and dots only go through those.
 /// Never empty.
 static PAGES_ON: AtomicU8 = AtomicU8::new(ALL_PAGES);
 const ALL_PAGES: u8 = (1 << PAGES.len()) - 1;
@@ -123,15 +128,30 @@ pub fn pages_on() -> u8 {
 }
 
 pub fn page_shown(page: Page) -> bool {
-    PAGES.iter().position(|p| *p == page).is_some_and(|i| pages_on() >> i & 1 == 1)
+    pages_on() & page.bit() != 0
 }
 
 impl Page {
+    /// The page's bit in the saved mask. Fixed per page (not its place in `PAGES`), so a page added in the
+    /// middle of the order does not move the choices already saved.
+    pub fn bit(self) -> u8 {
+        1 << match self {
+            Page::Music => 0,
+            Page::Todo => 1,
+            Page::Notify => 2,
+            Page::Health => 3,
+            Page::Weather => 4,
+            Page::Usage => 5,
+            Page::Focus => 6,
+        }
+    }
+
     /// The name in the panel's header (and in the tray's list of pages).
     pub fn name(self) -> &'static str {
         match self {
             Page::Music => tr("Nhạc", "Music"),
             Page::Todo => tr("Ghi chú", "Notes"),
+            Page::Focus => tr("Tập trung", "Focus"),
             Page::Notify => tr("Thông báo", "Notifications"),
             Page::Health => tr("Sức khỏe", "Health"),
             Page::Weather => tr("Thời tiết", "Weather"),
@@ -224,6 +244,13 @@ pub enum Button {
     /// −1 / +1 on the tasks' early reminder.
     RemindStep(i32),
     Toggle(Setting),
+    /// The Focus page: start / pause, back to the segment's start, on to the next segment, a chip (go to the
+    /// next segment of that kind), a segment of the strip.
+    FocusPlay,
+    FocusReset,
+    FocusSkip,
+    FocusMode(focus::Kind),
+    FocusSeg(usize),
 }
 
 impl Button {
@@ -233,6 +260,8 @@ impl Button {
             Self::Next => tr("Bài tiếp theo", "Next"), Self::Seek => tr("Bấm để tua", "Click to seek"),
             Self::Lyrics => tr("Lời bài hát", "Lyrics"),
             Self::Shuffle => tr("Trộn bài", "Shuffle"), Self::Repeat => tr("Lặp lại", "Repeat"),
+            Self::FocusPlay => tr("Bắt đầu / Tạm dừng", "Start / Pause"), Self::FocusReset => tr("Đặt lại đoạn này", "Restart this segment"),
+            Self::FocusSkip => tr("Sang đoạn kế", "Next segment"),
             _ => "",
         }
     }
@@ -266,6 +295,41 @@ const CONTROLS_Y: f32 = 148.0;
 const BAR_Y: f32 = 108.0;
 /// Page content sits between the side arrows (logical px from the panel edge).
 const SIDE: f32 = 44.0;
+/// The Focus page (logical px from the panel's top-left): the chips under the big time, the strip of the cycle's segments
+/// and the line of text under it.
+const FOCUS_CHIP_Y: f32 = 92.0;
+const FOCUS_CHIP_H: f32 = 22.0;
+const FOCUS_STRIP_Y: f32 = 128.0;
+const FOCUS_STRIP_H: f32 = 5.0;
+const FOCUS_SEG_GAP: f32 = 3.0;
+const FOCUS_PLAY: f32 = 44.0;
+const FOCUS_SMALL: f32 = 28.0;
+
+/// The width of a chip: its label plus room each side.
+fn focus_chip_w(label: &str) -> f32 {
+    22.0 + 6.6 * label.chars().count() as f32
+}
+
+fn focus_chip_label(kind: focus::Kind) -> &'static str {
+    match kind {
+        focus::Kind::Focus => tr("Tập trung", "Focus"),
+        focus::Kind::Short => tr("Nghỉ ngắn", "Short break"),
+        focus::Kind::Long => tr("Nghỉ dài", "Long break"),
+    }
+}
+
+/// The cycle's segments across `width` (logical px): each as long as its minutes, `FOCUS_SEG_GAP` apart.
+fn focus_segments(width: f32) -> Vec<(f32, f32)> {
+    let total: f32 = focus::CYCLE.iter().map(|k| k.minutes() as f32).sum();
+    let room = width - FOCUS_SEG_GAP * (focus::CYCLE.len() - 1) as f32;
+    let mut x = 0.0;
+    focus::CYCLE.iter().map(|k| {
+        let w = room * k.minutes() as f32 / total;
+        let seg = (x, x + w);
+        x += w + FOCUS_SEG_GAP;
+        seg
+    }).collect()
+}
 const ARROW: f32 = 24.0;
 /// Pages are clipped this far in from the panel's sides (just inside the arrows).
 const PAGE_CLIP: f32 = 34.0;
@@ -350,6 +414,7 @@ fn nav_icon(page: Page) -> &'static str {
     match page {
         Page::Music => "\u{E8D6}",
         Page::Todo => "\u{E9D5}",
+        Page::Focus => "\u{E916}",
         Page::Notify => ICON_BELL,
         Page::Health => "\u{E95E}",
         // The Weather page draws its own line sun (see `draw`); this is only a stand-in.
@@ -492,6 +557,24 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             let shown: Vec<usize> = (0..3).filter(|i| USAGE_APPS.load(Ordering::Relaxed) >> i & 1 == 1).collect();
             for (place, &i) in shown.iter().enumerate() {
                 out.push((Button::UsageTab(i), r(cl + place as f32 * (USAGE_CHIP_W + 4.0), CARD_TOP, USAGE_CHIP_W, USAGE_TAB_H)));
+            }
+        }
+        Page::Focus => {
+            let mut x = cl;
+            for kind in [focus::Kind::Focus, focus::Kind::Short, focus::Kind::Long] {
+                let w = focus_chip_w(focus_chip_label(kind));
+                out.push((Button::FocusMode(kind), r(x, FOCUS_CHIP_Y, w, FOCUS_CHIP_H)));
+                x += w + 6.0;
+            }
+            // Right-aligned like the Music page's controls: restart, the white disc, next.
+            let right = cl + cw;
+            let (skip_x, play_x) = (right - FOCUS_SMALL, right - FOCUS_SMALL - 14.0 - FOCUS_PLAY);
+            out.push((Button::FocusSkip, r(skip_x, 72.0 - FOCUS_SMALL / 2.0, FOCUS_SMALL, FOCUS_SMALL)));
+            out.push((Button::FocusPlay, r(play_x, 72.0 - FOCUS_PLAY / 2.0, FOCUS_PLAY, FOCUS_PLAY)));
+            out.push((Button::FocusReset, r(play_x - 14.0 - FOCUS_SMALL, 72.0 - FOCUS_SMALL / 2.0, FOCUS_SMALL, FOCUS_SMALL)));
+            // The strip's hit area is taller than its 5 px so it can be hit.
+            for (i, (x0, x1)) in focus_segments(cw).into_iter().enumerate() {
+                out.push((Button::FocusSeg(i), r(cl + x0, FOCUS_STRIP_Y - 7.0, x1 - x0, FOCUS_STRIP_H + 14.0)));
             }
         }
         Page::Health => {
@@ -641,6 +724,8 @@ const F_MARK: usize = 16;
 const F_TEMP: usize = 17;
 /// The song's title on the Music page: large and bold, it is what the page is about.
 const F_SONG: usize = 18;
+/// The time left on the Focus page.
+const F_TIME: usize = 19;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
 /// of the thin divider after the player's controls, its right margin and its width. The right
 /// margin equals the gap at the divider; the pages' clip gives way on that side while the lyrics
@@ -702,12 +787,16 @@ const YELLOW: (f32, f32, f32) = (1.0, 0.8, 0.2);
 const GREEN: (f32, f32, f32) = (0.2, 0.84, 0.29);
 const BLUE: (f32, f32, f32) = (0.3, 0.62, 1.0);
 const ORANGE: (f32, f32, f32) = (1.0, 0.6, 0.2);
+/// The Focus page's colour for a focus segment (breaks are GREEN).
+const CORAL: (f32, f32, f32) = (1.0, 0.42, 0.30);
 /// Idle robot's LED eyes: near-white, like a small LED face.
 const LED: (f32, f32, f32) = (0.93, 0.97, 1.0);
 /// The robot's red eyes and plug when the battery is low: the battery ring's red.
 const LOW_RED: (f32, f32, f32) = (1.0, 0.27, 0.23);
 /// Height of the countdown bar on the bottom edge of an approval banner.
 const COUNTDOWN_H: f32 = 3.0;
+/// The Pomodoro line along the pill's bottom, thinner than the approval countdown.
+const FOCUS_LINE_H: f32 = 2.0;
 
 /// Banner icon for a Bluetooth device.
 pub fn device_icon(kind: DeviceKind) -> &'static str {
@@ -1272,6 +1361,7 @@ impl Renderer {
                 make(w!("Segoe Fluent Icons"), 96.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(display, 40.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(display, 21.0, DWRITE_FONT_WEIGHT_BOLD)?,
+                make(display, 46.0, DWRITE_FONT_WEIGHT_MEDIUM)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -1791,6 +1881,11 @@ impl Renderer {
             [&icons::PLAYER_SHUFFLE, &icons::PLAYER_PREV, &icons::PLAYER_NEXT, &icons::PLAYER_REPEAT, &icons::PLAYER_REPEAT_ONE].into_iter()
                 .filter_map(|ic| Some((ic, ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?))).collect()
         } else { Vec::new() };
+        // The Focus page's restart and next icons.
+        let focus_icons: Vec<(&'static icons::Icon, Vec<ID2D1PathGeometry>)> = if page == Some(Page::Focus) || v.leaving.is_some_and(|(p, _, _)| p == Page::Focus) {
+            [&icons::FOCUS_RESET, &icons::PLAYER_NEXT].into_iter()
+                .filter_map(|ic| Some((ic, ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?))).collect()
+        } else { Vec::new() };
         // Height of each wrapped lyric line, while the panel is wider than the player.
         let lyric_heights: Vec<f32> = match v.music {
             Some(t) if page == Some(Page::Music) && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
@@ -2023,6 +2118,21 @@ impl Renderer {
                 }
                 if let Some(e) = v.robot.filter(|e| e.alpha > 0.0) {
                     self.draw_face(&e, cx, nh / 2.0, s, pill_a * e.alpha)?;
+                }
+                // Pomodoro: the pill is too full for another mark, so a thin line along its bottom fills as the segment runs
+                // (dimmer while paused part-way). Like the approval banner's countdown it is cut to the outline, so its
+                // start curves up with the corner.
+                let done = v.focus.fill(v.focus.seg, std::time::Instant::now());
+                if v.focus.running() || done > 0.0 {
+                    let ink = if v.focus.kind() == focus::Kind::Focus { CORAL } else { GREEN };
+                    let top = nh - FOCUS_LINE_H * s;
+                    let params = D2D1_LAYER_PARAMETERS { contentBounds: rect(l, top, r, nh), geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
+                        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: 1.0,
+                        opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
+                    rt.PushLayer(&params, None);
+                    rt.FillRectangle(&rect(l, top, l + (r - l) * done.max(0.01), nh), &self.brush(color(ink.0, ink.1, ink.2, pill_a * if v.focus.running() { 1.0 } else { 0.5 }))?);
+                    rt.PopLayer();
+                    drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
                 }
             }
 
@@ -2735,6 +2845,64 @@ impl Renderer {
                                 }
                             }
                         }
+                        Page::Focus => {
+                            let f = v.focus;
+                            let now = std::time::Instant::now();
+                            let kc = |k: focus::Kind| if k == focus::Kind::Focus { CORAL } else { GREEN };
+                            let running = f.running();
+                            let cw_l = (cr - cl) / s;
+                            // The time left, big, with the chips under it.
+                            text(&focus::mmss(f.remaining(now)), F_TIME, rect(cl, 32.0 * s, cl + 200.0 * s, 88.0 * s), lead, grey(1.0, a))?;
+                            for kind in [focus::Kind::Focus, focus::Kind::Short, focus::Kind::Long] {
+                                let Some(cb) = rect_of(Button::FocusMode(kind)) else { continue };
+                                let on = f.kind() == kind;
+                                let kcol = kc(kind);
+                                let hot = hovered == Some(Button::FocusMode(kind));
+                                let fill = if on { color(kcol.0 * 0.22, kcol.1 * 0.22, kcol.2 * 0.22, a) } else { grey(if hot { 0.16 } else { 0.086 }, a) };
+                                rt.FillRoundedRectangle(&rounded(cb, (cb.bottom - cb.top) / 2.0), &self.brush(fill)?);
+                                text(focus_chip_label(kind), F_LABEL, cb, center, if on { solid(kcol, a) } else { grey(if hot { 0.85 } else { 0.6 }, a) })?;
+                            }
+                            // Restart, the white disc, next: the same hand as the Music page's controls.
+                            if let (Some(rb), Some(pb), Some(nb)) = (rect_of(Button::FocusReset), rect_of(Button::FocusPlay), rect_of(Button::FocusSkip)) {
+                                for (b, br, which) in [(Button::FocusReset, rb, 0), (Button::FocusSkip, nb, 1)] {
+                                    let Some((ic, geoms)) = focus_icons.get(which) else { continue };
+                                    let size = 17.0 * s;
+                                    let g = if hovered == Some(b) { 1.0 } else { 0.78 };
+                                    let (cx0, cy0) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
+                                    draw_wx_icon(ic, geoms, cx0 - size / 2.0, cy0 - size / 2.0, size, Some(((g, g, g), (g, g, g))), a, icons::DUR)?;
+                                }
+                                let fill = if hovered == Some(Button::FocusPlay) { grey(0.85, a) } else { grey(1.0, a) };
+                                let disc = D2D1_ELLIPSE { point: Vector2 { X: (pb.left + pb.right) / 2.0, Y: (pb.top + pb.bottom) / 2.0 }, radiusX: (pb.right - pb.left) / 2.0, radiusY: (pb.bottom - pb.top) / 2.0 };
+                                rt.FillEllipse(&disc, &self.brush(fill)?);
+                                let nudge = if running { 0.0 } else { 1.5 * s };
+                                micon("play", if running { ICON_PAUSE } else { ICON_PLAY }, F_ICON, rect(pb.left + nudge, pb.top, pb.right + nudge, pb.bottom), grey(0.05, a))?;
+                            }
+                            // The whole cycle in one strip: a segment as long as its minutes, full once done, filling while it runs.
+                            for (i, (x0, x1)) in focus_segments(cw_l).into_iter().enumerate() {
+                                let kcol = kc(focus::CYCLE[i]);
+                                let hot = hovered == Some(Button::FocusSeg(i));
+                                let seg = rect(cl + x0 * s, FOCUS_STRIP_Y * s, cl + x1 * s, (FOCUS_STRIP_Y + FOCUS_STRIP_H) * s);
+                                let radius = FOCUS_STRIP_H * s / 2.0;
+                                let k = if hot { 0.34 } else { 0.22 };
+                                rt.FillRoundedRectangle(&rounded(seg, radius), &self.brush(color(kcol.0 * k, kcol.1 * k, kcol.2 * k, a))?);
+                                let done = f.fill(i, now);
+                                if done > 0.0 {
+                                    let w = ((x1 - x0) * done * s).max(FOCUS_STRIP_H * s);
+                                    rt.FillRoundedRectangle(&rounded(rect(seg.left, seg.top, seg.left + w, seg.bottom), radius), &self.brush(solid(kcol, a))?);
+                                }
+                            }
+                            // Round and the clock's end of the cycle, under the strip.
+                            let left_min = f.cycle_left(now).as_secs().div_ceil(60) as u32;
+                            let ends = health::hhmm((v.health.minute_of_day + left_min) % 1440);
+                            let left_txt = if left_min >= 60 {
+                                if crate::i18n::english() { format!("{} h {} min left", left_min / 60, left_min % 60) } else { format!("còn {} giờ {}", left_min / 60, left_min % 60) }
+                            } else if crate::i18n::english() { format!("{left_min} min left") } else { format!("còn {left_min} phút") };
+                            let round = if crate::i18n::english() { format!("Round {} of 4", f.round()) } else { format!("Vòng {} trên 4", f.round()) };
+                            let foot = rect(cl, (FOCUS_STRIP_Y + 13.0) * s, cr, (FOCUS_STRIP_Y + 29.0) * s);
+                            text(&round, F_LABEL, foot, lead, grey(0.55, a))?;
+                            let end_txt = if crate::i18n::english() { format!("Done at {ends} · {left_txt}") } else { format!("Xong lúc {ends} · {left_txt}") };
+                            text(&end_txt, F_LABEL, foot, trail, grey(0.55, a))?;
+                        }
                         Page::Health => {
                             let hv = &v.health;
                             let h = hv.h;
@@ -3057,6 +3225,30 @@ mod tests {
     }
 
     #[test]
+    fn the_focus_page_buttons_do_not_overlap_and_the_whole_strip_is_hittable() {
+        let (cx, scale) = (300.0, 1.0);
+        let list = page_buttons(cx, scale, Page::Focus, 0, 0, None, false);
+        // 3 chips, 3 controls, 8 segments.
+        assert_eq!(list.iter().filter(|(b, _)| matches!(b, Button::FocusMode(_) | Button::FocusPlay | Button::FocusReset | Button::FocusSkip | Button::FocusSeg(_))).count(), 3 + 3 + 8);
+        let overlap = |a: &D2D_RECT_F, b: &D2D_RECT_F| a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+        let ones: Vec<_> = list.iter().filter(|(b, _)| matches!(b, Button::FocusMode(_) | Button::FocusPlay | Button::FocusReset | Button::FocusSkip)).collect();
+        for (i, (a, ra)) in ones.iter().enumerate() {
+            for (b, rb) in &ones[i + 1..] {
+                assert!(!overlap(ra, rb), "{a:?} and {b:?} overlap");
+            }
+        }
+        let mid = |b: Button| list.iter().find(|(x, _)| *x == b).map(|(_, r)| ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0)).unwrap();
+        for b in [Button::FocusPlay, Button::FocusReset, Button::FocusSkip, Button::FocusMode(focus::Kind::Long), Button::FocusSeg(0), Button::FocusSeg(7)] {
+            let (x, y) = mid(b);
+            assert_eq!(hit_button(cx, scale, x, y, None, Page::Focus, 0, 0, None, false), Some(b));
+        }
+        // The strip's segments are as long as their minutes: the long break (15) is 3x a short one (5).
+        let segs = focus_segments(392.0);
+        assert!(((segs[7].1 - segs[7].0) / (segs[1].1 - segs[1].0) - 3.0).abs() < 0.01);
+        assert!((segs[7].1 - 392.0).abs() < 0.01, "the strip fills the width");
+    }
+
+    #[test]
     fn closed_page_does_not_queue_icons() {
         let mut renderer = Renderer::new().unwrap();
         renderer.prefetch_icon("PuwNotch.ClosedPageTest");
@@ -3110,7 +3302,7 @@ mod tests {
                 lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: std::slice::from_ref(&note),
                 weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             for mode in [Mode::Collapsed, Mode::Mini] {
                 view.mode = mode;
                 view.size = target(mode, false);
@@ -3399,7 +3591,7 @@ mod tests {
                 banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             // The cover loads and the glow fades in over a second or two.
@@ -3440,7 +3632,7 @@ mod tests {
                 live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             // Let the cover decode and the glow reach its steady strength.
             for _ in 0..400 {
@@ -3489,7 +3681,7 @@ mod tests {
                     banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
                     leaving: None, todos: items, notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C,
                     list: ListView { counts: *counts, remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                    focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 }
@@ -3558,7 +3750,7 @@ mod tests {
                     banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: *page,
                     leaving: None, todos: &[], notes: &[], weather: st, page_age: 9.0, unit: *unit,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                    focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 }
@@ -3622,7 +3814,7 @@ mod tests {
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
             sheet.extend_from_slice(&renderer.grabbed[..]);
             }
@@ -3657,7 +3849,7 @@ mod tests {
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
                     phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                    focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 // The first frame waits for the cover and the fade-in.
                 for _ in 0..(if i == 0 { 80 } else { 1 }) {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -3691,7 +3883,7 @@ mod tests {
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true, art_key: 1, at: Some(Instant::now()),
                 lyrics: Arc::new((0..600).map(|k| (k * 400, format!("Dòng lời mẫu số {k} chạy theo bài đang phát"))).collect()),
                 art: Some(Arc::new(std::fs::read(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/screenshots/page-music.png")).unwrap())), ..Default::default() };
-            let (wx, health) = (weather::State::default(), Health::default());
+            let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
             let mut renderer = Renderer::new().unwrap();
             let cases = [("pill", Mode::Collapsed, Page::Music, false), ("mini", Mode::Mini, Page::Music, false), ("lyrics", Mode::Expanded, Page::Music, true)].into_iter()
                 .chain(PAGES.map(|p| ("page", Mode::Expanded, p, false)));
@@ -3702,7 +3894,7 @@ mod tests {
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
                     phase, banner_age: 0.0, lyrics, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
+                    focus: &idle_focus, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 // Settle first: the cover loads and the Music page's glow fades in.
                 for i in 0..120 {
                     renderer.present(hwnd, 0, 0, w, h, scale, &view(i as f32 / 60.0)).unwrap();
@@ -3776,13 +3968,15 @@ mod tests {
                 weather::Hour { hour, temp: if (6..18).contains(&hour) { 26.0 + (hour.min(13) - 6) as f32 } else { 25.0 }, rain, wind: 12.0, sky: if rain >= 50 { Sky::Rain } else { Sky::PartlyCloudy }, day: (6..18).contains(&hour) }
             }).collect();
             let partly_30 = State { hours, ..sky(Sky::PartlyCloudy, 30.0) };
+            // The third focus round, 7 min 18 s in.
+            let running_focus = Focus::demo(4, std::time::Duration::from_secs(7 * 60 + 18));
             let mut health = Health::default();
             // A mid-afternoon day: 750 ml of 2000 so far, 42 minutes at the desk.
             (health.water_on, health.sit_on, health.taken_ml, health.water_mark, health.sitting_since) = (true, true, 750, Some(999_970), Some(999_958));
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
             let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
             // (file, mode, music, page, lyrics open, weather, battery, time, date)
-            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 12] = [
+            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 14] = [
                 ("page-nav", Mode::Expanded, Some(&playing), Page::Music, false, &none, charging(70), "23:16", "T7, 24/10"),
                 ("pill-idle", Mode::Collapsed, None, Page::Music, false, &none, charging(76), "20:50", ""),
                 ("robot", Mode::Collapsed, None, Page::Music, false, &none, on_battery, "20:50", ""),
@@ -3794,6 +3988,8 @@ mod tests {
                 ("page-music-lyrics", Mode::Expanded, Some(&singing), Page::Music, true, &none, charging(70), "23:16", "T7, 24/10"),
                 ("page-music-empty", Mode::Expanded, None, Page::Music, false, &none, charging(76), "20:55", "T2, 26/10"),
                 ("page-health", Mode::Expanded, None, Page::Health, false, &none, charging(76), "20:49", "T2, 26/10"),
+                ("page-focus", Mode::Expanded, None, Page::Focus, false, &none, charging(76), "20:49", "T2, 26/10"),
+                ("pill-focus", Mode::Collapsed, None, Page::Music, false, &none, charging(76), "20:49", ""),
                 ("page-weather", Mode::Expanded, None, Page::Weather, false, &partly_30, on_battery, "02:05", "T5, 29/10"),
             ];
             let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if english { "target/readme-en" } else { "target/readme" });
@@ -3821,7 +4017,7 @@ mod tests {
                 let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: nav.then_some(Button::GoPage(Page::Todo)), page,
                     leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
+                    focus: if name.ends_with("-focus") { &running_focus } else { &Focus::default() }, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 // A fresh renderer per picture, run for a second and a half: the cover decodes, the
                 // glow and the equaliser reach their resting strength.
                 let mut renderer = Renderer::new().unwrap();
@@ -3900,7 +4096,7 @@ mod tests {
                     let view = View { mode, size, time: "20:50", date: en_date("T2, 26/10"), battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hovered: None, page,
                         leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C,
                         list: ListView { counts: if page == Page::Todo { (3, 1) } else { (0, 0) }, remind_before: 15, now: crate::todo::stamp(20261029, 2, 5), draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                        health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
+                        focus: &Focus::default(), health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                     let mut renderer = Renderer::new().unwrap();
                     renderer.grab = true;
                     (renderer.style, renderer.usage, renderer.usage_tab) = (style, snap.clone(), tab);
@@ -3939,7 +4135,7 @@ mod tests {
                     banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music,
                     leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                    focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 sheet.extend_from_slice(&renderer.grabbed);
             }
@@ -3973,7 +4169,7 @@ mod tests {
                 phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: &notes,
                 weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 202610291600, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -4005,7 +4201,7 @@ mod tests {
                 banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: Some(Button::PlayPause), page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             renderer.present(hwnd, 0, 0, 530, 210, 1.0, &view).unwrap();
@@ -4131,7 +4327,7 @@ mod tests {
                     banner_age: (now - 19.6).max(0.0), lyrics: false,
                     hovered: (mode == Mode::Expanded && (10.0..18.2).contains(&now)).then_some(Button::PageNext), page, leaving,
                     list: ListView { counts: (3, 1), remind_before: 15, now: 202610290941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    todos: &todos, notes: &notes, health: HealthView { h: &health, now: crate::todo::minutes(202610290941), minute_of_day: 9 * 60 + 41, settings: None },
+                    todos: &todos, notes: &notes, focus: &Focus::default(), health: HealthView { h: &health, now: crate::todo::minutes(202610290941), minute_of_day: 9 * 60 + 41, settings: None },
                     weather: &wx, page_age: if mode == Mode::Expanded { now - page_since } else { 0.0 }, unit: weather::Unit::C };
                 renderer.present(hwnd, 0, 0, w, h, scale, &view).unwrap();
                 pipe.write_all(&renderer.grabbed).unwrap();
