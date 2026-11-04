@@ -323,9 +323,11 @@ const CARD_GAP: f32 = 8.0;
 fn card_bottom(panel_h: f32) -> f32 {
     panel_h - 28.0
 }
-/// The row of page icons is open under the page dots (the panel is `NAV_EXTRA` taller meanwhile).
+/// The row of page icons is open where the page dots are (the panel is `NAV_EXTRA` taller meanwhile): its cells
+/// start at the dots' top, so the gap above them is the dots' (7 px from the controls) and the gap under them is
+/// the same.
 static NAV_OPEN: AtomicBool = AtomicBool::new(false);
-pub const NAV_EXTRA: f32 = 18.0;
+pub const NAV_EXTRA: f32 = 17.0;
 
 pub fn set_nav_open(open: bool) {
     NAV_OPEN.store(open, Ordering::Relaxed);
@@ -355,7 +357,7 @@ fn nav_cells(cx: f32, scale: f32, ph: f32) -> Vec<(Page, D2D_RECT_F)> {
     let n = shown.len() as f32;
     shown.into_iter().enumerate().map(|(i, p)| {
         let x = cx + (i as f32 - (n - 1.0) / 2.0) * 40.0 * scale;
-        (p, rect(x - 17.0 * scale, (ph + 4.0 - 11.0) * scale, x + 17.0 * scale, (ph + 4.0 + 11.0) * scale))
+        (p, rect(x - 17.0 * scale, dots_y(ph) * scale, x + 17.0 * scale, (dots_y(ph) + 22.0) * scale))
     }).collect()
 }
 
@@ -2923,9 +2925,10 @@ impl Renderer {
                 let mut dx = cx - total / 2.0;
                 let arriving = v.leaving.map_or(1.0, |(_, t, _)| ease_out(t));
                 // The row of page icons comes as the panel grows by NAV_EXTRA, the dots give way to it. The icons only show
-                // once they are inside the panel (they reach 12 px under its resting height, so none show before the panel is 12 px past it), so they fade out before the
-                // shrinking edge gets to them instead of poking out of it.
-                let nav_fade = ((nh - ph * s - 10.0 * s) / (8.0 * s)).clamp(0.0, 1.0);
+                // once they are inside the panel (they reach 10 px under its resting height, so none show before the panel is
+                // 4 px past it, all of them 12 px past it), so they fade out before the shrinking edge gets to them instead of
+                // poking out of it.
+                let nav_fade = ((nh - ph * s - 4.0 * s) / (8.0 * s)).clamp(0.0, 1.0);
                 for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
                     let weight = match v.leaving {
                         _ if p == v.page => arriving,
@@ -3685,6 +3688,18 @@ mod tests {
             }
             DestroyWindow(hwnd).unwrap();
         }
+    }
+
+    #[test]
+    fn the_page_icons_sit_where_the_dots_are_with_the_dots_gap_under_them() {
+        let ph = 186.0;
+        let cells = nav_cells(240.0, 1.0, ph);
+        let first = cells[0].1;
+        assert_eq!(first.top, dots_y(ph), "they open where the dots are");
+        assert_eq!(first.bottom - first.top, 22.0);
+        // The dots rest 7 px above the panel's bottom (ph - (dots_y + 5)); the opened panel leaves the icons the same.
+        assert_eq!(ph - (dots_y(ph) + 5.0), 7.0);
+        assert_eq!(ph + NAV_EXTRA - first.bottom, 7.0, "balanced like the dots");
     }
 
     #[test]
