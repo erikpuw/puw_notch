@@ -2325,8 +2325,8 @@ impl Renderer {
                             match v.music {
                                 Some(t) => {
                                     let title = if t.title.is_empty() { tr("Đang phát", "Playing") } else { &t.title };
-                                    text(&t.artist, F_BODY, rect(tl, top, cr, top + 18.0 * s), lead, soft_text(tint, level, 0.65, a))?;
-                                    text(title, F_TITLE, rect(tl, top + 18.0 * s, cr, top + 40.0 * s), lead, grey(1.0, a))?;
+                                    text(title, F_TITLE, rect(tl, top, cr, top + 22.0 * s), lead, grey(1.0, a))?;
+                                    text(&t.artist, F_BODY, rect(tl, top + 22.0 * s, cr, top + 40.0 * s), lead, soft_text(tint, level, 0.65, a))?;
                                     // The line being sung, unless the lyrics panel beside already shows it.
                                     let lyric = t.lyric_now().filter(|_| !v.lyrics).unwrap_or_else(|| hovered.map_or(
                                         if t.duration_ms == 0 { tr("Trình phát chưa cung cấp thời gian", "The player gives no timeline") }
