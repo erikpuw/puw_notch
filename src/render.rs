@@ -43,6 +43,11 @@ mod weather_page;
 mod notify_page;
 mod todo_page;
 mod music_page;
+mod pill;
+mod banner;
+mod header;
+mod nav;
+mod pages;
 mod usage_page;
 
 pub const WM_ICONS: u32 = WM_APP + 10;
@@ -1039,6 +1044,42 @@ unsafe fn bgra_pixels(wic: &IWICImagingFactory, src: &IWICBitmapSource) -> Optio
     Some((w, h, pixels))
 }
 
+/// What the frame prepared before drawing: line icons with their geometry, the lyrics' layout and the cover's colours.
+#[derive(Clone, Copy)]
+struct Prep<'a> {
+    weather_line: &'a Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
+    weather_empty: &'a Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
+    hour_lines: &'a [(weather::Hour, &'static icons::Icon, Vec<ID2D1PathGeometry>)],
+    focus_icons: &'a [(&'static icons::Icon, Vec<ID2D1PathGeometry>)],
+    player_icons: &'a [(&'static icons::Icon, Vec<ID2D1PathGeometry>)],
+    note_icons: &'a [Option<ID2D1Bitmap>],
+    lyric_heights: &'a [f32],
+    lyric_tops: &'a [f32],
+    tint: (f32, f32, f32),
+    level: f32,
+    fonts: &'a [IDWriteTextFormat],
+}
+
+/// What each part of a frame (the pill, a banner, the panel) is drawn with: the view, the notch's geometry in window px
+/// and the shared drawing helpers.
+#[derive(Clone, Copy)]
+struct Ctx<'a> {
+    v: &'a View<'a>,
+    s: f32,
+    l: f32,
+    r: f32,
+    cx: f32,
+    nh: f32,
+    /// How far down a floating pill is drawn.
+    gy: f32,
+    shape: &'a ID2D1PathGeometry,
+    text: &'a dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
+    width: &'a dyn Fn(&str, usize) -> f32,
+    micon: &'a dyn Fn(&'static str, &'static str, usize, D2D_RECT_F, D2D1_COLOR_F) -> Result<()>,
+    wx_icon: &'a dyn Fn(&icons::Icon, &[ID2D1PathGeometry], f32, f32, f32, Option<((f32, f32, f32), (f32, f32, f32))>, f32, f32) -> Result<()>,
+    cover: &'a dyn Fn(D2D_RECT_F, f32, f32) -> Result<()>,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Owner {
     Pill,
@@ -1991,9 +2032,7 @@ impl Renderer {
                 rt.SetTransform(&base);
                 Ok(())
             };
-            let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
             let center = DWRITE_TEXT_ALIGNMENT_CENTER;
-            let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
             // Width of a run in font `f` (caret placement, strike-through).
             let dw = &self.dw;
             let width = |t: &str, f: usize| -> f32 {
@@ -2041,6 +2080,9 @@ impl Renderer {
             rt.SetTransform(&Matrix3x2::translation(0.0, gy));
             let ear = if self.style == notch::Style::Pill { 0.0 } else { notch::ear(v.size[1]) * s };
             let shape = self.notch_shape(l, r, nh, nr, ear)?;
+            let prep = Prep { weather_line: &weather_line, weather_empty: &weather_empty, hour_lines: &hour_lines, focus_icons: &focus_icons, player_icons: &player_icons,
+                note_icons: &note_icons, lyric_heights: &lyric_heights, lyric_tops: &lyric_tops, tint, level, fonts: &fonts };
+            let ctx = Ctx { v, s, l, r, cx, nh, gy, shape: &shape, text: &text, width: &width, micon: &micon, wx_icon: &draw_wx_icon, cover: &draw_cover };
             // How far the pill has grown into the panel (0: pill, 1: open).
             let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
             // A thin soft shadow under the open panel and the banners (the resting pill has none):
@@ -2081,508 +2123,22 @@ impl Renderer {
             let fade = |from: f32, span: f32| ((nh - from * s) / (span * s)).clamp(0.0, 1.0);
             let small_a = 1.0 - fade(39.0, 20.0);
             if nh >= 20.0 * s && small_a > 0.0 && v.mode != Mode::Alert {
-                let pill_music = v.music.filter(|_| v.live);
-                // The idle robot fades the clock and battery out as its eyes fade in.
-                let robot_a = v.robot.map_or(0.0, |e| e.alpha);
-                let pill_a = small_a;
-                let small_a = small_a * (1.0 - robot_a);
-                text(v.time, F_SMALL, rect(l, 0.0, r, nh), center, grey(1.0, small_a))?;
-                if let Some(b) = &v.battery {
-                    // A battery ring left of the time; with music the cover takes that spot, so it
-                    // sits before the bars.
-                    let d = 22.0 * s;
-                    let bx = if pill_music.is_some() { r - 61.0 * s } else { l + 13.0 * s };
-                    self.draw_battery_ring((bx + 10.0 * s, nh / 2.0), d, b, small_a)?;
-                }
-                // Weather: icon and temperature in the room the clock leaves, to its right on the plain
-                // pill (balancing the battery), after the cover on the music pill. Left out
-                // when it would touch the clock.
-                if let (Some((ic, geoms)), Some(n)) = (&weather_line, v.weather.now) {
-                    let (icon, gap) = (14.0 * s, 2.0 * s);
-                    let clock_half = width(v.time, F_SMALL) / 2.0 + 3.0 * s;
-                    // Where the icon and `label` shrunk by `k` go, and the room left between them and the clock.
-                    let place = |label: &str, k: f32| {
-                        let total = icon + gap + width(label, F_LABEL) * k;
-                        if pill_music.is_some() {
-                            let left = l + 38.0 * s;
-                            (left, total, cx - clock_half - (left + total))
-                        } else {
-                            let left = r - 11.0 * s - total;
-                            (left, total, left - (cx + clock_half))
-                        }
-                    };
-                    // "−12°" is wider than "29°": it keeps its degree sign by shrinking a little (down
-                    // to 80%); only a number that still does not fit loses the sign, not the weather.
-                    let number = v.unit.number(n.temp);
-                    let with_sign = format!("{number}°");
-                    let tries = [(&with_sign, 1.0), (&with_sign, 0.9), (&with_sign, 0.8), (&number, 1.0)];
-                    let fitted = tries.into_iter().map(|(label, k)| (place(label, k), label, k)).find(|((_, _, room), _, _)| *room >= 0.0);
-                    if let Some(((left, _, _), label, k)) = fitted {
-                        draw_wx_icon(ic, geoms, left, (nh - icon) / 2.0, icon, None, small_a * 0.9, 9.0)?;
-                        let (tx, ty) = (left + icon + gap, nh / 2.0);
-                        let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
-                        rt.SetTransform(&(translate(-tx, -ty) * scaling(k) * translate(tx, ty) * base));
-                        text(label, F_LABEL, rect(tx, 0.0, tx + width(label, F_LABEL) + 6.0 * s, nh), lead, grey(0.9, small_a))?;
-                        rt.SetTransform(&base);
-                    }
-                }
-                if pill_music.is_some() {
-                    // Live pill: cover on the left, equaliser on the right.
-                    let c = 20.0 * s;
-                    let top = (nh - c) / 2.0;
-                    draw_cover(rect(l + 10.0 * s, top, l + 10.0 * s + c, top + c), 5.0 * s, small_a)?;
-                    let bw = 2.0 * s;
-                    for i in 0..4 {
-                        let k = i as f32;
-                        let amp = bars_level * (0.5 + 0.5 * (v.phase * (6.0 + k * 1.7) + k * 1.3).sin());
-                        let bh = (4.0 + 10.0 * amp) * s;
-                        let bx = r - 14.0 * s - (4.0 - k) * (bw + 2.0 * s);
-                        let my = nh / 2.0;
-                        rt.FillRoundedRectangle(&rounded(rect(bx, my - bh / 2.0, bx + bw, my + bh / 2.0), bw / 2.0), &self.brush(grey(1.0, small_a * 0.9))?);
-                    }
-                }
-                if let Some(e) = v.robot.filter(|e| e.alpha > 0.0) {
-                    self.draw_face(&e, cx, nh / 2.0, s, pill_a * e.alpha)?;
-                }
-                // Pomodoro: the pill is too full for another mark, so a thin line along its bottom fills as the segment runs
-                // (dimmer while paused part-way). Like the approval banner's countdown it is cut to the outline, so its
-                // start curves up with the corner.
-                let done = v.focus.fill(v.focus.seg, std::time::Instant::now());
-                if v.focus.running() || done > 0.0 {
-                    let ink = if v.focus.kind() == focus::Kind::Focus { CORAL } else { GREEN };
-                    let top = nh - FOCUS_LINE_H * s;
-                    let params = D2D1_LAYER_PARAMETERS { contentBounds: rect(l, top, r, nh), geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
-                        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: 1.0,
-                        opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
-                    rt.PushLayer(&params, None);
-                    rt.FillRectangle(&rect(l, top, l + (r - l) * done.max(0.01), nh), &self.brush(color(ink.0, ink.1, ink.2, pill_a * if v.focus.running() { 1.0 } else { 0.5 }))?);
-                    rt.PopLayer();
-                    drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
-                }
+                self.draw_pill(&ctx, &weather_line, bars_level, small_a)?;
             }
 
             let mut icon_busy = false;
             // A banner is one of three things, each drawn on its own: a status (an icon and its line), a
             // notification (an app's message), an approval (a question with buttons and a countdown).
             if let (Mode::Alert, Some(t)) = (v.mode, v.banner) {
-                let a = fade(30.0, 18.0);
-                let kind = t.kind();
-                // Icon on the left, text beside it. Status and device icons, and a notification's
-                // bell, are line icons whose parts move for a moment after the banner appears
-                // (icons.rs); the water drop hops.
-                let d = 36.0 * s;
-                // A question's icon sits level with its text (app name down to the last line), not the
-                // banner with its buttons.
-                let icon_mid = match kind {
-                    BannerKind::Approval => (10.0 + v.size[1] - 42.0) / 2.0 * s,
-                    BannerKind::Status => nh / 2.0,
-                    BannerKind::Notification => nh / 2.0 + 2.0 * s,
-                };
-                let (ix, iy) = (l + 18.0 * s, icon_mid - d / 2.0);
-                let icon = t.icon.unwrap_or(ICON_BELL);
-                let (mx, my) = (ix + d / 2.0, iy + d / 2.0);
-                let base = { let mut b = Matrix3x2::default(); rt.GetTransform(&mut b); b };
-                let age = v.banner_age;
-                let (pop_scale, pop_alpha) = icons::pop(age);
-                let pop = translate(-mx, -my) * scaling(pop_scale) * translate(mx, my);
-                if let Some((ic, geoms)) = &banner_line {
-                    icon_busy = age < icons::DUR;
-                    let size = LINE_ICON * s;
-                    let view = scaling(size / ic.vb) * translate(mx - size / 2.0, my - size / 2.0);
-                    let groups = icons::motion(ic.anim, age);
-                    for (part, geo) in ic.parts.iter().zip(geoms) {
-                        let g = groups.get(part.g as usize).copied().unwrap_or(icons::Motion::STILL);
-                        let (ox, oy) = ic.origins.get(part.g as usize).copied().unwrap_or((0.0, 0.0));
-                        let local = translate(-ox, -oy) * rotation(g.rot) * scaling(g.scale) * translate(ox + g.dx, oy + g.dy);
-                        let alpha = a * pop_alpha * g.alpha * groups.get(part.a as usize).map_or(1.0, |m| m.alpha);
-                        rt.SetTransform(&(local * view * pop * base));
-                        rt.DrawGeometry(geo, &self.brush(grey(1.0, alpha))?, ic.sw, &self.round);
-                    }
-                    rt.SetTransform(&base);
-                } else if icon == ICON_DROP {
-                    icon_busy = age < icons::DUR;
-                    let hop = icons::drop_motion(age).dy * (LINE_ICON * s / 24.0);
-                    rt.SetTransform(&(pop * translate(0.0, hop) * base));
-                    let g = self.water_drop(mx, my, 24.0 * s)?;
-                    rt.FillGeometry(&g, &self.brush(color(BLUE.0, BLUE.1, BLUE.2, a * pop_alpha))?, None);
-                    rt.SetTransform(&base);
-                } else {
-                    micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
-                }
-                let tl = ix + d + 12.0 * s;
-                let mut tr = r - 22.0 * s;
-                match kind {
-                    // A status banner (the icon says what it is) is just its lines, centred on the icon.
-                    BannerKind::Status => {
-                        // A badge (a Bluetooth device's battery) stands large at the right end; text stops before it.
-                        if let Some(b) = &t.badge {
-                            text(b, F_BADGE, rect(tr - 80.0 * s, 0.0, tr, nh + 4.0 * s), trail, grey(1.0, a))?;
-                            tr -= 86.0 * s;
-                        }
-                        let mid = nh / 2.0;
-                        let (title_top, body_top, bar_y) = if t.level.is_some() {
-                            (mid - 15.0 * s, 0.0, mid + 9.0 * s)
-                        } else if t.body.is_empty() {
-                            (mid - 9.0 * s, 0.0, 0.0)
-                        } else {
-                            (mid - 17.0 * s, mid + 1.0 * s, 0.0)
-                        };
-                        text(&t.title, F_TITLE, rect(tl, title_top, tr, title_top + 18.0 * s), lead, grey(1.0, a))?;
-                        match t.level {
-                            Some(level) => {
-                                let th = 5.0 * s;
-                                let bar = |right: f32| rounded(rect(tl, bar_y - th / 2.0, right, bar_y + th / 2.0), th / 2.0);
-                                rt.FillRoundedRectangle(&bar(tr), &self.brush(grey(0.25, a))?);
-                                rt.FillRoundedRectangle(&bar(tl + (tr - tl) * level.clamp(0.0, 1.0)), &self.brush(grey(1.0, a))?);
-                            }
-                            // One line under the title.
-                            None => text(&t.body, F_BODY, rect(tl, body_top, tr, body_top + 16.0 * s), lead, grey(0.75, a))?,
-                        }
-                    }
-                    // A notification names its app above the title and wraps its text over the banner's height.
-                    BannerKind::Notification => {
-                        if t.image.is_some() {
-                            // The picture sits at the right edge, centred on the banner; text ends before it.
-                            let (bw, bh) = (BANNER_IMAGE_W * s, BANNER_IMAGE_H * s);
-                            let (bx, by) = (r - 18.0 * s - bw, nh / 2.0 - bh / 2.0 + 2.0 * s);
-                            tr = bx - BANNER_IMAGE_GAP * s;
-                            match &banner_image {
-                                Some(img) => {
-                                    let size = img.GetSize();
-                                    let k = (bw / size.width).min(bh / size.height);
-                                    let (w, h) = (size.width * k, size.height * k);
-                                    let (x, y) = (bx + (bw - w) / 2.0, by + (bh - h) / 2.0);
-                                    let brush = rt.CreateBitmapBrush(img, None, None)?;
-                                    brush.SetTransform(&(scaling(k) * translate(x, y)));
-                                    brush.SetOpacity(a);
-                                    rt.FillRoundedRectangle(&rounded(rect(x, y, x + w, y + h), 5.0 * s), &brush);
-                                }
-                                // Still loading (or gone): a quiet placeholder of the same size.
-                                None => rt.FillRoundedRectangle(&rounded(rect(bx, by, bx + bw, by + bh), 5.0 * s), &self.brush(grey(0.2, a))?),
-                            }
-                        }
-                        if let Some(b) = &t.badge {
-                            text(b, F_BADGE, rect(tr - 80.0 * s, 0.0, tr, nh + 4.0 * s), trail, grey(1.0, a))?;
-                            tr -= 86.0 * s;
-                        }
-                        // A notification a click opens gets an x to close it early. Status
-                        // banners have none: resting on them opens the panel within a moment.
-                        if t.image.is_some() || t.open.is_some() {
-                            let b = banner_close(cx, s, v.size[0], self.style == notch::Style::Pill);
-                            let (x, y, k) = ((b.left + b.right) / 2.0, (b.top + b.bottom) / 2.0, 4.0 * s);
-                            if self.close_hot {
-                                rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: 10.0 * s, radiusY: 10.0 * s }, &self.brush(grey(0.22, a))?);
-                            }
-                            let ink = self.brush(grey(if self.close_hot { 0.95 } else { 0.55 }, a))?;
-                            rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
-                            rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
-                        }
-                        text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
-                        text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
-                        // Wraps over the banner's height (sized to its lines, at most `BANNER_MAX_LINES`);
-                        // what still does not fit ends with "…".
-                        let top = notch::BANNER_TEXT_TOP * s;
-                        let bottom = (nh - 7.0 * s).max(top + notch::BANNER_LINE_H * s);
-                        text(&t.body, F_BODY_WRAP, rect(tl, top, tr, bottom), lead, grey(0.75, a))?;
-                    }
-                    // An approval waits `approve::BANNER`: a bright bar along the very bottom edge runs
-                    // down meanwhile, and when it is gone the question goes back to its app.
-                    BannerKind::Approval => {
-                        let left = (1.0 - age / approve::BANNER.as_secs_f32()).clamp(0.0, 1.0);
-                        icon_busy |= left > 0.0;
-                        if left > 0.0 {
-                            // Green, then yellow and red as the time runs out.
-                            let mix = |p: (f32, f32, f32), q: (f32, f32, f32), k: f32| (p.0 + (q.0 - p.0) * k, p.1 + (q.1 - p.1) * k, p.2 + (q.2 - p.2) * k);
-                            let c = if left > 0.45 { GREEN } else if left > 0.25 { mix(YELLOW, GREEN, (left - 0.25) / 0.2) } else { mix((1.0, 0.3, 0.25), YELLOW, (left / 0.25).min(1.0)) };
-                            // The bar is as wide as the banner and cut to its outline, so its ends curve up with the corners.
-                            let top = nh - COUNTDOWN_H * s;
-                            let params = D2D1_LAYER_PARAMETERS { contentBounds: rect(l, top, r, nh), geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
-                                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: 1.0,
-                                opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
-                            rt.PushLayer(&params, None);
-                            rt.FillRectangle(&rect(l, top, l + (r - l) * left, nh), &self.brush(color(c.0, c.1, c.2, a))?);
-                            rt.PopLayer();
-                            drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
-                        }
-                        for (k, (b, label)) in approve_buttons(cx, s, v.size[0], v.size[1], &t.choices).into_iter().zip(&t.choices).enumerate() {
-                            // The first answer is the filled one, the others are outlined.
-                            let ink = if k == 0 { color(0.02, 0.13, 0.04, a) } else { grey(1.0, a) };
-                            let r = (b.bottom - b.top) / 2.0;
-                            if k == 0 {
-                                rt.FillRoundedRectangle(&rounded(b, r), &self.brush(color(GREEN.0, GREEN.1, GREEN.2, a))?);
-                            } else {
-                                let edge = 0.5 * s;
-                                rt.DrawRoundedRectangle(&rounded(rect(b.left + edge, b.top + edge, b.right - edge, b.bottom - edge), r - edge), &self.brush(grey(0.28, a))?, 1.0 * s, None);
-                            }
-                            // The font sits a little low in its line box: lift the label by a pixel to the pill's middle.
-                            text(label, F_LABEL, rect(b.left, b.top - 1.0 * s, b.right, b.bottom - 1.0 * s), center, ink)?;
-                        }
-                        text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
-                        text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
-                        // A question wraps over up to 3 lines, the buttons below.
-                        text(&t.body, F_BODY_WRAP, rect(tl, notch::BANNER_TEXT_TOP * s, tr, (nh - 40.0 * s).max(notch::BANNER_TEXT_TOP * s + notch::BANNER_LINE_H * s)), lead, grey(0.75, a))?;
-                    }
-                }
+                icon_busy = self.draw_banner(&ctx, t, &banner_line, &banner_image)?;
             }
 
             let a = fade(110.0, 50.0);
             if a > 0.0 && panel_ok {
-                let (hl, hr) = (l + PAD * s, r - PAD * s);
-                // Header: the page's name on the left (it morphs with the page), the date and the time
-                // in the middle, the battery ring and its percentage on the right.
-                let (ht, hb) = (6.0 * s, 28.0 * s);
-                let draw_title = |page: Page, dx: f32, ta: f32| -> Result<()> {
-                    if ta <= 0.01 {
-                        return Ok(());
-                    }
-                    text(page.name(), F_HEAD, rect(hl + dx, ht, hl + dx + 170.0 * s, hb), lead, grey(1.0, a * ta))
-                };
-                match v.leaving {
-                    Some((from, t, dir)) => {
-                        let d = dir as f32 * 24.0 * s;
-                        let (out_a, in_a) = page_fades(t);
-                        draw_title(from, -d * t.min(1.0), out_a)?;
-                        draw_title(v.page, d * (1.0 - ease_out(t)), in_a)?;
-                    }
-                    None => draw_title(v.page, 0.0, 1.0)?,
-                }
-                // The same battery ring as the pill's, then its percentage.
-                if let Some(b) = &v.battery {
-                    let pct = format!("{}%", b.percent);
-                    let tx = hr - width(&pct, F_LABEL);
-                    text(&pct, F_LABEL, rect(tx, ht, hr, hb), trail, grey(0.85, a))?;
-                    let d = 20.0 * s;
-                    self.draw_battery_ring((tx - 3.0 * s - d / 2.0, (ht + hb) / 2.0), d, b, a)?;
-                }
-                // Date and time in the middle, the time bolder.
-                {
-                    let (date, time) = (v.date, v.time);
-                    let (dw, tw) = (width(date, F_CLOCK), width(time, F_CLOCK_BOLD));
-                    let gap = 9.0 * s;
-                    let x = cx - (dw + gap + tw) / 2.0;
-                    text(date, F_CLOCK, rect(x, ht, x + dw + 2.0 * s, hb), lead, grey(0.75, a))?;
-                    text(time, F_CLOCK_BOLD, rect(x + dw + gap, ht, x + dw + gap + tw + 2.0 * s, hb), lead, grey(1.0, a))?;
-                }
-                // Page content sits between the side arrows.
-                let (cl, cr) = (l + SIDE * s, r - SIDE * s);
-                let lv = &v.list;
-                let rows_of = |page: Page| match page {
-                    Page::Todo => v.todos.len(),
-                    Page::Notify => v.notes.len(),
-                    Page::Weather => usize::from(v.weather.now.is_some()),
-                    _ => 0,
-                };
-                let minutes = todo::minutes;
-                let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
-
-                // One page, shifted by `dx` and faded by `pa` (the page switch morph).
-                let draw_page = |page: Page, dx: f32, pa: f32| -> Result<()> {
-                    let a = a * pa;
-                    if a <= 0.01 {
-                        return Ok(());
-                    }
-                    let current = page == v.page;
-                    let scroll = if current { lv.scroll } else { 0 };
-                    let settings = if current { v.health.settings } else { None };
-                    let hovered = if current { v.hovered } else { None };
-                    let btns = page_buttons(cx, s, page, rows_of(page), scroll, settings, v.lyrics);
-                    let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
-                    // A soft disc behind an icon-only button under the mouse: the colour change alone
-                    // does not say "this can be clicked".
-                    let hover_disc = |b: Button| -> Result<()> {
-                        if let (true, Some(r)) = (hovered == Some(b), rect_of(b)) {
-                            let point = Vector2 { X: (r.left + r.right) / 2.0, Y: (r.top + r.bottom) / 2.0 };
-                            rt.FillEllipse(&D2D1_ELLIPSE { point, radiusX: 11.0 * s, radiusY: 11.0 * s }, &self.brush(grey(0.18, a))?);
-                        }
-                        Ok(())
-                    };
-                    rt.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: dx, M32: gy });
-
-                    // Add / edit box shared by the list pages.
-                    let draw_input = |placeholder: &str| -> Result<()> {
-                        let Some(ib) = rect_of(Button::ListInput) else { return Ok(()) };
-                        let editing = current && lv.editing;
-                        let edit_row = if current { lv.edit_item } else { None };
-                        let focus = editing || hovered == Some(Button::ListInput);
-                        rt.FillRoundedRectangle(&rounded(ib, 13.0 * s), &self.brush(grey(if focus { 0.16 } else { 0.12 }, a))?);
-                        if editing || edit_row.is_some() {
-                            let inner = rect(ib.left + 0.5, ib.top + 0.5, ib.right - 0.5, ib.bottom - 0.5);
-                            let c = if edit_row.is_some() { solid(YELLOW, a * 0.8) } else { grey(1.0, a * 0.35) };
-                            rt.DrawRoundedRectangle(&rounded(inner, 13.0 * s), &self.brush(c)?, 1.0 * s, None);
-                        }
-                        let tag_w = if edit_row.is_some() { 58.0 * s } else { 0.0 };
-                        if edit_row.is_some() {
-                            text(tr("Đang sửa", "Editing"), F_LABEL, rect(ib.right - tag_w - 8.0 * s, ib.top, ib.right - 10.0 * s, ib.bottom), trail, solid(YELLOW, a))?;
-                        }
-                        let icon_box = rect(ib.left + 8.0 * s, ib.top, ib.left + 26.0 * s, ib.bottom);
-                        text(ICON_ADD, F_SMALL_ICON, icon_box, center, grey(0.6, a))?;
-                        let draft = if current { lv.draft } else { "" };
-                        // The x that wipes the text, while there is some (the "Editing" tag has the room otherwise).
-                        let clear = !draft.is_empty() && edit_row.is_none();
-                        if clear {
-                            if let Some(cb) = rect_of(Button::ListClear) {
-                                hover_disc(Button::ListClear)?;
-                                text(ICON_CLOSE, F_SMALL_ICON, cb, center, if hovered == Some(Button::ListClear) { grey(1.0, a) } else { grey(0.55, a) })?;
-                            }
-                        }
-                        let tb = rect(icon_box.right + 4.0 * s, ib.top, ib.right - if clear { 26.0 } else { 12.0 } * s - tag_w, ib.bottom);
-                        if draft.is_empty() && !editing {
-                            text(placeholder, F_BODY, tb, lead, grey(0.55, a))?;
-                        } else {
-                            // Long drafts keep their end in view.
-                            let tw = width(draft, F_BODY);
-                            let room = tb.right - tb.left - 4.0 * s;
-                            text(draft, F_BODY, tb, if tw > room { trail } else { lead }, grey(1.0, a))?;
-                            if editing && lv.caret {
-                                let x = if tw > room { tb.right - 2.0 * s } else { tb.left + tw + 1.0 * s };
-                                let my = (ib.top + ib.bottom) / 2.0;
-                                rt.FillRectangle(&rect(x, my - 7.0 * s, x + 1.5 * s, my + 7.0 * s), &self.brush(grey(1.0, a))?);
-                            }
-                        }
-                        Ok(())
-                    };
-                    // Edit / delete on every list row, so they are there without a pointer to hover
-                    // with (touch, pen); lit while the row is hovered or being edited.
-                    let row_tools = |i: usize, lit: bool| -> Result<()> {
-                        let rest = if lit { 0.65 } else { 0.4 };
-                        let edit_hot = hovered == Some(Button::ListEdit(i)) || (current && lv.edit_item == Some(i));
-                        if let Some(eb) = btns.iter().filter(|(b, _)| *b == Button::ListEdit(i)).map(|(_, r)| *r).last() {
-                            hover_disc(Button::ListEdit(i))?;
-                            text(ICON_EDIT, F_SMALL_ICON, eb, center, if edit_hot { solid(YELLOW, a) } else { grey(rest, a) })?;
-                        }
-                        if let Some(db) = rect_of(Button::ListDelete(i)) {
-                            let c = if hovered == Some(Button::ListDelete(i)) { color(1.0, 0.45, 0.4, a) } else { grey(rest, a) };
-                            hover_disc(Button::ListDelete(i))?;
-                            text(ICON_CLOSE, F_SMALL_ICON, db, center, c)?;
-                        }
-                        Ok(())
-                    };
-                    let row_hovered = |i: usize| {
-                        matches!(hovered, Some(Button::ListToggle(j)) | Some(Button::ListEdit(j)) | Some(Button::ListDelete(j)) if j == i)
-                            || (current && lv.edit_item == Some(i))
-                    };
-                    // Scroll position of `n` rows shown `rows` at a time from `y0`, `row_h` apart.
-                    let scrollbar = |n: usize, rows: usize, y0: f32, row_h: f32| -> Result<()> {
-                        if n > rows {
-                            let (top, bottom) = (y0 * s, (y0 + row_h * rows as f32) * s);
-                            let x = cr + 6.0 * s;
-                            rt.FillRoundedRectangle(&rounded(rect(x, top, x + 3.0 * s, bottom), 1.5 * s), &self.brush(grey(0.2, a))?);
-                            let len = (bottom - top) * rows as f32 / n as f32;
-                            let start = top + (bottom - top - len) * scroll as f32 / (n - rows) as f32;
-                            rt.FillRoundedRectangle(&rounded(rect(x, start, x + 3.0 * s, start + len), 1.5 * s), &self.brush(grey(0.6, a))?);
-                        }
-                        Ok(())
-                    };
-                    // Time label coloured by how close it is: orange within the early reminder, red when past.
-                    let time_color = |due: u64, quiet: bool| {
-                        let left = minutes(due) - minutes(lv.now);
-                        if quiet { grey(0.4, a) } else if left <= 0 { color(1.0, 0.35, 0.3, a) }
-                        else if left <= lv.remind_before.max(15) as i64 { color(1.0, 0.62, 0.2, a) } else { grey(0.6, a) }
-                    };
-
-                    match page {
-                        Page::Music => self.draw_music(&text, &micon, &draw_cover, &draw_wx_icon, &player_icons, &fonts, &lyric_heights, &lyric_tops, v, l, tint, level, cl, s, a, hovered)?,
-                        Page::Todo => self.draw_todo(&text, &width, &micon, &draw_input, &hover_disc, &row_tools, &row_hovered, &scrollbar, &time_color, &btns, v, lv, current, settings, (cl, cr), s, a, hovered)?,
-                        Page::Notify => self.draw_notify(&text, &scrollbar, &btns, v, lv, current, &note_icons, (cl, cr), s, a, hovered)?,
-                        Page::Usage => self.draw_usage(&text, &width, &btns, (cl, cr), s, a, hovered)?,
-                        Page::Weather => self.draw_weather(&text, &width, &draw_wx_icon, &draw_input, &hover_disc, &btns, v, lv, current, &weather_line, &weather_empty, &hour_lines, (cl, cr), s, a, hovered)?,
-                        Page::Focus => self.draw_focus(&text, &micon, &draw_wx_icon, &focus_icons, &btns, v.focus, v.health.minute_of_day, (cl, cr), s, a, hovered)?,
-                        Page::Health => self.draw_health(&text, &micon, &hover_disc, &btns, &width, &v.health, settings, (cl, cr), s, a, hovered)?,
-                    }
-                    rt.SetTransform(&Matrix3x2::translation(0.0, gy));
-                    Ok(())
-                };
-
-                // Pages slide inside the space between the arrows.
+                self.draw_header(&ctx, a)?;
+                self.draw_pages(&ctx, &prep, a)?;
                 let ph = panel_size(v.page)[1];
-                let clip_r = if v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 { LYRIC_CLIP } else { PAGE_CLIP };
-                rt.PushAxisAlignedClip(&rect(l + PAGE_CLIP * s, 30.0 * s, r - clip_r * s, (dots_y(ph) - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
-                match v.leaving {
-                    Some((from, t, dir)) => {
-                        let span = (cr - cl) * 0.55;
-                        let d = dir as f32;
-                        let (out_a, in_a) = page_fades(t);
-                        draw_page(from, -d * span * t.min(1.0), out_a)?;
-                        draw_page(v.page, d * span * (1.0 - ease_out(t)), in_a)?;
-                    }
-                    None => draw_page(v.page, 0.0, 1.0)?,
-                }
-                rt.PopAxisAlignedClip();
-
-                // Side arrows and page dots.
-                // They sit on the panel's own edges, so they follow it while it widens or narrows.
-                let nav = [
-                    (Button::PagePrev, rect(l + 10.0 * s, arrow_y(ph) * s, l + (10.0 + ARROW) * s, (arrow_y(ph) + ARROW) * s)),
-                    (Button::PageNext, rect(r - (10.0 + ARROW) * s, arrow_y(ph) * s, r - 10.0 * s, (arrow_y(ph) + ARROW) * s)),
-                ];
-                // While the lyrics are open the arrows are hidden (they fade as the panel widens), so the
-                // way back is the lyrics button: shrinking the panel never leaves the mouse outside it.
-                let arrow_a = a * (1.0 - ((v.size[0] - notch::target(Mode::Expanded, false)[0]) / notch::LYRICS_EXTRA_W).clamp(0.0, 1.0));
-                for (b, icon) in [(Button::PagePrev, ICON_LEFT), (Button::PageNext, ICON_RIGHT)] {
-                    if arrow_a < 0.01 {
-                        break;
-                    }
-                    let a = arrow_a;
-                    if let Some((_, br)) = nav.iter().find(|(x, _)| *x == b) {
-                        let hot = v.hovered == Some(b);
-                        let circle = D2D1_ELLIPSE {
-                            point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 },
-                            radiusX: (br.right - br.left) / 2.0,
-                            radiusY: (br.bottom - br.top) / 2.0,
-                        };
-                        rt.FillEllipse(&circle, &self.brush(grey(if hot { 0.26 } else { 0.15 }, a))?);
-                        text(icon, F_SMALL_ICON, *br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
-                    }
-                }
-                // The page dots: the long one is the page on show. On a page change the old one shrinks
-                // while the new one grows (the weights below), so the pill seems to travel and stretch.
-                let (dot, wide, gap) = (6.0 * s, 18.0 * s, 6.0 * s);
-                let kept = PAGES.iter().filter(|p| page_shown(**p)).count();
-                let total = wide + (kept as f32 - 1.0) * (dot + gap);
-                let mut dx = cx - total / 2.0;
-                let arriving = v.leaving.map_or(1.0, |(_, t, _)| ease_out(t));
-                // The row of page icons comes as the panel grows by NAV_EXTRA, the dots give way to it. The icons only show
-                // once they are inside the panel (they reach 10 px under its resting height, so none show before the panel is
-                // 4 px past it, all of them 12 px past it), so they fade out before the shrinking edge gets to them instead of
-                // poking out of it.
-                let nav_fade = ((nh - ph * s - 4.0 * s) / (8.0 * s)).clamp(0.0, 1.0);
-                for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
-                    let weight = match v.leaving {
-                        _ if p == v.page => arriving,
-                        Some((from, _, _)) if p == from => 1.0 - arriving,
-                        _ => 0.0,
-                    };
-                    let dw = dot + (wide - dot) * weight;
-                    let shade = 0.38 + 0.62 * weight;
-                    rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(grey(shade, a * (1.0 - nav_fade)))?);
-                    dx += dw + gap;
-                }
-                if nav_fade > 0.01 {
-                    for (p, cell) in nav_cells(cx, s, ph) {
-                        let (on, hot) = (p == v.page, v.hovered == Some(Button::GoPage(p)));
-                        if on || hot {
-                            rt.FillRoundedRectangle(&rounded(cell, 8.0 * s), &self.brush(grey(if on { 0.17 } else { 0.1 }, a * nav_fade))?);
-                        }
-                        let ink = grey(if on || hot { 1.0 } else { 0.6 }, a * nav_fade);
-                        match (&weather_empty, p) {
-                            (Some((ic, geoms)), Page::Weather) => {
-                                let (mx, my) = ((cell.left + cell.right) / 2.0, (cell.top + cell.bottom) / 2.0);
-                                let tint = if on || hot { (1.0, 1.0, 1.0) } else { (0.6, 0.6, 0.6) };
-                                draw_wx_icon(ic, geoms, mx - 8.0 * s, my - 8.0 * s, 16.0 * s, Some((tint, tint)), a * nav_fade, 9.0)?;
-                            }
-                            _ => text(nav_icon(p), F_ICON, cell, center, ink)?,
-                        }
-                    }
-                }
-                // The Weather page's source (Open-Meteo asks for the credit, CC BY 4.0) and when it was
-                // fetched, "old" when stale: quiet in the bottom-right corner, level with the dots, clear
-                // of the page's own content.
-                if let (Page::Weather, None, Some(_), Some(u)) = (v.page, v.leaving, v.weather.now, v.weather.updated) {
-                    let stale = v.weather.is_stale(v.list.now);
-                    let when = format!("{}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100);
-                    let ink = if stale { solid(ORANGE, a) } else { grey(0.4, a) };
-                    text(&format!("Open-Meteo · {when}"), F_LABEL, rect(cx + 36.0 * s, (dots_y(ph) - 8.0) * s, r - 32.0 * s, (dots_y(ph) + 7.0) * s), trail, ink)?;
-                }
+                self.draw_nav(&ctx, &weather_empty, a, ph)?;
             }
             if let Err(e) = rt.EndDraw(None, None) {
                 if e.code() != D2DERR_RECREATE_TARGET {
