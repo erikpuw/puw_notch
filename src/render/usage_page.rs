@@ -134,7 +134,8 @@ impl Renderer {
                 // A reading the app made a while ago says so: what it shows now may be further on.
                 let stale = self.usage.updated(APPS[tab]).filter(|&at| now - at > APPS[tab].stale_after());
                 for (n, bar) in bars.iter().enumerate() {
-                    let y = (if bars.len() == 1 { 84.0 } else { 70.0 + n as f32 * 52.0 }) * s;
+                    // Two rows leave the 20 px under the second bar free for the note about an old reading (46 apart, not 52).
+                    let y = (if bars.len() == 1 { 84.0 } else { 64.0 + n as f32 * 46.0 }) * s;
                     let (_, window) = split_label(&bar.label);
                     let tone = if n == 0 { ring_colour(bar.used) } else { k };
                     text(window, F_BIG, rect(x0, y - 4.0 * s, cr, y + 30.0 * s), lead, grey(1.0, a))?;
