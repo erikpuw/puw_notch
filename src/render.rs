@@ -251,9 +251,11 @@ const ICON_MORPH_S: f32 = 0.25;
 const COVER: f32 = 120.0;
 const COVER_TOP: f32 = 40.0;
 const COVER_GAP: f32 = 16.0;
-const PLAY_BTN: f32 = 38.0;
-const SKIP_BTN: f32 = 32.0;
+const PLAY_BTN: f32 = 36.0;
+const SKIP_BTN: f32 = 28.0;
 const LYRICS_BTN: f32 = 28.0;
+/// Distance of the skip buttons' centres from the play button's.
+const SKIP_GAP: f32 = 44.0;
 const CONTROLS_Y: f32 = 148.0;
 const BAR_Y: f32 = 108.0;
 /// Page content sits between the side arrows (logical px from the panel edge).
@@ -404,9 +406,9 @@ fn buttons_from(left: f32, scale: f32) -> [(Button, D2D_RECT_F); 5] {
     let round = |x: f32, size: f32| rect((left + x - size / 2.0) * scale, (CONTROLS_Y - size / 2.0) * scale, (left + x + size / 2.0) * scale, (CONTROLS_Y + size / 2.0) * scale);
     let seek = rect((left + x0) * scale, (BAR_Y - 8.0) * scale, (left + x1) * scale, (BAR_Y + 8.0) * scale);
     [
-        (Button::Previous, round(mid - 58.0, SKIP_BTN)),
+        (Button::Previous, round(mid - SKIP_GAP, SKIP_BTN)),
         (Button::PlayPause, round(mid, PLAY_BTN)),
-        (Button::Next, round(mid + 58.0, SKIP_BTN)),
+        (Button::Next, round(mid + SKIP_GAP, SKIP_BTN)),
         (Button::Seek, seek),
         (Button::Lyrics, round(x1 - LYRICS_BTN / 2.0, LYRICS_BTN)),
     ]
@@ -624,6 +626,8 @@ const F_FIGURE: usize = 15;
 const F_MARK: usize = 16;
 /// The temperature on the Weather page.
 const F_TEMP: usize = 17;
+/// The song's title on the Music page: large and bold, it is what the page is about.
+const F_SONG: usize = 18;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
 /// of the thin divider after the player's controls, its right margin and its width. The right
 /// margin equals the gap at the divider; the pages' clip gives way on that side while the lyrics
@@ -1256,6 +1260,7 @@ impl Renderer {
                 make(display, 30.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(w!("Segoe Fluent Icons"), 96.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 make(display, 40.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(display, 21.0, DWRITE_FONT_WEIGHT_BOLD)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -2325,8 +2330,8 @@ impl Renderer {
                             match v.music {
                                 Some(t) => {
                                     let title = if t.title.is_empty() { tr("Đang phát", "Playing") } else { &t.title };
-                                    text(title, F_TITLE, rect(tl, top, cr, top + 22.0 * s), lead, grey(1.0, a))?;
-                                    text(&t.artist, F_BODY, rect(tl, top + 22.0 * s, cr, top + 40.0 * s), lead, soft_text(tint, level, 0.65, a))?;
+                                    text(title, F_SONG, rect(tl, top - 2.0 * s, cr, top + 28.0 * s), lead, grey(1.0, a))?;
+                                    text(&t.artist, F_BODY, rect(tl, top + 25.0 * s, cr, top + 42.0 * s), lead, soft_text(tint, level, 0.65, a))?;
                                     // The line being sung, unless the lyrics panel beside already shows it.
                                     let lyric = t.lyric_now().filter(|_| !v.lyrics).unwrap_or_else(|| hovered.map_or(
                                         if t.duration_ms == 0 { tr("Trình phát chưa cung cấp thời gian", "The player gives no timeline") }
@@ -2343,7 +2348,7 @@ impl Renderer {
                             let times = soft_text(tint, level, 0.6, a);
                             text(&if dur > 0 { clock(pos) } else { "--:--".into() }, F_LABEL, rect(bl, by + 4.0 * s, bl + 60.0 * s, by + 20.0 * s), lead, times)?;
                             text(&if dur > 0 { format!("-{}", clock(dur.saturating_sub(pos))) } else { "--:--".into() }, F_LABEL, rect(brr - 60.0 * s, by + 4.0 * s, brr, by + 20.0 * s), trail, times)?;
-                            let th = 4.0 * s;
+                            let th = 6.0 * s;
                             let bar = |right: f32| rounded(rect(bl, by - th / 2.0, right, by + th / 2.0), th / 2.0);
                             rt.FillRoundedRectangle(&bar(brr), &self.brush({ let g = 0.25 + 0.75 * level; color(g, g, g, a * (1.0 - 0.7 * level)) })?);
                             if dur > 0 {
@@ -2357,11 +2362,16 @@ impl Renderer {
                             let playing = v.music.is_some_and(|t| t.playing);
                             for (b, br) in buttons_from(l / s, s) {
                                 let on = b.enabled(v.music);
+                                // The skip and lyrics buttons sit on a soft disc, a little brighter under the mouse.
+                                if matches!(b, Button::Previous | Button::Next | Button::Lyrics) {
+                                    let disc = D2D1_ELLIPSE { point: Vector2 { X: (br.left + br.right) / 2.0, Y: (br.top + br.bottom) / 2.0 }, radiusX: (br.right - br.left) / 2.0, radiusY: (br.bottom - br.top) / 2.0 };
+                                    rt.FillEllipse(&disc, &self.brush(grey(1.0, a * if !on { 0.04 } else if hovered == Some(b) { 0.2 } else { 0.1 }))?);
+                                }
                                 if b == Button::Lyrics {
                                     // A speech bubble with two lines; filled while the lyrics are open.
                                     let (bx, by) = ((br.left + br.right) / 2.0, (br.top + br.bottom) / 2.0);
                                     let bubble = rect(bx - 9.0 * s, by - 7.0 * s, bx + 9.0 * s, by + 7.0 * s);
-                                    let ink = if !on { grey(0.3, a) } else if v.lyrics { grey(0.05, a) } else if hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
+                                    let ink = if !on { grey(0.3, a) } else if v.lyrics { grey(0.05, a) } else { grey(1.0, a) };
                                     if on && v.lyrics {
                                         rt.FillRoundedRectangle(&rounded(bubble, 4.0 * s), &self.brush(grey(1.0, a))?);
                                     } else {
@@ -2391,8 +2401,7 @@ impl Renderer {
                                     micon("play", icon, F_ICON, rect(br.left + nudge, br.top, br.right + nudge, br.bottom), if on { grey(0.05, a) } else { grey(0.5, a) })?;
                                     continue;
                                 }
-                                let c = if !on { grey(0.3, a) }
-                                    else if hovered == Some(b) { color(0.25, 0.85, 0.5, a) } else { grey(1.0, a) };
+                                let c = if !on { grey(0.3, a) } else { grey(1.0, a) };
                                 micon(if b == Button::Previous { "prev" } else { "next" }, icon, F_ICON, br, c)?;
                             }
                             // Lyrics beside the player, fading in as the panel widens: the line being
