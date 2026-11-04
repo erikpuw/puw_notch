@@ -1034,6 +1034,9 @@ unsafe fn bgra_pixels(wic: &IWICImagingFactory, src: &IWICBitmapSource) -> Optio
 }
 
 pub struct Renderer {
+    /// A banner was the last thing shown and no panel has opened since: the pill shrinking back is not an open panel,
+    /// so no page (and no glow) is drawn on the way down, however tall the banner was.
+    after_alert: bool,
     factory: ID2D1Factory,
     d3d: ID3D11Device,
     /// The Direct2D context on `d3d`: binds the swap chain's buffer as the target.
@@ -1187,6 +1190,7 @@ impl Renderer {
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
+                after_alert: false,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
         }
@@ -1910,6 +1914,12 @@ impl Renderer {
         let note_icons: Vec<Option<ID2D1Bitmap>> = if page.is_some() { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
         let banner_image: Option<ID2D1Bitmap> = v.banner.filter(|_| v.mode == Mode::Alert).and_then(|b| b.image.as_deref()).and_then(|p| self.app_icon(&format!("img:{p}")));
+        if v.mode == Mode::Alert {
+            self.after_alert = true;
+        } else if v.mode == Mode::Expanded {
+            self.after_alert = false;
+        }
+        let panel_ok = v.mode != Mode::Alert && !self.after_alert;
         let rt = &self.rt;
         let s = scale;
         let [nw, nh, nr] = v.size.map(|d| d * s);
@@ -2039,7 +2049,7 @@ impl Renderer {
                 Some((Page::Music, t, _)) => page_fades(t).0,
                 _ => 1.0,
             };
-            if level > 0.0 && open > 0.0 && v.mode != Mode::Alert {
+            if level > 0.0 && open > 0.0 && panel_ok {
                 let (gr, gg, gb) = dim_to_lum(tint, GLOW_MAX_LUM);
                 let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level * gate) };
                 let stops = rt.CreateGradientStopCollection(&[stop(0.58, 0.0), stop(0.68, 0.08), stop(0.82, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
@@ -2048,7 +2058,7 @@ impl Renderer {
             }
             // Aurora over the glow: a thin glowing line in the cover's two colours, swaying slowly.
             let aurora_a = open * level * gate;
-            if aurora_a > 0.01 && v.mode != Mode::Alert {
+            if aurora_a > 0.01 && panel_ok {
                 self.draw_aurora(&shape, (l, r, nh), w, s, v.phase, aurora_a, panel_size(v.page)[1] * s);
             }
 
@@ -2292,7 +2302,7 @@ impl Renderer {
             }
 
             let a = fade(110.0, 50.0);
-            if a > 0.0 && v.mode != Mode::Alert {
+            if a > 0.0 && panel_ok {
                 let (hl, hr) = (l + PAD * s, r - PAD * s);
                 // Header: the page's name on the left (it morphs with the page), the date and the time
                 // in the middle, the battery ring and its percentage on the right.
@@ -3246,6 +3256,41 @@ mod tests {
         let segs = focus_segments(392.0);
         assert!(((segs[7].1 - segs[7].0) / (segs[1].1 - segs[1].0) - 3.0).abs() < 0.01);
         assert!((segs[7].1 - 392.0).abs() < 0.01, "the strip fills the width");
+    }
+
+    #[test]
+    fn a_tall_banner_shrinking_back_shows_no_page() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900i32, 300i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Shrink"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            let toast = Toast { app: "Claude".into(), title: "x".into(), body: "y".into(), level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new() };
+            let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
+            macro_rules! view { ($mode:expr, $banner:expr) => { View { mode: $mode, size: [520.0, 139.0, 24.0], time: "20:49", date: "T2, 26/10",
+                battery: Some(Battery { percent: 76, charging: false, saver: false }), banner: $banner, music: None, live: false, robot: None, phase: 0.0,
+                banner_age: 2.0, lyrics: false, hovered: None, page: Page::Health, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C,
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
+            // Bright pixels below the pill's own 40 rows: the page's cards and text would put some there.
+            let lit = |r: &Renderer| r.grabbed.chunks(4).enumerate().filter(|(i, p)| (i / w as usize) >= 40 && p[3] > 0 && (p[0] > 40 || p[1] > 40 || p[2] > 40)).count();
+            for _ in 0..3 {
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(Mode::Alert, Some(&toast))).unwrap();
+            }
+            // The banner ended: the pill is still 139 tall on its way down, as the approval banner's shrink is.
+            for _ in 0..3 {
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(Mode::Collapsed, None)).unwrap();
+            }
+            assert_eq!(lit(&renderer), 0, "the page showed while the banner shrank");
+            // A panel that opens afterwards does show its page.
+            for _ in 0..3 {
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(Mode::Expanded, None)).unwrap();
+            }
+            assert!(lit(&renderer) > 0);
+            DestroyWindow(hwnd).unwrap();
+        }
     }
 
     #[test]
