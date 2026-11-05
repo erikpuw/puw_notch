@@ -2321,6 +2321,43 @@ mod tests {
     }
 
     #[test]
+    fn the_weather_credit_gives_way_to_the_row_of_page_icons() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900i32, 300i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Credit"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let (health, idle_focus) = (Health::default(), Focus::default());
+            let ph = panel_size(Page::Weather)[1];
+            let state = |updated: Option<u64>| weather::State {
+                place: Some(weather::Place { name: "Hà Nội".into(), lat: 21.0, lon: 105.8 }),
+                now: Some(weather::Now { temp: 29.0, feels: 31.0, humidity: 77.0, wind: 6.0, sky: weather::Sky::Clear, day: true }),
+                updated, ..weather::State::default() };
+            macro_rules! view { ($wx:expr, $h:expr) => { View { mode: Mode::Expanded, size: [480.0, $h, 28.0], time: "08:14", date: "T5, 05/11",
+                battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Weather,
+                leaving: None, todos: &[], notes: &[], weather: $wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false,
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
+            let frame = |open: bool, wx: &weather::State| {
+                set_nav_open(open);
+                let mut renderer = Renderer::new().unwrap();
+                renderer.grab = true;
+                for _ in 0..4 {
+                    renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(wx, if open { ph + NAV_EXTRA } else { ph })).unwrap();
+                }
+                renderer.grabbed.clone()
+            };
+            let (with, without) = (state(Some(202611050813)), state(None));
+            // Row open: the credit is not drawn, so the frame is the same with or without a fetch time to credit.
+            assert!(frame(true, &with) == frame(true, &without), "the credit text lies under the page icons");
+            // Row closed: it is drawn (the frames differ).
+            assert!(frame(false, &with) != frame(false, &without), "the credit shows when the row is closed");
+            set_nav_open(false);
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
     fn closed_page_does_not_queue_icons() {
         let mut renderer = Renderer::new().unwrap();
         renderer.prefetch_icon("PuwNotch.ClosedPageTest");

@@ -108,7 +108,9 @@ impl Renderer {
             if let (Page::Weather, None, Some(_), Some(u)) = (v.page, v.leaving, v.weather.now, v.weather.updated) {
                 let stale = v.weather.is_stale(v.list.now);
                 let when = format!("{}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100);
-                let ink = if stale { color(ORANGE.0, ORANGE.1, ORANGE.2, a) } else { grey(0.4, a) };
+                // It sits where the row of page icons opens, so it gives way to it.
+                let ca = a * (1.0 - nav_fade);
+                let ink = if stale { color(ORANGE.0, ORANGE.1, ORANGE.2, ca) } else { grey(0.4, ca) };
                 text(&format!("Open-Meteo · {when}"), F_LABEL, rect(cx + 36.0 * s, (dots_y(ph) - 8.0) * s, r - 32.0 * s, (dots_y(ph) + 7.0) * s), trail, ink)?;
             }
         }
