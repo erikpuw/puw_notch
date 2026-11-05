@@ -1146,6 +1146,9 @@ pub struct Renderer {
     icon_loader: IconLoader,
     /// Icon slots that just changed glyph: (current, previous, when) for the morph.
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
+    /// The Weather page's sun view: whether the sun was up at the last frame, and when it last rose or set while the view stayed
+    /// open (None: not yet, or the view has been closed since). See `sun_swap`.
+    sun_seen: std::cell::Cell<Option<(bool, Option<Instant>)>>,
     /// Round caps and joins for the robot face's strokes.
     round: ID2D1StrokeStyle,
 }
@@ -1248,7 +1251,7 @@ impl Renderer {
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
                 owner: Owner::Pill,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
-                fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), round })
+                fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
         }
     }
 
@@ -1952,6 +1955,10 @@ impl Renderer {
             [&icons::PLAYER_SHUFFLE, &icons::PLAYER_PREV, &icons::PLAYER_NEXT, &icons::PLAYER_REPEAT, &icons::PLAYER_REPEAT_ONE].into_iter()
                 .filter_map(|ic| Some((ic, ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?))).collect()
         } else { Vec::new() };
+        // The sun view's memory of the last frame is only kept while the view is open, so opening it later does not play a sunrise.
+        if !(page == Some(Page::Weather) && v.sun_view) {
+            self.sun_seen.set(None);
+        }
         // The moon of the Weather page's sun path, drawn at night.
         let moon_line = if page == Some(Page::Weather) && v.sun_view {
             let ic = icons::weather(weather::Sky::Clear, false);
@@ -2365,6 +2372,49 @@ mod tests {
             // Row closed: it is drawn (the frames differ).
             assert!(frame(false, &with) != frame(false, &without), "the credit shows when the row is closed");
             set_nav_open(false);
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    fn at_sunset_the_blue_path_is_still_there_when_the_sun_has_just_set_and_gone_for_a_view_opened_at_night() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900i32, 300i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Sunset"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let (health, idle_focus) = (Health::default(), Focus::default());
+            let ph = panel_size(Page::Weather)[1];
+            let wx = weather::State {
+                place: Some(weather::Place { name: "Hà Nội".into(), lat: 21.0, lon: 105.8 }),
+                now: Some(weather::Now { temp: 29.0, feels: 31.0, humidity: 77.0, wind: 6.0, sky: weather::Sky::Clear, day: true }),
+                sun: Some(weather::Sun { rise: 342, set: 1068 }), ..weather::State::default() };
+            macro_rules! view { ($minute:expr) => { View { mode: Mode::Expanded, size: [480.0, ph, 28.0], time: "17:48", date: "T5, 05/11",
+                battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Weather,
+                leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: true,
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: $minute, settings: None } } }; }
+            // How many pixels in the arc's area are blue (the lit path).
+            let blue = |r: &Renderer| r.grabbed.chunks(4).enumerate().filter(|(i, p)| {
+                let (x, y) = (i % w as usize, i / w as usize);
+                (88..140).contains(&y) && (330..620).contains(&x) && p[3] > 0 && p[0] > p[2] / 2 + 60 && p[0] > 120 && p[1] < p[0]
+            }).count();
+            let present = |r: &mut Renderer, minute: u32| { for _ in 0..3 { r.present(hwnd, 0, 0, w, h, 1.0, &view!(minute)).unwrap(); } };
+            // Watched through the sunset: the blue path is still drawn (on its way to grey) in the first frames after it.
+            let mut watched = Renderer::new().unwrap();
+            watched.grab = true;
+            present(&mut watched, 1000);
+            let by_day = blue(&watched);
+            present(&mut watched, 1100);
+            let just_set = blue(&watched);
+            drop(watched);
+            // Opened after dark: the path is grey from the start.
+            let mut late = Renderer::new().unwrap();
+            late.grab = true;
+            present(&mut late, 1100);
+            let at_night = blue(&late);
+            assert!(by_day > 0, "by day the path is lit");
+            assert!(just_set > at_night, "the lit path lingers just after the sunset that was watched: {just_set} vs {at_night}");
             DestroyWindow(hwnd).unwrap();
         }
     }
