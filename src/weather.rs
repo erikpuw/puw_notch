@@ -141,6 +141,15 @@ impl Sun {
         }
     }
 
+    /// How far the moon is on its way at `minute`, 0..1: it rises where the sun set and sets where the sun rises, so the night is
+    /// the day's path walked again, from sunset (0) to the next sunrise (1).
+    pub fn night_progress(self, minute: u32) -> f32 {
+        let (rise, set) = (self.rise as u32, self.set as u32);
+        let night = (1440 + rise).saturating_sub(set).max(1);
+        let since = if minute >= set { minute - set } else { minute + 1440 - set };
+        (since as f32 / night as f32).clamp(0.0, 1.0)
+    }
+
     /// Minutes of daylight left at `minute` (0 once it has set).
     pub fn daylight_left(self, minute: u32) -> u32 {
         (self.set as u32).saturating_sub(minute)
@@ -702,6 +711,11 @@ mod tests {
         assert_eq!(sun.pos(705), SunPos::Day(0.5));
         assert_eq!(sun.pos(1068), SunPos::Dusk);
         assert_eq!((sun.daylight_left(1000), sun.daylight_left(1068), sun.daylight_left(1300)), (68, 0, 0));
+        // The night is 24 h - 12 h 06 = 11 h 54 long (714 min): the moon is at the start at sunset, the end at sunrise.
+        assert_eq!(sun.night_progress(1068), 0.0);
+        assert!((sun.night_progress(1068 + 357) - 0.5).abs() < 1e-6, "half way at the middle of the night (midnight is 372 min in)");
+        assert!((sun.night_progress(341) - (1.0 - 1.0 / 714.0)).abs() < 1e-4, "a minute before sunrise it is nearly at the end");
+        assert!((0..1440).all(|m| (0.0..=1.0).contains(&sun.night_progress(m))));
     }
 
     #[test]

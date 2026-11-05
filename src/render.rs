@@ -3158,6 +3158,10 @@ mod tests {
             let sunny = State { sun: Some(weather::Sun { rise: 342, set: 1068 }), ..partly_30.clone() };
             // The same day when the sun has set (the pictures' clock reads 14:00): sunrise 04:30, sunset 13:15.
             let night = State { sun: Some(weather::Sun { rise: 270, set: 795 }), ..partly_30.clone() };
+            // The moon just after it rose (clock 14:00, sunset 13:15: it sits at the start of the path), and just before it sets
+            // (sunrise 14:30 after a sunset at 23:00: it sits at the end of the path): to see whether either end is cut.
+            let moon_rises = State { sun: Some(weather::Sun { rise: 270, set: 835 }), ..partly_30.clone() };
+            let moon_sets = State { sun: Some(weather::Sun { rise: 845, set: 1380 }), ..partly_30.clone() };
             // The third focus round, 7 min 18 s in.
             let running_focus = Focus::demo(4, std::time::Duration::from_secs(7 * 60 + 18));
             let mut health = Health::default();
@@ -3166,7 +3170,7 @@ mod tests {
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
             let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
             // (file, mode, music, page, lyrics open, weather, battery, time, date)
-            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 16] = [
+            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 18] = [
                 ("page-nav", Mode::Expanded, Some(&playing), Page::Music, false, &none, charging(70), "23:16", "T7, 24/10"),
                 ("pill-idle", Mode::Collapsed, None, Page::Music, false, &none, charging(76), "20:50", ""),
                 ("robot", Mode::Collapsed, None, Page::Music, false, &none, on_battery, "20:50", ""),
@@ -3183,6 +3187,8 @@ mod tests {
                 ("page-weather", Mode::Expanded, None, Page::Weather, false, &partly_30, on_battery, "02:05", "T5, 29/10"),
                 ("page-weather-sun", Mode::Expanded, None, Page::Weather, false, &sunny, on_battery, "02:05", "T5, 29/10"),
                 ("page-weather-night", Mode::Expanded, None, Page::Weather, false, &night, on_battery, "02:05", "T5, 29/10"),
+                ("page-weather-moon-rises", Mode::Expanded, None, Page::Weather, false, &moon_rises, on_battery, "02:05", "T5, 29/10"),
+                ("page-weather-moon-sets", Mode::Expanded, None, Page::Weather, false, &moon_sets, on_battery, "02:05", "T5, 29/10"),
             ];
             let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if english { "target/readme-en" } else { "target/readme" });
             std::fs::create_dir_all(&dir).unwrap();
@@ -3207,7 +3213,7 @@ mod tests {
                 let eyes = |face, gaze: (f32, f32)| Some(Eyes { face, alpha: 1.0, gaze, curious: 0.0, open: 1.0, time: 0.4 });
                 let robot = match name { "robot" => eyes(Face::Normal, (0.5, 0.9)), "robot-happy" => eyes(Face::Happy, (0.0, 0.0)), _ => None };
                 let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: nav.then_some(Button::GoPage(Page::Todo)), page,
-                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
+                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C, sun_view: name.starts_with("page-weather-"),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: if name.ends_with("-focus") { &running_focus } else { &Focus::default() }, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 // A fresh renderer per picture, run for a second and a half: the cover decodes, the

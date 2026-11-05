@@ -4,10 +4,11 @@
 
 use super::*;
 
-/// Logical px from the panel's top: the arc's ends sit on this line, it rises this high above it, and the times are below.
+/// Logical px from the panel's top: the arc's ends sit on this line, it rises this high above it, and the times are below, clear
+/// of the light round the sun or the moon when it stands at an end (a ring reaches 12.5 px).
 /// Text boxes here are 16-20 px tall for 12 px text: Vietnamese marks stand above the letters and are cut by a tighter box.
-const BASELINE_Y: f32 = 128.0;
-const ARC_H: f32 = 36.0;
+const BASELINE_Y: f32 = 122.0;
+const ARC_H: f32 = 32.0;
 /// The sun's warm white and the moon's pale blue.
 const SUN: (f32, f32, f32) = (1.0, 0.82, 0.3);
 const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
@@ -104,7 +105,7 @@ impl Renderer {
             // The two ends, with their times under them.
             for (x, minute) in [(x0, sun.rise as u32), (x1, sun.set as u32)] {
                 rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: yb }, radiusX: 2.5 * s, radiusY: 2.5 * s }, &self.brush(grey(0.45, a))?);
-                text(&health::hhmm(minute), F_LABEL, rect(x - 24.0 * s, yb + 3.0 * s, x + 24.0 * s, yb + 19.0 * s), center, grey(0.55, a))?;
+                text(&health::hhmm(minute), F_LABEL, rect(x - 24.0 * s, yb + 11.0 * s, x + 24.0 * s, yb + 27.0 * s), center, grey(0.55, a))?;
             }
             let mid = (x0 + x1) / 2.0;
             // The lit part of the path up to `upto`, in blue at `alpha`.
@@ -123,15 +124,16 @@ impl Renderer {
                 halo(at, SUN, alpha * a)?;
                 disc(at, SUN, 4.2 * s, alpha * a)
             };
-            // A crescent (the moon's line icon) riding the top of the path, about as big as the sun with its halo, with the same
-            // two rings fading in and out round it (in the moon's own pale blue).
-            let draw_moon = |alpha: f32| -> Result<()> {
+            // A crescent (the moon's line icon) riding the path, about as big as the sun with its halo, with the same two rings
+            // fading in and out round it (in the moon's own pale blue).
+            let draw_moon = |t: f32, alpha: f32| -> Result<()> {
                 if let Some((ic, geoms)) = moon {
-                    let size = 16.0 * s;
-                    // A little under the top of the path, so its light stays clear of the sun button above; the path itself is
-                    // hidden behind the crescent (a black disc, the panel's own colour), so no line runs through its hollow.
-                    let at = (mid, (BASELINE_Y - ARC_H + 5.0) * s);
-                    disc(at, (0.0, 0.0, 0.0), 9.5 * s, alpha * a)?;
+                    // As big as the sun's core (the crescent fills about three quarters of its box).
+                    let size = 12.0 * s;
+                    // On the path at `t`, as the sun is by day: the path itself is hidden behind the crescent (a black disc, the
+                    // panel's own colour), so no line runs through its hollow.
+                    let at = pt(t);
+                    disc(at, (0.0, 0.0, 0.0), 6.5 * s, alpha * a)?;
                     halo(at, MOON, alpha * a * 0.8)?;
                     wx_icon(ic, geoms, at.0 - size / 2.0, at.1 - size / 2.0, size, Some((MOON, MOON)), alpha * a, 9.0)?;
                 }
@@ -147,7 +149,8 @@ impl Renderer {
                     lit_path(shown, sun_a)?;
                     draw_sun(pt(shown), sun_a)?;
                     if moon_a > 0.0 {
-                        draw_moon(moon_a)?;
+                        // The night is over: the moon fades out where it sets, at the end of the path.
+                        draw_moon(1.0, moon_a)?;
                     }
                     let left_min = sun.daylight_left(minute_of_day);
                     let words = match (left_min / 60, left_min % 60, crate::i18n::english()) {
@@ -159,7 +162,7 @@ impl Renderer {
                     text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 25.0) * s, mid + 80.0 * s, (BASELINE_Y - 5.0) * s), center, grey(0.7, a * sun_a))?;
                 }
                 pos => {
-                    // Night: the path is dim, a crescent moon rides its top and the next sunrise (or the sunset that was) is told.
+                    // Night: the path is dim, a crescent moon walks it and the next sunrise (or the sunset that was) is told.
                     // Just set: the lit path turns grey, then the sun fades out where it stands, then the moon fades in.
                     let (blue_a, sun_a, moon_a) = swap.map_or((0.0, 0.0, ease_out(age / 0.6)), |secs| (1.0 - step(secs, 0.0), 1.0 - step(secs, 1.0), step(secs, 2.0)));
                     if blue_a > 0.0 {
@@ -168,7 +171,8 @@ impl Renderer {
                     if sun_a > 0.0 {
                         draw_sun(pt(1.0), sun_a)?;
                     }
-                    draw_moon(moon_a)?;
+                    // The moon walks the path through the night, from where the sun set to where it will rise.
+                    draw_moon(sun.night_progress(minute_of_day) * ease_out(age / WALK_S), moon_a)?;
                     let words = match (pos, crate::i18n::english()) {
                         (weather::SunPos::Dawn, false) => format!("Mặt trời mọc lúc {}", health::hhmm(sun.rise as u32)),
                         (weather::SunPos::Dawn, true) => format!("Sunrise at {}", health::hhmm(sun.rise as u32)),
