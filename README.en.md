@@ -8,7 +8,7 @@
 
 <p align="center">
   Music, tasks, notifications, weather and a tiny robot, tucked into the top edge of your screen, Dynamic Island style.<br>
-  Rust + Direct2D drawn on the GPU through DirectComposition, ~770 KB exe, no WebView.
+  Rust + Direct2D drawn on the GPU through DirectComposition, ~794 KB exe, no WebView.
 </p>
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b></p>
@@ -130,7 +130,7 @@ cargo build --release
 target/release/puw_notch.exe
 ```
 
-The release build uses `opt-level = "z"` (smallest code first: an exe of ~770 KB instead of ~810 KB, with no measurable change in the time to draw a frame). `build.rs` embeds the icon and version info (VERSIONINFO: name, company, version taken from `Cargo.toml`) in the exe, shown under Properties → Details. Tests: `cargo test`. Settings live in `%APPDATA%\PuwNotch\`. Starts, exits, failures, self-hiding, the panel opening and closing, late frames, slow ticks and the GPU drawing the notch are logged to `%APPDATA%\PuwNotch\notch.log` (64 KB at most, started over when the version changes), to tell why a start with Windows did not come up.
+The release build uses `opt-level = "z"` (smallest code first: an exe of ~794 KB instead of ~810 KB, with no measurable change in the time to draw a frame). `build.rs` embeds the icon and version info (VERSIONINFO: name, company, version taken from `Cargo.toml`) in the exe, shown under Properties → Details. Tests: `cargo test`. Settings live in `%APPDATA%\PuwNotch\`. Starts, exits, failures, self-hiding, the panel opening and closing, late frames, slow ticks and the GPU drawing the notch are logged to `%APPDATA%\PuwNotch\notch.log` (64 KB at most, started over when the version changes), to tell why a start with Windows did not come up.
 
 Notifications are read from the Windows notification centre, so **Windows notifications must be on**. To see them only on the notch, with no banner in the screen corner, turn on Windows **Do not disturb** (Settings → System → Notifications). Windows still keeps the notifications in the notification centre, so the notch reads and shows them as usual. Windows does not let another app switch off per-app banners while running, so this is yours to turn on.
 
