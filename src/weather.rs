@@ -111,6 +111,49 @@ pub struct Now {
     pub day: bool,
 }
 
+/// Today's sunrise and sunset, minutes of the local day.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sun {
+    pub rise: u16,
+    pub set: u16,
+}
+
+/// Where the sun is on its path at a minute of the day.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SunPos {
+    /// Before sunrise.
+    Dawn,
+    /// Up: how far along its path, 0..1.
+    Day(f32),
+    /// After sunset.
+    Dusk,
+}
+
+impl Sun {
+    pub fn pos(self, minute: u32) -> SunPos {
+        let (rise, set) = (self.rise as u32, self.set as u32);
+        if minute < rise {
+            SunPos::Dawn
+        } else if minute >= set {
+            SunPos::Dusk
+        } else {
+            SunPos::Day((minute - rise) as f32 / (set - rise) as f32)
+        }
+    }
+
+    /// Minutes of daylight left at `minute` (0 once it has set).
+    pub fn daylight_left(self, minute: u32) -> u32 {
+        (self.set as u32).saturating_sub(minute)
+    }
+}
+
+/// "2026-11-05T05:42" -> minutes of that day (342).
+pub fn parse_clock(stamp: &str) -> Option<u16> {
+    let (h, m) = stamp.get(11..16)?.split_once(':')?;
+    let (h, m): (u16, u16) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some(h * 60 + m)
+}
+
 /// One hour of the forecast.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hour {
@@ -157,6 +200,8 @@ pub struct State {
     pub now: Option<Now>,
     /// The next 24 hours from this one, fetched with `now`.
     pub hours: Vec<Hour>,
+    /// Today's sunrise and sunset there (None: not known, or the sun does not rise and set).
+    pub sun: Option<Sun>,
     /// When `now` was fetched, local yyyymmddHHMM.
     pub updated: Option<u64>,
     /// A lookup is running.
@@ -204,7 +249,10 @@ impl Weather {
                         if let Ok(mut s) = shared.lock() {
                             s.looking = false;
                             match found.clone() {
-                                Some(p) => (s.place, s.now, s.hours, s.updated, s.not_found) = (Some(p), None, Vec::new(), None, None),
+                                Some(p) => {
+                                    (s.place, s.now, s.hours, s.updated, s.not_found) = (Some(p), None, Vec::new(), None, None);
+                                    s.sun = None;
+                                }
                                 None => s.not_found = Some(city),
                             }
                         }
@@ -224,12 +272,12 @@ impl Weather {
                             // Every try counts, good or not, so a flapping network cannot repeat it.
                             last = Some(Instant::now());
                             match current(&p) {
-                                Some((now, hours)) => {
+                                Some((now, hours, sun)) => {
                                     gap = MIN_GAP;
                                     if let Ok(mut s) = shared.lock() {
                                         // The city may have been switched or switched off while this was fetched.
                                         if s.place.as_ref() == Some(&p) {
-                                            (s.now, s.hours, s.updated) = (Some(now), hours, Some(crate::system::now_stamp()));
+                                            (s.now, s.hours, s.sun, s.updated) = (Some(now), hours, sun, Some(crate::system::now_stamp()));
                                         }
                                     }
                                     notify();
@@ -459,10 +507,10 @@ fn find_place(typed: &str) -> Option<Place> {
     places.into_iter().nth(pick).map(|(p, _)| p)
 }
 
-/// The conditions now and the next 24 hours, in one request.
-fn current(p: &Place) -> Option<(Now, Vec<Hour>)> {
+/// The conditions now, the next 24 hours and today's sun, in one request.
+fn current(p: &Place) -> Option<(Now, Vec<Hour>, Option<Sun>)> {
     let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day&hourly=temperature_2m,precipitation_probability,wind_speed_10m,weather_code,is_day&forecast_hours=24&timezone=auto",
+        "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day&hourly=temperature_2m,precipitation_probability,wind_speed_10m,weather_code,is_day&daily=sunrise,sunset&forecast_hours=24&timezone=auto",
         p.lat, p.lon
     );
     let body = JsonObject::Parse(&HSTRING::from(fetch(&url)?)).ok()?;
@@ -476,7 +524,15 @@ fn current(p: &Place) -> Option<(Now, Vec<Hour>)> {
         sky: sky(num("weather_code")? as u32),
         day: num("is_day")? != 0.0,
     };
-    Some((now, hourly(&body).unwrap_or_default()))
+    Some((now, hourly(&body).unwrap_or_default(), daily_sun(&body)))
+}
+
+/// Today's sunrise and sunset from Open-Meteo's `daily` columns (the first row is today).
+fn daily_sun(body: &JsonObject) -> Option<Sun> {
+    let d = body.GetNamedObject(&HSTRING::from("daily")).ok()?;
+    let first = |k: &str| d.GetNamedArray(&HSTRING::from(k)).ok()?.GetStringAt(0).ok().map(|s| s.to_string());
+    let (rise, set) = (parse_clock(&first("sunrise")?)?, parse_clock(&first("sunset")?)?);
+    (rise < set).then_some(Sun { rise, set })
 }
 
 /// Open-Meteo's `hourly` columns as rows. A missing rain chance (null) counts as 0.
@@ -625,13 +681,28 @@ mod tests {
             assert!((8.0..24.0).contains(&p.lat) && (102.0..110.0).contains(&p.lon), "{typed} is in Vietnam: {p:?}");
         }
         assert!(find_place("zzzxqwv").is_none(), "nonsense is not found");
-        let (now, hours) = current(&find_place("Đà Nẵng").unwrap()).expect("conditions");
+        let (now, hours, sun) = current(&find_place("Đà Nẵng").unwrap()).expect("conditions");
+        let sun = sun.expect("sunrise and sunset");
+        assert!((4 * 60..8 * 60).contains(&sun.rise) && (16 * 60..20 * 60).contains(&sun.set), "{sun:?}");
         assert!((-5.0..50.0).contains(&now.temp) && (0.0..=100.0).contains(&now.humidity), "{now:?}");
         assert_eq!(hours.len(), 24, "{hours:?}");
         println!("Da Nang now: {now:?}
 {:?}", outlook(&hours));
     }
 
+
+    #[test]
+    fn the_sun_clock_reads_open_meteo_stamps_and_places_the_sun() {
+        assert_eq!(parse_clock("2026-11-05T05:42"), Some(342));
+        assert_eq!(parse_clock("2026-11-05T17:48"), Some(1068));
+        assert_eq!((parse_clock("2026-11-05T24:00"), parse_clock("2026-11-05"), parse_clock("")), (None, None, None));
+        let sun = Sun { rise: 342, set: 1068 };
+        assert_eq!(sun.pos(100), SunPos::Dawn);
+        assert_eq!(sun.pos(342), SunPos::Day(0.0));
+        assert_eq!(sun.pos(705), SunPos::Day(0.5));
+        assert_eq!(sun.pos(1068), SunPos::Dusk);
+        assert_eq!((sun.daylight_left(1000), sun.daylight_left(1068), sun.daylight_left(1300)), (68, 0, 0));
+    }
 
     #[test]
     fn place_round_trips_through_settings() {

@@ -36,7 +36,7 @@
 | **Tập trung** | Pomodoro: cả chu kỳ (4 vòng tập trung 25 phút, nghỉ ngắn 5, nghỉ dài 15) là một thanh chia đoạn, số giờ lớn, ba chip chọn chế độ, nút đặt lại / bắt đầu / sang đoạn kế. Hết đoạn thì banner báo và đoạn kế tự chạy tiếp (sau nghỉ dài thì dừng chờ chu kỳ mới); khi đang chạy, pill có một vạch mỏng ở đáy. |
 | **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng; số lượng ở bên trái; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy: số lớn, thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy; chỉnh giờ và mức ở ⚙. |
-| **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Dữ liệu Open-Meteo, làm mới 30 phút. |
+| **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Nút mặt trời ở dòng thành phố đổi dải giờ thành **đường đi của mặt trời** (giờ mọc, lặn, còn bao lâu nắng; mặt trời lên sáng nhẹ và thỉnh thoảng chớp sáng, ban đêm có mặt trăng). Dữ liệu Open-Meteo, làm mới 30 phút. |
 | **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab (chấm màu của app), chỉ hiện app tìm thấy trên máy; Claude hiện hai vòng đồng tâm (5 giờ ngoài, tuần trong). Codex và Antigravity hiện phần còn lại, Claude phần đã dùng. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
 
 Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:
@@ -62,7 +62,8 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 
 ![Chọn trang nhanh](assets/screenshots/page-nav.png)<br>**Chọn trang nhanh**: rê chuột vào chấm trang, chấm mở thành hàng biểu tượng, bấm một biểu tượng để sang thẳng trang đó (rời chuột thì trả về chấm)
 
-![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, một dòng số liệu, nút °C | °F
+| ![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, một dòng số liệu, nút °C | °F | ![Thời tiết, đường đi của mặt trời](assets/screenshots/page-weather-sun.png)<br>**Đường đi của mặt trời**: bấm nút mặt trời, cung xanh từ lúc mọc đến lặn |
+|---|---|
 
 **Giới hạn** của Claude, Codex và Antigravity (Claude: phần đã dùng; Codex và Antigravity: phần còn lại, đếm lùi như chính app của chúng). Tab Codex ghi gói của tài khoản đang dùng, gói free tính theo 30 ngày:
 

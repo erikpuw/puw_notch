@@ -234,11 +234,13 @@ pub struct Settings {
     pub notes_cleared: i64,
     /// Pages kept in the panel, a bit per page (all by default).
     pub pages: u8,
+    /// The Weather page shows the sun's path in place of the hours ahead.
+    pub sun_view: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111 }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111, sun_view: false }
     }
 }
 
@@ -256,6 +258,8 @@ fn parse_settings(text: &str) -> Settings {
                     s.style = crate::notch::Style::from_tag(style).unwrap_or_default();
                 } else if let Some(place) = other.strip_prefix("city=") {
                     s.place = crate::weather::parse_place(place);
+                } else if let Some(on) = other.strip_prefix("sunview=") {
+                    s.sun_view = on.trim() == "1";
                 } else if let Some(unit) = other.strip_prefix("unit=") {
                     s.unit = crate::weather::Unit::from_tag(unit);
                 } else if let Some(mask) = other.strip_prefix("pages=") {
@@ -281,8 +285,9 @@ pub fn save_settings(s: Settings) {
         }
         let city = s.place.as_ref().map_or(String::new(), |p| format!("city={}\n", crate::weather::place_line(p)));
         let unit = s.unit.map_or(String::new(), |u| format!("unit={}\n", u.tag()));
+        let sun = if s.sun_view { "sunview=1\n" } else { "" };
         let cleared = if s.notes_cleared > 0 { format!("notes_cleared={}\n", s.notes_cleared) } else { String::new() };
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\nstyle={}\napprove={}\npages={}\n{city}{unit}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8, s.style.tag(), s.approve as u8, s.pages));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\nstyle={}\napprove={}\npages={}\n{city}{unit}{sun}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8, s.style.tag(), s.approve as u8, s.pages));
     }
 }
 
@@ -474,7 +479,7 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111 });
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111, sun_view: false });
         assert_eq!(parse_settings("pages=5\n").pages, 5);
         assert_eq!(parse_settings("pages=0\n").pages, 0b111_1111, "never none");
         assert_eq!(parse_settings("pages=63\n").pages, 0b111_1111, "a mask saved before the Focus page gets it too");
@@ -483,6 +488,7 @@ mod tests {
         assert_eq!(parse_settings("style=x\n").style, crate::notch::Style::Ears, "unknown: the original look");
         assert_eq!(parse_settings("notes_cleared=42\n").notes_cleared, 42);
         assert_eq!(parse_settings("notes_cleared=x\n").notes_cleared, 0);
+        assert!(parse_settings("sunview=1\n").sun_view && !parse_settings("sunview=0\n").sun_view && !parse_settings("minimal=0\n").sun_view, "off unless turned on");
         assert_eq!(parse_settings("unit=f\n").unit, Some(crate::weather::Unit::F));
         assert_eq!(parse_settings("unit=c\n").unit, Some(crate::weather::Unit::C));
         assert_eq!(parse_settings("unit=x\n").unit, None, "unknown: follow the region");

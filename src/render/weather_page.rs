@@ -16,6 +16,7 @@ impl Renderer {
         current: bool,
         weather_line: &Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
         weather_empty: &Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
+        moon_line: &Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
         hour_lines: &[(weather::Hour, &'static icons::Icon, Vec<ID2D1PathGeometry>)],
         (cl, cr): (f32, f32),
         s: f32,
@@ -35,7 +36,7 @@ impl Renderer {
                     let stale = wx.is_stale(lv.now);
                     let fade = if stale { 0.55 } else { 1.0 };
                     // City line: the name, then the unit chips and x at its end.
-                    let buttons_l = cr - (30.0 + 8.0 + 2.0 * UNIT_W + 8.0) * s;
+                    let buttons_l = cr - (30.0 + 8.0 + 2.0 * UNIT_W + SUN_GAP + SUN_W + 8.0) * s;
                     text(&place.name, F_TITLE, rect(cl, (CITY_Y + 2.0) * s, buttons_l, (CITY_Y + 22.0) * s), lead, grey(1.0, a))?;
                     if let Some(ob) = rect_of(Button::CityOff) {
                         let hot = hovered == Some(Button::CityOff);
@@ -55,6 +56,12 @@ impl Renderer {
                         }
                         text(unit.symbol(), F_LABEL, chip, center, grey(if on { 1.0 } else { 0.55 }, a))?;
                     }
+                    // The sun's path: a chip left of the unit capsule, lit while that view is on.
+                    if let Some(chip) = rect_of(Button::SunToggle) {
+                        let (on, hot) = (v.sun_view, hovered == Some(Button::SunToggle));
+                        rt.FillRoundedRectangle(&rounded(chip, UNIT_H / 2.0 * s), &self.brush(grey(if on { 0.22 } else if hot { 0.16 } else { 0.1 }, a))?);
+                        text("\u{E706}", F_SMALL_ICON, chip, center, grey(if on { 1.0 } else if hot { 0.85 } else { 0.6 }, a))?;
+                    }
                     // Left block, bare on the panel: the big icon, the temperature beside it, the
                     // sky's words and the feels-like under that.
                     wx_icon(ic, geoms, cl, ICON_Y * s, WX_ICON * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
@@ -71,7 +78,13 @@ impl Renderer {
                     text(weather::describe(n.sky), F_BODY, rect(tx, (ICON_Y + 42.0) * s, words_r, (ICON_Y + 58.0) * s), lead, grey(0.9, a))?;
                     // Right block: the next five slots, three hours apart, as columns.
                     let bl = cl + STRIP_X * s;
-                    let columns = hour_lines.len().min(5);
+                    let columns = if v.sun_view { 0 } else { hour_lines.len().min(5) };
+                    if v.sun_view {
+                        match wx.sun {
+                            Some(sun) => self.draw_sun_path(text, wx_icon, moon_line, sun, v.health.minute_of_day, (bl, cr), s, a * fade, v.phase, if current { v.page_age } else { 9.0 })?,
+                            None => text(tr("Đang lấy giờ mặt trời…", "Getting the sun's times…"), F_LABEL, rect(bl, (STRIP_Y + 20.0) * s, cr, (STRIP_Y + 40.0) * s), center, grey(0.55, a))?,
+                        }
+                    }
                     if columns > 0 {
                         let sw = (cr - bl) / columns as f32;
                         for (i, (h, ic, geoms)) in hour_lines.iter().take(columns).enumerate() {

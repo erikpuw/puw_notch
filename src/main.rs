@@ -251,6 +251,8 @@ struct App {
     page_since: Instant,
     /// °C or °F, and whether it was chosen (else it follows the region setting and is not saved).
     unit: weather::Unit,
+    /// The Weather page shows the sun's path in place of the hours ahead.
+    sun_view: bool,
     unit_chosen: bool,
 }
 
@@ -338,7 +340,7 @@ impl App {
             focus: &self.focus, health: HealthView { h: &self.health, now: todo::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
             weather: &self.wx,
             page_age: self.page_since.elapsed().as_secs_f32(),
-            unit: self.unit,
+            unit: self.unit, sun_view: self.sun_view,
         };
         // An icon that just changed keeps frames coming until its morph has played.
         self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
@@ -381,7 +383,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { pages: render::pages_on(), minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
+        system::Settings { pages: render::pages_on(), minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), sun_view: self.sun_view, notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -992,6 +994,12 @@ impl App {
             }
             Button::Unit(unit) => {
                 (self.unit, self.unit_chosen) = (unit, true);
+                system::save_settings(self.settings());
+            }
+            Button::SunToggle => {
+                self.sun_view = !self.sun_view;
+                // The sun starts its walk (and the big icon its pop) again from here.
+                self.page_since = Instant::now();
                 system::save_settings(self.settings());
             }
             Button::NoteOpen(i) => {
@@ -1925,6 +1933,7 @@ fn run() -> windows::core::Result<()> {
             page_since: Instant::now(),
             unit: settings.unit.unwrap_or_else(weather::Unit::automatic),
             unit_chosen: settings.unit.is_some(),
+            sun_view: settings.sun_view,
         };
         app.refresh_audio();
         if let Some(r) = app.notifications.as_mut() {
