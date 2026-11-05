@@ -1928,9 +1928,10 @@ impl Renderer {
             }).collect()
         } else { Vec::new() };
         // The pill's battery icon (Lucide) with its paths as geometry.
-        // A sun for the Weather page while there is no city or conditions yet (muted, like Tasks' ring).
+        // The Weather page's own icon, a sun behind a cloud (a bare sun reads as brightness or as the sun's path), for the page
+        // while there is no city or conditions yet (muted, like Tasks' ring) and for its place in the row of page icons.
         let weather_empty = (|| {
-            let ic = icons::weather(weather::Sky::Clear, true);
+            let ic = icons::weather(weather::Sky::PartlyCloudy, true);
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();

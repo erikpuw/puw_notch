@@ -126,7 +126,7 @@ impl Renderer {
                     } else {
                         (tr("Nhập tên thành phố rồi nhấn Enter", "Type a city and press Enter").to_string(), tr("Có dấu hay không dấu đều được", "With or without accents"))
                     };
-                    // A muted sun above the words, as the Tasks page has its ring.
+                    // A muted cloud and sun above the words, as the Tasks page has its ring.
                     if let Some((ic, geoms)) = weather_empty {
                         let mid = (cl + cr) / 2.0;
                         wx_icon(ic, geoms, mid - 16.0 * s, 72.0 * s, 32.0 * s, Some(((0.4, 0.4, 0.4), (0.4, 0.4, 0.4))), a, 9.0)?;
