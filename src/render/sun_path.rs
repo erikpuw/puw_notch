@@ -159,7 +159,7 @@ impl Renderer {
                         (0, m, true) => format!("{m} min of daylight left"),
                         (h, m, true) => format!("{h} h {m} min of daylight left"),
                     };
-                    text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 25.0) * s, mid + 80.0 * s, (BASELINE_Y - 5.0) * s), center, grey(0.7, a * sun_a))?;
+                    text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 20.0) * s, mid + 80.0 * s, BASELINE_Y * s), center, grey(0.7, a * sun_a))?;
                 }
                 pos => {
                     // Night: the path is dim, a crescent moon walks it and the next sunrise (or the sunset that was) is told.
@@ -179,7 +179,7 @@ impl Renderer {
                         (_, false) => format!("Mặt trời lặn lúc {}", health::hhmm(sun.set as u32)),
                         (_, true) => format!("Sunset was at {}", health::hhmm(sun.set as u32)),
                     };
-                    text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 23.0) * s, mid + 80.0 * s, (BASELINE_Y - 3.0) * s), center, grey(0.7, a * moon_a))?;
+                    text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 20.0) * s, mid + 80.0 * s, BASELINE_Y * s), center, grey(0.7, a * moon_a))?;
                 }
             }
         }
