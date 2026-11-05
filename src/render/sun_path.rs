@@ -21,12 +21,21 @@ const GLOW_PERIOD_S: f32 = 3.0;
 pub(super) const SWAP_STEP_S: f32 = 0.8;
 /// How many straight pieces the arc is drawn with.
 const ARC_STEPS: usize = 64;
+/// The share of the path, at each end, over which it fades in (or out).
+const ARC_FADE: f32 = 0.16;
 
 /// Where the arc is at `t` (0..1) for ends `(x0, x1)` on `baseline`, rising `height`: a quadratic curve.
 fn arc_point(t: f32, x0: f32, x1: f32, baseline: f32, height: f32) -> (f32, f32) {
     let (cx, cy) = ((x0 + x1) / 2.0, baseline - 2.0 * height);
     let u = 1.0 - t;
     (u * u * x0 + 2.0 * u * t * cx + t * t * x1, u * u * baseline + 2.0 * u * t * cy + t * t * baseline)
+}
+
+/// How much of the path shows at `t` (0..1 along it): its two ends fade out, so the arc does not stop short in mid-air like a
+/// cut line; the dots at the ends say where it begins and ends.
+fn edge_fade(t: f32) -> f32 {
+    let k = (t.min(1.0 - t) / ARC_FADE).clamp(0.0, 1.0);
+    0.15 + 0.85 * k * k * (3.0 - 2.0 * k)
 }
 
 /// How lit a ring is `phase` seconds in, 0..1: a slow, smooth fade in and out, `lag` (0..1 of a period) behind.
@@ -88,9 +97,9 @@ impl Renderer {
         unsafe {
             // The ground, then the whole path dim.
             rt.FillRectangle(&rect(x0 - 4.0 * s, yb, x1 + 4.0 * s, yb + 1.0 * s), &self.brush(grey(0.14, a))?);
-            let track = grey(0.2, a);
             for i in 0..ARC_STEPS {
-                line(pt(i as f32 / ARC_STEPS as f32), pt((i + 1) as f32 / ARC_STEPS as f32), track, 2.5 * s)?;
+                let (from, to) = (i as f32 / ARC_STEPS as f32, (i + 1) as f32 / ARC_STEPS as f32);
+                line(pt(from), pt(to), grey(0.2, a * edge_fade((from + to) / 2.0)), 2.5 * s)?;
             }
             // The two ends, with their times under them.
             for (x, minute) in [(x0, sun.rise as u32), (x1, sun.set as u32)] {
@@ -100,12 +109,11 @@ impl Renderer {
             let mid = (x0 + x1) / 2.0;
             // The lit part of the path up to `upto`, in blue at `alpha`.
             let lit_path = |upto: f32, alpha: f32| -> Result<()> {
-                let lit = color(BLUE.0, BLUE.1, BLUE.2, alpha * a);
                 let steps = ((upto * ARC_STEPS as f32).ceil() as usize).max(1);
                 for i in 0..steps {
                     let (from, to) = (i as f32 / ARC_STEPS as f32, ((i + 1) as f32 / ARC_STEPS as f32).min(upto));
                     if to > from {
-                        line(pt(from), pt(to), lit, 2.5 * s)?;
+                        line(pt(from), pt(to), color(BLUE.0, BLUE.1, BLUE.2, alpha * a * edge_fade((from + to) / 2.0)), 2.5 * s)?;
                     }
                 }
                 Ok(())
@@ -120,7 +128,10 @@ impl Renderer {
             let draw_moon = |alpha: f32| -> Result<()> {
                 if let Some((ic, geoms)) = moon {
                     let size = 16.0 * s;
-                    let at = (mid, (BASELINE_Y - ARC_H + 3.0) * s);
+                    // A little under the top of the path, so its light stays clear of the sun button above; the path itself is
+                    // hidden behind the crescent (a black disc, the panel's own colour), so no line runs through its hollow.
+                    let at = (mid, (BASELINE_Y - ARC_H + 5.0) * s);
+                    disc(at, (0.0, 0.0, 0.0), 9.5 * s, alpha * a)?;
                     halo(at, MOON, alpha * a * 0.8)?;
                     wx_icon(ic, geoms, at.0 - size / 2.0, at.1 - size / 2.0, size, Some((MOON, MOON)), alpha * a, 9.0)?;
                 }
@@ -186,6 +197,15 @@ mod tests {
         r.sun_seen.set(None);
         assert_eq!(r.sun_swap(false), None, "opened again at night: no sunset to play");
         assert!(r.sun_swap(true).is_some(), "but a sunrise seen happening is");
+    }
+
+    #[test]
+    fn the_ends_of_the_path_fade_so_it_does_not_look_cut() {
+        assert!(edge_fade(0.0) < 0.2 && edge_fade(1.0) < 0.2, "faint at both ends");
+        assert!((edge_fade(0.5) - 1.0).abs() < 1e-6 && (edge_fade(ARC_FADE) - 1.0).abs() < 1e-6, "full from a little in");
+        assert!((edge_fade(0.3) - edge_fade(0.7)).abs() < 1e-6, "the same at both ends");
+        let rising: Vec<f32> = (0..=16).map(|i| edge_fade(i as f32 * ARC_FADE / 16.0)).collect();
+        assert!(rising.windows(2).all(|w| w[1] >= w[0]), "it only brightens going in");
     }
 
     #[test]
