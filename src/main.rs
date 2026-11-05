@@ -775,7 +775,7 @@ impl App {
                 continue;
             }
             let choices = if p.options.is_empty() { vec![tr("Đồng ý", "Allow").to_string(), tr("Không", "Deny").to_string()] } else { p.options.clone() };
-            let toast = Toast { app: p.app.clone(), title: p.title.clone(), body: p.detail.clone(), level: None, icon: Some(render::ICON_WARN), image: None, open: None, badge: None, choices };
+            let toast = Toast { app: p.app.clone(), title: p.title.clone(), body: p.detail.clone(), level: None, icon: Some(render::ICON_WARN), image: None, open: None, badge: None, choices, app_id: None };
             if self.show_banner(toast, approve::BANNER.as_millis() as u32) {
                 self.approval = Some(p);
                 return;
@@ -1646,7 +1646,7 @@ fn app_icon(small: bool) -> HICON {
 }
 
 fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
-    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new() }
+    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None }
 }
 
 /// The banner for a Pomodoro segment that ended.

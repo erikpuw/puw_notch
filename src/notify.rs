@@ -35,6 +35,8 @@ pub struct Toast {
     pub badge: Option<String>,
     /// An approval request or a question: the banner carries these buttons (labels) and waits for a click.
     pub choices: Vec<String>,
+    /// The app's user model id: its own icon stands in the banner (None: the bell).
+    pub app_id: Option<String>,
 }
 
 impl Toast {
@@ -166,7 +168,7 @@ impl Reader {
                 let (title, body) = parse_payload(&payload);
                 if !title.is_empty() {
                     let open = parse_open(&aumid, &payload);
-                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload), open, badge: None, choices: Vec::new() });
+                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload), open, badge: None, choices: Vec::new(), app_id: Some(aumid.clone()).filter(|a| !a.is_empty()) });
                 }
             }
             (self.sql.finalize)(stmt);

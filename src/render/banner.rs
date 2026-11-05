@@ -9,9 +9,10 @@ impl Renderer {
         t: &Toast,
         banner_line: &Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
         banner_image: &Option<ID2D1Bitmap>,
+        banner_app: &Option<ID2D1Bitmap>,
     ) -> Result<bool> {
         let rt = &self.rt;
-        let Ctx { v, s, l, r, cx, nh, shape, text, micon, .. } = *c;
+        let Ctx { v, s, l, r, cx, nh, shape, text, width, micon, .. } = *c;
         let center = DWRITE_TEXT_ALIGNMENT_CENTER;
         let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
         let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
@@ -38,7 +39,17 @@ impl Renderer {
             let age = v.banner_age;
             let (pop_scale, pop_alpha) = icons::pop(age);
             let pop = translate(-mx, -my) * scaling(pop_scale) * translate(mx, my);
-            if let Some((ic, geoms)) = &banner_line {
+            if let (BannerKind::Notification, Some(img)) = (kind, banner_app) {
+                // The app's own icon in a rounded square, popping in like the line icons.
+                let size = img.GetSize();
+                let k = d / size.width.max(size.height);
+                let brush = rt.CreateBitmapBrush(img, None, None)?;
+                brush.SetTransform(&(scaling(k) * translate(ix, iy)));
+                brush.SetOpacity(a * pop_alpha);
+                rt.SetTransform(&(pop * base));
+                rt.FillRoundedRectangle(&rounded(rect(ix, iy, ix + d, iy + d), 9.0 * s), &brush);
+                rt.SetTransform(&base);
+            } else if let Some((ic, geoms)) = &banner_line {
                 icon_busy = age < anim::ICON_MOTION_S;
                 let size = LINE_ICON * s;
                 let view = scaling(size / ic.vb) * translate(mx - size / 2.0, my - size / 2.0);
@@ -130,8 +141,15 @@ impl Renderer {
                         rt.DrawLine(Vector2 { X: x - k, Y: y - k }, Vector2 { X: x + k, Y: y + k }, &ink, 1.5 * s, &self.round);
                         rt.DrawLine(Vector2 { X: x - k, Y: y + k }, Vector2 { X: x + k, Y: y - k }, &ink, 1.5 * s, &self.round);
                     }
-                    text(&t.app, F_LABEL, rect(tl, 8.0 * s, tr, 24.0 * s), lead, grey(0.6, a))?;
-                    text(&t.title, F_TITLE, rect(tl, 24.0 * s, tr, 42.0 * s), lead, grey(1.0, a))?;
+                    // The time it arrived, large and bold at the right of the title row (a banner with a picture has no room).
+                    let mut head = tr;
+                    if t.image.is_none() {
+                        let w = width(v.time, F_CLOCK_BOLD) + 14.0 * s;
+                        text(v.time, F_CLOCK_BOLD, rect(tr - w, 24.0 * s, tr, 42.0 * s), trail, grey(1.0, a))?;
+                        head = tr - w;
+                    }
+                    text(&t.app, F_LABEL, rect(tl, 8.0 * s, head, 24.0 * s), lead, grey(0.6, a))?;
+                    text(&t.title, F_TITLE, rect(tl, 24.0 * s, head, 42.0 * s), lead, grey(1.0, a))?;
                     // Wraps over the banner's height (sized to its lines, at most `BANNER_MAX_LINES`);
                     // what still does not fit ends with "…".
                     let top = notch::BANNER_TEXT_TOP * s;

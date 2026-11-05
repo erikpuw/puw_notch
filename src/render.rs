@@ -972,10 +972,10 @@ impl IconLoader {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let wic: Option<IWICImagingFactory> = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
             for id in asked {
-                let deferred = !id.starts_with("img:") && !open.load(Ordering::Relaxed);
+                let deferred = !id.starts_with("img:") && !id.starts_with("now:") && !open.load(Ordering::Relaxed);
                 let pixels = wic.as_ref().filter(|_| !deferred).and_then(|wic| match id.strip_prefix("img:") {
                     Some(path) => image_pixels(wic, path),
-                    None => app_icon_pixels(wic, &id),
+                    None => app_icon_pixels(wic, id.strip_prefix("now:").unwrap_or(&id)),
                 });
                 if answer.send(LoadedIcon { id, pixels, deferred }).is_err() {
                     break;
@@ -1521,6 +1521,16 @@ impl Renderer {
         self.app_icons.get(id).cloned().flatten()
     }
 
+    /// The icon of the app a notification banner comes from: asked for when the banner shows, whichever page is open
+    /// (the banner keeps its bell until it arrives).
+    fn banner_icon(&mut self, aumid: &str) -> Option<ID2D1Bitmap> {
+        let key = format!("now:{aumid}");
+        if !self.app_icons.contains_key(&key) && self.icon_loader.pending.insert(key.clone()) {
+            let _ = self.icon_loader.ask.send(key.clone());
+        }
+        self.app_icons.get(&key).cloned().flatten()
+    }
+
     /// Ask for an app's icon ahead of time, so the Notifications page finds it ready.
     pub fn set_page_open(&self, open: bool) {
         self.icon_loader.page_open.store(open, Ordering::Relaxed);
@@ -1946,6 +1956,8 @@ impl Renderer {
         let note_icons: Vec<Option<ID2D1Bitmap>> = if page.is_some() { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
         // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
         let banner_image: Option<ID2D1Bitmap> = v.banner.filter(|_| v.mode == Mode::Alert).and_then(|b| b.image.as_deref()).and_then(|p| self.app_icon(&format!("img:{p}")));
+        let banner_app: Option<ID2D1Bitmap> = v.banner.filter(|b| v.mode == Mode::Alert && b.kind() == BannerKind::Notification)
+            .and_then(|b| b.app_id.clone()).and_then(|id| self.banner_icon(&id));
         match v.mode {
             Mode::Expanded => self.owner = Owner::Panel,
             Mode::Alert => self.owner = Owner::Banner,
@@ -2108,7 +2120,7 @@ impl Renderer {
             // A banner is one of three things, each drawn on its own: a status (an icon and its line), a
             // notification (an app's message), an approval (a question with buttons and a countdown).
             if let (Mode::Alert, Some(t)) = (v.mode, v.banner) {
-                icon_busy = self.draw_banner(&ctx, t, &banner_line, &banner_image)?;
+                icon_busy = self.draw_banner(&ctx, t, &banner_line, &banner_image, &banner_app)?;
             }
 
             let a = fade(110.0, 50.0);
@@ -2212,7 +2224,7 @@ mod tests {
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Shrink"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
-            let toast = Toast { app: "Claude".into(), title: "x".into(), body: "y".into(), level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new() };
+            let toast = Toast { app: "Claude".into(), title: "x".into(), body: "y".into(), level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
             let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
             macro_rules! view { ($mode:expr, $banner:expr) => { View { mode: $mode, size: [520.0, 139.0, 24.0], time: "20:49", date: "T2, 26/10",
                 battery: Some(Battery { percent: 76, charging: false, saver: false }), banner: $banner, music: None, live: false, robot: None, phase: 0.0,
@@ -2266,6 +2278,20 @@ mod tests {
         assert!(!renderer.icon_loader.pending.contains("PuwNotch.ClosedPageTest"));
         renderer.prefetch_icon("img:PuwNotch.MissingBannerImage");
         assert!(renderer.icon_loader.pending.contains("img:PuwNotch.MissingBannerImage"));
+    }
+
+    #[test]
+    fn a_banner_asks_for_its_apps_icon_even_with_the_notifications_page_closed() {
+        let mut renderer = Renderer::new().unwrap();
+        renderer.set_page_open(false);
+        assert!(renderer.banner_icon("PuwNotch.BannerIconTest").is_none(), "nothing until the loader answers");
+        assert!(renderer.icon_loader.pending.contains("now:PuwNotch.BannerIconTest"));
+        // The loader treats it as asked for now: not deferred like a page's icon.
+        let loader = IconLoader::start();
+        loader.ask.send("now:PuwNotch.BannerIconTest".into()).unwrap();
+        let result = loader.got.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(!result.deferred);
+        assert_eq!(result.id, "now:PuwNotch.BannerIconTest");
     }
 
     #[test]
@@ -2780,15 +2806,15 @@ mod tests {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (500i32, 110i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Banner preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
-            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()), badge: None, choices: Vec::new() };
+            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()), badge: None, choices: Vec::new(), app_id: None };
             let device = Toast { app: "Bluetooth".into(), title: "UGREEN HiTune Max5c".into(), body: "Đã kết nối".into(), level: None,
-                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None, badge: Some("80%".into()), choices: Vec::new() };
+                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None, badge: Some("80%".into()), choices: Vec::new(), app_id: None };
             let charging = Toast { app: "Pin".into(), title: "Đang sạc".into(), body: "Đã cắm sạc".into(), level: None,
-                icon: Some(ICON_PLUG), image: None, open: None, badge: Some("70%".into()), choices: Vec::new() };
+                icon: Some(ICON_PLUG), image: None, open: None, badge: Some("70%".into()), choices: Vec::new(), app_id: None };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
-            let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "Cho phép chạy list_projects của codebase-memory-mcp để liệt kê các project đã được index trong đồ thị mã nguồn (chỉ đọc, không thay đổi gì)?".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choices: vec!["Đồng ý".into(), "Không đồng ý".into(), "Trong app".into()] };
+            let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "Cho phép chạy list_projects của codebase-memory-mcp để liệt kê các project đã được index trong đồ thị mã nguồn (chỉ đọc, không thay đổi gì)?".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choices: vec!["Đồng ý".into(), "Không đồng ý".into(), "Trong app".into()] , app_id: None };
             for (toast, lines) in [(&note, 1), (&device, 0), (&charging, 0), (&approve, 3)] {
             let view = View { mode: Mode::Alert, size: if toast.choices.is_empty() { notch::alert_size(lines) } else { notch::alert_size_choice(lines) }, time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
@@ -3028,14 +3054,16 @@ mod tests {
                 snap.apps[2] = Some(vec![bar(tl("Gemini · Tuần", "Gemini · Week"), true, 0.4, 150), bar(tl("Gemini · 5 giờ", "Gemini · 5 h"), false, 0.0, 4), bar(tl("Claude · GPT · Tuần", "Claude · GPT · Week"), true, 36.0, 160),
                     bar(tl("Claude · GPT · 5 giờ", "Claude · GPT · 5 h"), false, 30.0, 4), bar(tl("Argon · Tuần", "Argon · Week"), true, 89.0, 150)]);
                 let toast = |app: &str, title: &str, body: &str, choices: &[&str]| Toast { app: app.into(), title: title.into(), body: body.into(), level: None, icon: Some(ICON_WARN),
-                    image: None, open: None, badge: None, choices: choices.iter().map(|c| c.to_string()).collect() };
+                    image: None, open: None, badge: None, choices: choices.iter().map(|c| c.to_string()).collect(), app_id: None };
                 let claude_ask = toast("Claude", tl("Duyệt lệnh", "Approve command"), tl("Cho phép chạy công cụ get_architecture của codebase-memory-mcp cho project này (chỉ đọc)?", "Allow the get_architecture tool of codebase-memory-mcp to run for this project (read only)?"),
                     if english { &["Allow", "Deny", "In the app"] } else { &["Đồng ý", "Không đồng ý", "Trong app"] });
+                // powershell's own icon (the shell's AppsFolder knows it by this id) stands in the banner.
                 let notification = Toast { app: "powershell".into(), title: tl("Anh Minh", "Alex").into(), body: tl("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop.").into(),
-                    level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new() };
+                    level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(),
+                    app_id: Some(r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe".into()) };
                 // The reminders of the Health page: a status banner each (icon, title, a bar of today's water or a second line).
                 let status = |app: &str, title: &str, body: &str, level: Option<f32>, icon: &'static str| Toast { app: app.into(), title: title.into(), body: body.into(), level,
-                    icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new() };
+                    icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
                 let water = status(tl("Uống nước", "Water"), tl("Đến giờ uống 250 ml nước", "Time to drink 250 ml"), "", Some(0.375), ICON_DROP);
                 let water_goal = status(tl("Uống nước", "Water"), tl("Đạt mục tiêu 2.0 L hôm nay", "Goal of 2.0 L reached today"), "", Some(1.0), ICON_DROP);
                 let stand = status(tl("Đứng dậy đi lại", "Stand up and move"), tl("Bạn đã ngồi 45 phút liền", "You have been sitting for 45 min"),
@@ -3241,7 +3269,7 @@ mod tests {
             note("Outlook", t("Lịch họp tuần", "Weekly planning"), t("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610290910),
             note("Spotify", t("Danh sách mới cho bạn", "New playlist for you"), t("Nhạc tập trung buổi sáng", "Morning focus"), 202610290805)];
         let toast = Toast { app: "Zalo".into(), title: t("Anh Minh", "Alex"), body: t("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop."),
-            level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new() };
+            level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
         let wx = State { place: Some(Place { name: t("Đà Nẵng", "Da Nang"), lat: 16.0, lon: 108.0 }),
             now: Some(Now { temp: 29.0, feels: 32.0, humidity: 78.0, wind: 9.0, sky: Sky::PartlyCloudy, day: true }), updated: Some(202610290930), ..State::default() };
         let health = Health::default();
