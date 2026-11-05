@@ -36,7 +36,7 @@
 | **Tập trung** | Pomodoro: cả chu kỳ (4 vòng tập trung 25 phút, nghỉ ngắn 5, nghỉ dài 15) là một thanh chia đoạn, số giờ lớn, ba chip chọn chế độ, nút đặt lại / bắt đầu / sang đoạn kế. Hết đoạn thì banner báo và đoạn kế tự chạy tiếp (sau nghỉ dài thì dừng chờ chu kỳ mới); khi đang chạy, pill có một vạch mỏng ở đáy. |
 | **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng; số lượng ở bên trái; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy: số lớn, thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy; chỉnh giờ và mức ở ⚙. |
-| **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Nút mặt trời ở dòng thành phố đổi dải giờ thành **đường đi của mặt trời** (giờ mọc, lặn, còn bao lâu nắng; quầng sáng của mặt trời thở nhẹ và thỉnh thoảng chớp, ban đêm có trăng khuyết). Dữ liệu Open-Meteo, làm mới 30 phút. |
+| **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Nút mặt trời ở dòng thành phố đổi dải giờ thành **đường đi của mặt trời** (giờ mọc, lặn, còn bao lâu nắng; hai vòng sáng quanh mặt trời sáng dần rồi mờ dần nhẹ nhàng, ban đêm có trăng khuyết). Dữ liệu Open-Meteo, làm mới 30 phút. |
 | **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab (chấm màu của app), chỉ hiện app tìm thấy trên máy; Claude hiện hai vòng đồng tâm (5 giờ ngoài, tuần trong). Codex và Antigravity hiện phần còn lại, Claude phần đã dùng. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
 
 Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:

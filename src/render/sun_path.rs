@@ -1,5 +1,5 @@
-//! The sun's path on the Weather page: an arc from sunrise to sunset with the sun on it, lit while it is up (a halo that
-//! breathes and blinks softly now and then), a crescent moon with the same halo on the arc at night. The arc is blue so it matches neither
+//! The sun's path on the Weather page: an arc from sunrise to sunset with the sun on it, lit while it is up (two rings of
+//! light that fade in and out gently), a crescent moon with the same two rings on the arc at night. The arc is blue so it matches neither
 //! the sun nor the moon.
 
 use super::*;
@@ -13,9 +13,8 @@ const SUN: (f32, f32, f32) = (1.0, 0.82, 0.3);
 const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
 /// Seconds the sun takes to walk from sunrise to where it is now when the view opens.
 const WALK_S: f32 = 1.4;
-/// The halo blinks every this many seconds and the blink lasts `BLINK_S` of them.
-const BLINK_EVERY_S: f32 = 3.2;
-const BLINK_S: f32 = 0.6;
+/// Seconds one fade in and out of the rings takes; the inner ring runs a third of the way behind the outer one.
+const GLOW_PERIOD_S: f32 = 3.0;
 /// How many straight pieces the arc is drawn with.
 const ARC_STEPS: usize = 64;
 
@@ -26,10 +25,9 @@ fn arc_point(t: f32, x0: f32, x1: f32, baseline: f32, height: f32) -> (f32, f32)
     (u * u * x0 + 2.0 * u * t * cx + t * t * x1, u * u * baseline + 2.0 * u * t * cy + t * t * baseline)
 }
 
-/// How strong the halo's blink is `phase` seconds in: 0 most of the time, a swell and fade over `BLINK_S` once per `BLINK_EVERY_S`.
-fn blink(phase: f32) -> f32 {
-    let k = phase.rem_euclid(BLINK_EVERY_S);
-    if k < BLINK_S { (std::f32::consts::PI * k / BLINK_S).sin() } else { 0.0 }
+/// How lit a ring is `phase` seconds in, 0..1: a slow, smooth fade in and out, `lag` (0..1 of a period) behind.
+fn glow(phase: f32, lag: f32) -> f32 {
+    0.5 - 0.5 * (std::f32::consts::TAU * (phase / GLOW_PERIOD_S - lag)).cos()
 }
 
 impl Renderer {
@@ -62,11 +60,11 @@ impl Renderer {
             unsafe { rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: at.0, Y: at.1 }, radiusX: r, radiusY: r }, &self.brush(color(c.0, c.1, c.2, alpha))?) };
             Ok(())
         };
-        // The halo round the sun or the moon: it breathes, and now and then it blinks, swelling and brightening softly (no rays).
+        // The light round the sun or the moon: two rings that fade in and out gently, the inner one a little behind (no blink, no
+        // rays).
         let halo = |at: (f32, f32), c: (f32, f32, f32), strength: f32| -> Result<()> {
-            let breath = 0.5 + 0.5 * (phase * 2.4).sin();
-            let g = blink(phase);
-            disc(at, c, (11.0 + 2.5 * breath + 3.0 * g) * s, (0.12 + 0.06 * breath + 0.12 * g) * strength)
+            disc(at, c, 12.5 * s, (0.05 + 0.13 * glow(phase, 0.0)) * strength)?;
+            disc(at, c, 8.0 * s, (0.14 + 0.18 * glow(phase, 0.33)) * strength)
         };
         unsafe {
             // The ground, then the whole path dim.
@@ -93,10 +91,9 @@ impl Renderer {
                             line(pt(from), pt(to), lit, 2.5 * s)?;
                         }
                     }
-                    // The sun: a warm core in a halo that breathes and now and then blinks.
+                    // The sun: a warm core in two rings of light that fade in and out.
                     let at = pt(shown);
                     halo(at, SUN, a)?;
-                    disc(at, SUN, 7.5 * s, 0.28 * a)?;
                     disc(at, SUN, 4.2 * s, a)?;
                     let left_min = sun.daylight_left(minute_of_day);
                     let words = match (left_min / 60, left_min % 60, crate::i18n::english()) {
@@ -111,7 +108,7 @@ impl Renderer {
                     // Night: the path is dim, a crescent moon rides its top and the next sunrise (or the sunset that was) is told.
                     if let Some((ic, geoms)) = moon {
                         // A crescent (the moon's line icon) riding the top of the dim path, about as big as the sun with its
-                        // halo, and with the same halo breathing and blinking round it (in the moon's own pale blue).
+                        // halo, with the same two rings fading in and out round it (in the moon's own pale blue).
                         let (size, shown) = (16.0 * s, a * ease_out(age / 0.6));
                         let at = (mid, (BASELINE_Y - ARC_H + 3.0) * s);
                         halo(at, MOON, shown * 0.8)?;
@@ -147,11 +144,14 @@ mod tests {
     }
 
     #[test]
-    fn the_halo_blinks_briefly_and_not_in_between() {
-        assert_eq!(blink(0.0), 0.0);
-        assert!((blink(BLINK_S / 2.0) - 1.0).abs() < 1e-5, "full in the middle of the blink");
-        assert_eq!(blink(BLINK_S + 0.01), 0.0);
-        assert_eq!(blink(BLINK_EVERY_S - 0.01), 0.0);
-        assert!(blink(BLINK_EVERY_S + BLINK_S / 2.0) > 0.99, "and again next time");
+    fn the_rings_fade_in_and_out_smoothly_with_no_blink() {
+        assert!(glow(0.0, 0.0).abs() < 1e-6 && (glow(GLOW_PERIOD_S / 2.0, 0.0) - 1.0).abs() < 1e-6, "dark, then fully lit half a period on");
+        assert!((glow(GLOW_PERIOD_S, 0.0)).abs() < 1e-5, "and back to dark: one fade in and out per period");
+        // Smooth: no step between two frames 16 ms apart, anywhere in the period, for either ring.
+        for lag in [0.0, 0.33] {
+            let step = (0..600).map(|i| (glow(i as f32 * 0.016, lag) - glow((i + 1) as f32 * 0.016, lag)).abs()).fold(0.0f32, f32::max);
+            assert!(step < 0.05, "lag {lag}: a jump of {step} between frames");
+        }
+        assert!((0..300).all(|i| (0.0..=1.0).contains(&glow(i as f32 * 0.05, 0.33))));
     }
 }
