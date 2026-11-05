@@ -26,7 +26,7 @@ SIZES = {
     "pill-idle": (260, 44), "pill-music": (260, 44), "weather-pill": (260, 44), "weather-pill-music": (260, 44),
     "robot": (260, 44), "robot-happy": (260, 44), "pill-focus": (260, 44),
     "style-pill-idle": (260, 50), "style-pill-music": (260, 50),
-    "page-music": (580, 218), "page-focus": (580, 218), "page-weather-sun": (580, 218), "page-weather-night": (580, 218), "page-weather-moon-rises": (580, 218), "page-weather-moon-sets": (580, 218), "page-nav": (580, 236), "page-music-empty": (580, 218), "page-health": (580, 218), "page-weather": (580, 218),
+    "page-music": (580, 218), "page-focus": (580, 218), "page-weather-sun": (580, 218), "page-weather-night": (580, 218), "page-nav": (580, 236), "page-music-empty": (580, 218), "page-health": (580, 218), "page-weather": (580, 218),
     "page-tasks": (580, 218), "page-notifications": (580, 218),
     "page-usage-claude": (580, 218), "page-usage-codex": (580, 218), "page-usage-antigravity": (580, 218),
     "style-pill-page": (580, 224),

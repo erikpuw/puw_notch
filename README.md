@@ -62,8 +62,8 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 
 ![Chọn trang nhanh](assets/screenshots/page-nav.png)<br>**Chọn trang nhanh**: rê chuột vào chấm trang, chấm mở thành hàng biểu tượng, bấm một biểu tượng để sang thẳng trang đó, ô sáng trượt từ trang cũ sang trang mới (rời chuột thì trả về chấm)
 
-| ![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, một dòng số liệu, nút °C / °F | ![Thời tiết, đường đi của mặt trời](assets/screenshots/page-weather-sun.png)<br>**Đường đi của mặt trời**: bấm nút mặt trời, cung xanh từ lúc mọc đến lặn |
-|---|---|
+| ![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, một dòng số liệu, nút °C / °F | ![Đường đi của mặt trời ban ngày](assets/screenshots/page-weather-sun.png)<br>**Ban ngày**: bấm nút mặt trời, cung xanh từ lúc mọc đến lặn, mặt trời đứng đúng giờ hiện tại | ![Đường đi của mặt trời ban đêm](assets/screenshots/page-weather-night.png)<br>**Ban đêm**: trăng khuyết đi dọc cung từ lúc mặt trời lặn đến lúc mọc |
+|---|---|---|
 
 **Giới hạn** của Claude, Codex và Antigravity (Claude: phần đã dùng; Codex và Antigravity: phần còn lại, đếm lùi như chính app của chúng). Tab Codex ghi gói của tài khoản đang dùng, gói free tính theo 30 ngày:
 
