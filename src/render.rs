@@ -2284,6 +2284,43 @@ mod tests {
     }
 
     #[test]
+    fn the_square_in_the_row_of_page_icons_glides_between_cells_while_the_page_changes() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900i32, 300i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Nav glide"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
+            let ph = panel_size(Page::Todo)[1];
+            set_nav_open(true);
+            macro_rules! view { ($leaving:expr) => { View { mode: Mode::Expanded, size: [480.0, ph + NAV_EXTRA, 28.0], time: "20:49", date: "T2, 26/10",
+                battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
+                leaving: $leaving, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false,
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
+            let cells = nav_cells(450.0, 1.0, ph);
+            let (from, to) = (cells.iter().find(|(p, _)| *p == Page::Music).unwrap().1, cells.iter().find(|(p, _)| *p == Page::Todo).unwrap().1);
+            // The gap between the two cells: dark when the square rests on either, lit when it is passing through.
+            let (gx, gy) = (((from.right + to.left) / 2.0) as usize, ((from.top + from.bottom) / 2.0) as usize);
+            let lit_in_gap = |t: Option<f32>| {
+                let mut renderer = Renderer::new().unwrap();
+                renderer.grab = true;
+                for _ in 0..4 {
+                    renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(t.map(|t| (Page::Music, t, 1)))).unwrap();
+                }
+                let px = &renderer.grabbed[(gy * w as usize + gx) * 4..][..4];
+                px[3] > 0 && px[0].max(px[1]).max(px[2]) > 20
+            };
+            assert!(!lit_in_gap(None), "resting: the square is on its own cell");
+            assert!(!lit_in_gap(Some(0.0)), "just starting: still on the old cell");
+            assert!(lit_in_gap(Some(0.5)), "half way: the square is passing through the gap");
+            assert!(!lit_in_gap(Some(1.0)), "arrived: on the new cell");
+            set_nav_open(false);
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
     fn closed_page_does_not_queue_icons() {
         let mut renderer = Renderer::new().unwrap();
         renderer.prefetch_icon("PuwNotch.ClosedPageTest");

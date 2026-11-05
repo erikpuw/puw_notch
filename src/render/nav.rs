@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// A cell part of the way (`k`, 0..1) from `from` to `to`.
+fn lerp_cell(from: D2D_RECT_F, to: D2D_RECT_F, k: f32) -> D2D_RECT_F {
+    let l = |a: f32, b: f32| a + (b - a) * k;
+    rect(l(from.left, to.left), l(from.top, to.top), l(from.right, to.right), l(from.bottom, to.bottom))
+}
+
 impl Renderer {
     pub(super) fn draw_nav(
         &self,
@@ -64,16 +70,32 @@ impl Renderer {
                 dx += dw + gap;
             }
             if nav_fade > 0.01 {
-                for (p, cell) in nav_cells(cx, s, ph) {
-                    let (on, hot) = (p == v.page, v.hovered == Some(Button::GoPage(p)));
-                    if on || hot {
-                        rt.FillRoundedRectangle(&rounded(cell, 8.0 * s), &self.brush(grey(if on { 0.17 } else { 0.1 }, a * nav_fade))?);
+                let cells = nav_cells(cx, s, ph);
+                // The square behind the page on show glides from the old page's cell to the new one's as the page changes
+                // (like the dots above it), instead of jumping.
+                let cell_of = |page: Page| cells.iter().find(|(p, _)| *p == page).map(|(_, c)| *c);
+                if let Some(to) = cell_of(v.page) {
+                    let from = v.leaving.and_then(|(from, _, _)| cell_of(from)).unwrap_or(to);
+                    rt.FillRoundedRectangle(&rounded(lerp_cell(from, to, arriving), 8.0 * s), &self.brush(grey(0.17, a * nav_fade))?);
+                }
+                for (p, cell) in cells {
+                    let hot = v.hovered == Some(Button::GoPage(p));
+                    // The mouse is on a cell that is not the page on show: a fainter square.
+                    if hot && p != v.page {
+                        rt.FillRoundedRectangle(&rounded(cell, 8.0 * s), &self.brush(grey(0.1, a * nav_fade))?);
                     }
-                    let ink = grey(if on || hot { 1.0 } else { 0.6 }, a * nav_fade);
+                    // The icon brightens as the square arrives under it and dims as it leaves.
+                    let weight = match v.leaving {
+                        _ if p == v.page => arriving,
+                        Some((from, _, _)) if p == from => 1.0 - arriving,
+                        _ => 0.0,
+                    };
+                    let ink = grey(if hot { 1.0 } else { 0.6 + 0.4 * weight }, a * nav_fade);
                     match (weather_empty, p) {
                         (Some((ic, geoms)), Page::Weather) => {
                             let (mx, my) = ((cell.left + cell.right) / 2.0, (cell.top + cell.bottom) / 2.0);
-                            let tint = if on || hot { (1.0, 1.0, 1.0) } else { (0.6, 0.6, 0.6) };
+                            let g = if hot { 1.0 } else { 0.6 + 0.4 * weight };
+                            let tint = (g, g, g);
                             wx_icon(ic, geoms, mx - 8.0 * s, my - 8.0 * s, 16.0 * s, Some((tint, tint)), a * nav_fade, 9.0)?;
                         }
                         _ => text(nav_icon(p), F_ICON, cell, center, ink)?,
