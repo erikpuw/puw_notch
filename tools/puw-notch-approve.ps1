@@ -12,6 +12,20 @@ function Write-Log($text) {
     if ($Log) { Add-Content -Path (Join-Path $env:TEMP 'puw-notch-hook.log') -Value ((Get-Date -Format s) + ' ' + $text) }
 }
 
+# Values were already decoded by ConvertFrom-Json; serializing them again leaks JSON escapes into the banner.
+function Format-ToolDetail($value) {
+    if ($null -eq $value) { return '' }
+    if ($value -is [System.Management.Automation.PSCustomObject]) {
+        return (@($value.PSObject.Properties | ForEach-Object {
+            $_.Name + ': ' + (Format-ToolDetail $_.Value)
+        }) -join '; ')
+    }
+    if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string]) {
+        return '[' + (@($value | ForEach-Object { Format-ToolDetail $_ }) -join ', ') + ']'
+    }
+    return [string]$value
+}
+
 # One request to the notch: its answer line ('allow', 'deny', 'choice:N' or 'ask'), or $null.
 function Ask-Notch($title, $detail, $labels) {
     $detail = ([string]$detail -replace '\s+', ' ').Trim()
@@ -61,7 +75,7 @@ try {
     foreach ($key in 'command', 'file_path', 'url', 'pattern', 'description') {
         if ($request.tool_input.$key) { $detail = [string]$request.tool_input.$key; break }
     }
-    if (-not $detail) { $detail = ($request.tool_input | ConvertTo-Json -Compress -Depth 3) }
+    if (-not $detail) { $detail = Format-ToolDetail $request.tool_input }
     $answer = Ask-Notch $tool $detail @()
     Write-Log "answer: $answer"
     if ($answer -eq 'allow') {
