@@ -62,7 +62,7 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 ![Quick page picker](assets/screenshots/en/page-nav.png)<br>**Quick page picker**: put the mouse on the page dots and they open into a row of icons, click one to jump straight to that page, the lit square gliding from the old page to the new one (they come back as dots when the mouse leaves)
 
-| ![Weather](assets/screenshots/en/page-weather.png)<br>**Weather**: large icon, temperature, the next 5 slots, one line of figures, °C | °F buttons | ![Weather, the sun's path](assets/screenshots/en/page-weather-sun.png)<br>**The sun's path**: press the sun button, a blue arc from sunrise to sunset |
+| ![Weather](assets/screenshots/en/page-weather.png)<br>**Weather**: large icon, temperature, the next 5 slots, one line of figures, °C / °F buttons | ![Weather, the sun's path](assets/screenshots/en/page-weather-sun.png)<br>**The sun's path**: press the sun button, a blue arc from sunrise to sunset |
 |---|---|
 
 **Limits** of Claude, Codex and Antigravity (Claude shows what is used; Codex and Antigravity show what is left, counting down like their own apps). The Codex tab names the plan of the account in use; a free plan counts 30 days:
