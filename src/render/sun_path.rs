@@ -1,5 +1,5 @@
 //! The sun's path on the Weather page: an arc from sunrise to sunset with the sun on it, lit while it is up (a halo that
-//! breathes and blinks softly now and then), a crescent moon on the arc at night. The arc is blue so it matches neither
+//! breathes and blinks softly now and then), a crescent moon with the same halo on the arc at night. The arc is blue so it matches neither
 //! the sun nor the moon.
 
 use super::*;
@@ -57,6 +57,17 @@ impl Renderer {
             unsafe { rt.DrawLine(Vector2 { X: from.0, Y: from.1 }, Vector2 { X: to.0, Y: to.1 }, &self.brush(c)?, w, &self.round) };
             Ok(())
         };
+        // A filled circle of `c` round `at`.
+        let disc = |at: (f32, f32), c: (f32, f32, f32), r: f32, alpha: f32| -> Result<()> {
+            unsafe { rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: at.0, Y: at.1 }, radiusX: r, radiusY: r }, &self.brush(color(c.0, c.1, c.2, alpha))?) };
+            Ok(())
+        };
+        // The halo round the sun or the moon: it breathes, and now and then it blinks, swelling and brightening softly (no rays).
+        let halo = |at: (f32, f32), c: (f32, f32, f32), strength: f32| -> Result<()> {
+            let breath = 0.5 + 0.5 * (phase * 2.4).sin();
+            let g = blink(phase);
+            disc(at, c, (11.0 + 2.5 * breath + 3.0 * g) * s, (0.12 + 0.06 * breath + 0.12 * g) * strength)
+        };
         unsafe {
             // The ground, then the whole path dim.
             rt.FillRectangle(&rect(x0 - 4.0 * s, yb, x1 + 4.0 * s, yb + 1.0 * s), &self.brush(grey(0.14, a))?);
@@ -83,17 +94,10 @@ impl Renderer {
                         }
                     }
                     // The sun: a warm core in a halo that breathes and now and then blinks.
-                    let (sx, sy) = pt(shown);
-                    let disc = |r: f32, alpha: f32| -> Result<()> {
-                        rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: sx, Y: sy }, radiusX: r, radiusY: r }, &self.brush(color(SUN.0, SUN.1, SUN.2, alpha * a))?);
-                        Ok(())
-                    };
-                    let breath = 0.5 + 0.5 * (phase * 2.4).sin();
-                    // Now and then the halo blinks: it swells and brightens softly (no rays), then settles.
-                    let g = blink(phase);
-                    disc((11.0 + 2.5 * breath + 3.0 * g) * s, 0.12 + 0.06 * breath + 0.12 * g)?;
-                    disc(7.5 * s, 0.28)?;
-                    disc(4.2 * s, 1.0)?;
+                    let at = pt(shown);
+                    halo(at, SUN, a)?;
+                    disc(at, SUN, 7.5 * s, 0.28 * a)?;
+                    disc(at, SUN, 4.2 * s, a)?;
                     let left_min = sun.daylight_left(minute_of_day);
                     let words = match (left_min / 60, left_min % 60, crate::i18n::english()) {
                         (0, m, false) => format!("Nắng còn {m} phút"),
@@ -106,9 +110,12 @@ impl Renderer {
                 pos => {
                     // Night: the path is dim, a crescent moon rides its top and the next sunrise (or the sunset that was) is told.
                     if let Some((ic, geoms)) = moon {
-                        // A crescent (the moon's line icon) riding the top of the dim path, large enough to read at a glance.
-                        let size = 22.0 * s;
-                        wx_icon(ic, geoms, mid - size / 2.0, (BASELINE_Y - ARC_H + 3.0) * s - size / 2.0, size, Some((MOON, MOON)), a * ease_out(age / 0.6), 9.0)?;
+                        // A crescent (the moon's line icon) riding the top of the dim path, about as big as the sun with its
+                        // halo, and with the same halo breathing and blinking round it (in the moon's own pale blue).
+                        let (size, shown) = (16.0 * s, a * ease_out(age / 0.6));
+                        let at = (mid, (BASELINE_Y - ARC_H + 3.0) * s);
+                        halo(at, MOON, shown * 0.8)?;
+                        wx_icon(ic, geoms, at.0 - size / 2.0, at.1 - size / 2.0, size, Some((MOON, MOON)), shown, 9.0)?;
                     }
                     let words = match (pos, crate::i18n::english()) {
                         (weather::SunPos::Dawn, false) => format!("Mặt trời mọc lúc {}", health::hhmm(sun.rise as u32)),

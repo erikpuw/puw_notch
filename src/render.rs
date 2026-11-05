@@ -2180,8 +2180,8 @@ impl Renderer {
             // Icon completion posts WM_ICONS; waiting for I/O never keeps animation alive.
             // The Weather page's icon moves for a moment when the panel or the page opens.
             // The Weather page's icon moves for a moment when the panel or the page opens; the sun path keeps the frames
-            // coming while the sun is up (its halo breathes and it glints), and for its walk when it opens.
-            let sun_moving = v.sun_view && v.weather.sun.is_some_and(|sun| v.page_age < 1.5 || matches!(sun.pos(v.health.minute_of_day), weather::SunPos::Day(_)));
+            // coming while it is open (the halo of the sun, or of the moon at night, breathes and blinks).
+            let sun_moving = v.sun_view && v.weather.sun.is_some();
             let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && (v.page_age < anim::ICON_MOTION_S || sun_moving);
             Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving)
         }
