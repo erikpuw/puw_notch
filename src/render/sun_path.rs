@@ -1,5 +1,5 @@
 //! The sun's path on the Weather page: an arc from sunrise to sunset with the sun on it, lit while it is up (a halo that
-//! breathes and a flare that glints now and then), a moon under the arc at night. The arc is blue so it matches neither
+//! breathes and blinks softly now and then), a crescent moon on the arc at night. The arc is blue so it matches neither
 //! the sun nor the moon.
 
 use super::*;
@@ -13,9 +13,9 @@ const SUN: (f32, f32, f32) = (1.0, 0.82, 0.3);
 const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
 /// Seconds the sun takes to walk from sunrise to where it is now when the view opens.
 const WALK_S: f32 = 1.4;
-/// A flare glints every this many seconds and lasts `GLINT_S` of them.
-const GLINT_EVERY_S: f32 = 3.2;
-const GLINT_S: f32 = 0.6;
+/// The halo blinks every this many seconds and the blink lasts `BLINK_S` of them.
+const BLINK_EVERY_S: f32 = 3.2;
+const BLINK_S: f32 = 0.6;
 /// How many straight pieces the arc is drawn with.
 const ARC_STEPS: usize = 64;
 
@@ -26,10 +26,10 @@ fn arc_point(t: f32, x0: f32, x1: f32, baseline: f32, height: f32) -> (f32, f32)
     (u * u * x0 + 2.0 * u * t * cx + t * t * x1, u * u * baseline + 2.0 * u * t * cy + t * t * baseline)
 }
 
-/// How bright the flare is `phase` seconds in: 0 most of the time, a swell and fade over `GLINT_S` once per `GLINT_EVERY_S`.
-fn glint(phase: f32) -> f32 {
-    let k = phase.rem_euclid(GLINT_EVERY_S);
-    if k < GLINT_S { (std::f32::consts::PI * k / GLINT_S).sin() } else { 0.0 }
+/// How strong the halo's blink is `phase` seconds in: 0 most of the time, a swell and fade over `BLINK_S` once per `BLINK_EVERY_S`.
+fn blink(phase: f32) -> f32 {
+    let k = phase.rem_euclid(BLINK_EVERY_S);
+    if k < BLINK_S { (std::f32::consts::PI * k / BLINK_S).sin() } else { 0.0 }
 }
 
 impl Renderer {
@@ -82,24 +82,18 @@ impl Renderer {
                             line(pt(from), pt(to), lit, 2.5 * s)?;
                         }
                     }
-                    // The sun: a halo that breathes round a warm core, and a flare that glints now and then.
+                    // The sun: a warm core in a halo that breathes and now and then blinks.
                     let (sx, sy) = pt(shown);
                     let disc = |r: f32, alpha: f32| -> Result<()> {
                         rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: sx, Y: sy }, radiusX: r, radiusY: r }, &self.brush(color(SUN.0, SUN.1, SUN.2, alpha * a))?);
                         Ok(())
                     };
                     let breath = 0.5 + 0.5 * (phase * 2.4).sin();
-                    disc((11.0 + 2.5 * breath) * s, 0.12 + 0.06 * breath)?;
+                    // Now and then the halo blinks: it swells and brightens softly (no rays), then settles.
+                    let g = blink(phase);
+                    disc((11.0 + 2.5 * breath + 3.0 * g) * s, 0.12 + 0.06 * breath + 0.12 * g)?;
                     disc(7.5 * s, 0.28)?;
                     disc(4.2 * s, 1.0)?;
-                    let g = glint(phase);
-                    if g > 0.01 {
-                        let ray = |dx: f32, dy: f32, len: f32| line((sx + dx * 5.0 * s, sy + dy * 5.0 * s), (sx + dx * (5.0 + len * g) * s, sy + dy * (5.0 + len * g) * s), color(1.0, 0.95, 0.75, 0.85 * g * a), 1.4 * s);
-                        let d = std::f32::consts::FRAC_1_SQRT_2;
-                        for (dx, dy, len) in [(1.0, 0.0, 9.0), (-1.0, 0.0, 9.0), (0.0, 1.0, 9.0), (0.0, -1.0, 9.0), (d, d, 5.0), (-d, d, 5.0), (d, -d, 5.0), (-d, -d, 5.0)] {
-                            ray(dx, dy, len)?;
-                        }
-                    }
                     let left_min = sun.daylight_left(minute_of_day);
                     let words = match (left_min / 60, left_min % 60, crate::i18n::english()) {
                         (0, m, false) => format!("Nắng còn {m} phút"),
@@ -110,10 +104,11 @@ impl Renderer {
                     text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 25.0) * s, mid + 80.0 * s, (BASELINE_Y - 5.0) * s), center, grey(0.7, a))?;
                 }
                 pos => {
-                    // Night: the path is dim, a moon rests under the arc and the next sunrise is told.
+                    // Night: the path is dim, a crescent moon rides its top and the next sunrise (or the sunset that was) is told.
                     if let Some((ic, geoms)) = moon {
-                        let size = 20.0 * s;
-                        wx_icon(ic, geoms, mid - size / 2.0, (BASELINE_Y - 44.0) * s, size, Some((MOON, MOON)), a * ease_out(age / 0.6), 9.0)?;
+                        // A crescent (the moon's line icon) riding the top of the dim path, large enough to read at a glance.
+                        let size = 22.0 * s;
+                        wx_icon(ic, geoms, mid - size / 2.0, (BASELINE_Y - ARC_H + 3.0) * s - size / 2.0, size, Some((MOON, MOON)), a * ease_out(age / 0.6), 9.0)?;
                     }
                     let words = match (pos, crate::i18n::english()) {
                         (weather::SunPos::Dawn, false) => format!("Mặt trời mọc lúc {}", health::hhmm(sun.rise as u32)),
@@ -145,11 +140,11 @@ mod tests {
     }
 
     #[test]
-    fn the_flare_glints_briefly_and_not_in_between() {
-        assert_eq!(glint(0.0), 0.0);
-        assert!((glint(GLINT_S / 2.0) - 1.0).abs() < 1e-5, "full in the middle of the glint");
-        assert_eq!(glint(GLINT_S + 0.01), 0.0);
-        assert_eq!(glint(GLINT_EVERY_S - 0.01), 0.0);
-        assert!(glint(GLINT_EVERY_S + GLINT_S / 2.0) > 0.99, "and again next time");
+    fn the_halo_blinks_briefly_and_not_in_between() {
+        assert_eq!(blink(0.0), 0.0);
+        assert!((blink(BLINK_S / 2.0) - 1.0).abs() < 1e-5, "full in the middle of the blink");
+        assert_eq!(blink(BLINK_S + 0.01), 0.0);
+        assert_eq!(blink(BLINK_EVERY_S - 0.01), 0.0);
+        assert!(blink(BLINK_EVERY_S + BLINK_S / 2.0) > 0.99, "and again next time");
     }
 }
