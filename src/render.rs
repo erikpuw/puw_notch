@@ -442,14 +442,26 @@ fn nav_icon(page: Page) -> &'static str {
     }
 }
 
-/// The cells of the row (window px) for a panel `cx` is the middle of: 40 px apart, centred, just
+/// The row of page icons: its cells are at most this far apart (logical px) with `NAV_GAP` between neighbours. The row is
+/// at most `NAV_ROW_W` wide (the panel's 480 less its 44 px margins), so with many pages the cells close up instead of
+/// running into the arrows or the credit at the corner.
+const NAV_PITCH: f32 = 34.0;
+const NAV_GAP: f32 = 4.0;
+const NAV_ROW_W: f32 = 392.0;
+
+fn nav_pitch(pages: usize) -> f32 {
+    NAV_PITCH.min(NAV_ROW_W / pages.max(1) as f32)
+}
+
+/// The cells of the row (window px) for a panel `cx` is the middle of: `nav_pitch` apart, centred, just
 /// below the panel's resting height `ph`.
 fn nav_cells(cx: f32, scale: f32, ph: f32) -> Vec<(Page, D2D_RECT_F)> {
     let shown: Vec<Page> = PAGES.into_iter().filter(|p| page_shown(*p)).collect();
-    let n = shown.len() as f32;
+    let (n, pitch) = (shown.len() as f32, nav_pitch(shown.len()));
+    let half = (pitch - NAV_GAP) / 2.0;
     shown.into_iter().enumerate().map(|(i, p)| {
-        let x = cx + (i as f32 - (n - 1.0) / 2.0) * 40.0 * scale;
-        (p, rect(x - 17.0 * scale, dots_y(ph) * scale, x + 17.0 * scale, (dots_y(ph) + 22.0) * scale))
+        let x = cx + (i as f32 - (n - 1.0) / 2.0) * pitch * scale;
+        (p, rect(x - half * scale, dots_y(ph) * scale, x + half * scale, (dots_y(ph) + 22.0) * scale))
     }).collect()
 }
 
@@ -3026,6 +3038,17 @@ mod tests {
             }
             DestroyWindow(hwnd).unwrap();
         }
+    }
+
+    #[test]
+    fn the_page_icons_close_up_when_there_are_many_so_the_row_always_fits() {
+        assert_eq!(nav_pitch(7), NAV_PITCH, "as many pages as today: the usual spacing");
+        for pages in [1, 7, 11, 14, 20, 30] {
+            assert!(nav_pitch(pages) * pages as f32 <= NAV_ROW_W + 0.01, "{pages} pages: the row is {} wide", nav_pitch(pages) * pages as f32);
+        }
+        assert!(nav_pitch(14) < nav_pitch(7), "more pages, closer");
+        let cells = nav_cells(240.0, 1.0, 186.0);
+        assert!(cells.windows(2).all(|c| c[1].1.left - c[0].1.right >= NAV_GAP - 0.01), "neighbouring cells never touch");
     }
 
     #[test]
