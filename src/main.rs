@@ -730,7 +730,7 @@ impl App {
         if self.conn_list.as_mut().is_some_and(|l| l.expire(now)) {
             let t = self.conn_list.as_ref().map(|l| (list_toast(l), l.life_ms(now)));
             if let Some((t, ms)) = t {
-                self.show_connection_list(t, ms);
+                self.show_connection_list(t, ms, false);
             }
         }
         let current = self.activity.poll(Instant::now(), self.hwnd.0 as isize);
@@ -802,11 +802,13 @@ impl App {
 
     /// The checklist banner: shown at once, and while it shows a new line makes it taller in place
     /// (the dot of the new line pops in) and keeps it on for another full time.
-    fn show_connection_list(&mut self, t: Toast, ms: u32) {
+    fn show_connection_list(&mut self, t: Toast, ms: u32, replaces: bool) {
         if self.approval.is_some() {
             return;
         }
-        if self.notch.mode == Mode::Alert && self.banner.as_ref().is_some_and(|b| b.app == t.app && b.choices.is_empty()) {
+        // `replaces`: the list that was on show is folded into this one, so its banner turns into this
+        // one in place (a second banner would be confusing).
+        if self.notch.mode == Mode::Alert && self.banner.as_ref().is_some_and(|b| (replaces || b.app == t.app) && b.choices.is_empty()) {
             let width = if t.badge.is_none() { self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale) } else { 0.0 };
             self.notch.set_alert_width(width);
             self.notch.set_alert_rows(t.rows.len() as u8);
@@ -1650,7 +1652,7 @@ impl App {
                             if self.conn_list.as_mut().is_some_and(|l| device_battery(l, name, *percent, now)) {
                                 let t = self.conn_list.as_ref().map(|l| (list_toast(l), l.life_ms(now)));
                                 if let Some((t, ms)) = t {
-                                    self.show_connection_list(t, ms);
+                                    self.show_connection_list(t, ms, false);
                                 }
                             } else {
                                 // Not on show (a battery that just ran low): a banner of its own.
@@ -1662,9 +1664,10 @@ impl App {
                             // Asked before the list takes the event: a VPN that went down with the network stays expected.
                             let expected = vpn_expected(self.vpn_was_up, &e, self.conn_list.as_ref(), now);
                             let devices = connectivity::expected_devices();
+                            let replaces = self.conn_list.as_ref().is_some_and(|l| l.fresh(now));
                             let list = conn_list_add(self.conn_list.take(), &e, now, Expect { vpn: self.vpn_was_up, devices: &devices });
                             self.vpn_was_up = expected;
-                            self.show_connection_list(list_toast(&list), list.life_ms(now));
+                            self.show_connection_list(list_toast(&list), list.life_ms(now), replaces);
                             self.conn_list = Some(list);
                         }
                     }
@@ -1897,7 +1900,9 @@ impl ConnList {
     /// Bluetooth came on (or airplane mode went off): the devices that were connected are listed, each
     /// waiting (a grey line with a spinning ring) until it connects.
     fn start_devices(&mut self, devices: &[(String, connectivity::DeviceKind)], now: Instant) {
-        for (name, kind) in devices.iter().take(MAX_WAIT_DEVICES) {
+        // Not those already on the list (they connected before the list came).
+        let missing: Vec<_> = devices.iter().filter(|(name, _)| !self.rows.iter().any(|r| r.icon.is_some() && r.text == *name)).take(MAX_WAIT_DEVICES).collect();
+        for (name, kind) in missing {
             let mut row = device_row(name, render::device_icon(*kind), None, now);
             row.state = RowState::Wait;
             self.rows.push(row);
@@ -1909,8 +1914,14 @@ impl ConnList {
 
     /// Starts the steps to wait for (see `net`).
     fn start_waiting(&mut self, vpn_expected: bool, now: Instant) {
-        self.net = Some(Row::step(tr("Kết nối mạng", "Network connection").to_string(), RowState::Wait, now));
-        self.vpn = vpn_expected.then(|| Row::step("VPN".to_string(), RowState::Todo, now));
+        if self.net.is_none() {
+            self.net = Some(Row::step(tr("Kết nối mạng", "Network connection").to_string(), RowState::Wait, now));
+        }
+        // Next after the connection: waited for at once when that has already come.
+        if self.vpn.is_none() && vpn_expected {
+            let state = if self.net.as_ref().is_some_and(|n| n.state == RowState::Done) { RowState::Wait } else { RowState::Todo };
+            self.vpn = Some(Row::step("VPN".to_string(), state, now));
+        }
         self.deadline = now + Duration::from_millis(WAIT_MAX_MS as u64);
     }
 
@@ -1988,7 +1999,7 @@ impl ConnList {
     /// Devices that connect while it shows are lines in it: after "Bluetooth on", after airplane mode, or
     /// in a list of devices.
     fn takes_devices(&self) -> bool {
-        self.devices_head || matches!(self.head.icon, Some(render::ICON_BT | render::ICON_AIRPLANE))
+        self.devices_head || self.net.is_some() || matches!(self.head.icon, Some(render::ICON_BT | render::ICON_AIRPLANE))
     }
 }
 
@@ -2035,6 +2046,7 @@ fn device_connected(fresh: Option<ConnList>, e: &Event, now: Instant) -> ConnLis
                 let first = device_row(&l.head.title, l.head.icon.unwrap_or(render::ICON_BT), l.head.badge.clone(), l.at);
                 l.rows = vec![first, device_row(name, render::device_icon(*kind), value, now)];
                 (l.single, l.devices_head, l.devices) = (false, true, 2);
+                l.head_row = String::new();
                 l.head = status_toast("Bluetooth", devices_title(2), "", None, render::ICON_BT);
             }
             l.at = now;
@@ -2112,7 +2124,7 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
         return device_connected(fresh, e, now);
     }
     match fresh {
-        Some(mut l) if !matches!(e, Event::Airplane(_)) => {
+        Some(mut l) if !l.single && !matches!(e, Event::Airplane(_)) => {
             if !l.step_event(e, now) {
                 let text = row_text(e);
                 if text != l.head_row && !l.rows.iter().any(|r| r.text == text) && l.rows.len() < MAX_ROWS {
@@ -2123,13 +2135,24 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
             l
         }
         prev => {
-            // Windows can turn the radios off before it flips the airplane switch: what was told stays,
-            // as lines under the switch.
-            let rows = prev
-                .filter(|l| l.head.icon != Some(render::ICON_AIRPLANE) && matches!(e, Event::Airplane(_)))
-                .map(|l| std::iter::once(Row::line(l.head_row, l.at)).chain(l.rows).collect())
-                .unwrap_or_default();
+            // Events come in any order (Windows can turn radios off before it flips the airplane switch,
+            // and Bluetooth connects its devices at once): what was on show is not lost, nor shown apart.
+            // Its head becomes a line under the new one, its lines and steps stay as they are.
+            let old = prev.filter(|l| l.head.icon != Some(render::ICON_AIRPLANE) && (matches!(e, Event::Airplane(_)) || l.single));
+            let (rows, net, vpn) = match old {
+                Some(old) => {
+                    let mut rows = old.rows;
+                    if old.single {
+                        rows.insert(0, device_row(&old.head.title, old.head.icon.unwrap_or(render::ICON_BT), old.head.badge.clone(), old.at));
+                    } else if !old.devices_head && !old.head_row.is_empty() {
+                        rows.insert(0, Row::line(old.head_row, old.at));
+                    }
+                    (rows, old.net, old.vpn)
+                }
+                None => (Vec::new(), None, None),
+            };
             let mut l = ConnList::new(connection_toast(e.clone()), row_text(e), rows, now);
+            (l.net, l.vpn) = (net, vpn);
             if matches!(e, Event::Airplane(false) | Event::Radio(RadioType::Wifi, true)) {
                 l.start_waiting(expect.vpn, now);
             }
@@ -2593,6 +2616,50 @@ mod tests {
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100), Expect { vpn: true, devices: &known });
         let order: Vec<_> = l.rows_shown().into_iter().map(|r| r.icon.is_some()).collect();
         assert_eq!(order, [false, false, false, true, true, true], "Wi-Fi, connection, VPN, then three devices");
+    }
+
+    #[test]
+    fn airplane_off_is_one_list_whatever_order_the_events_come_in() {
+        use connectivity::DeviceKind::{Gamepad, Headphones, Keyboard, Mouse};
+        let t0 = Instant::now();
+        let known = vec![("Tai nghe".to_string(), Headphones), ("Chuột".to_string(), Mouse), ("Bàn phím".to_string(), Keyboard), ("Tay cầm".to_string(), Gamepad)];
+        let expect = Expect { vpn: true, devices: &known };
+        let dev = |n: &str, k| Event::Device { name: n.into(), kind: k, up: true, battery: Some(70) };
+        let online = Event::Net(Net::Online { name: "W".into(), wifi: true });
+        let wifi = || Event::Radio(RadioType::Wifi, true);
+        let bt = || Event::Radio(RadioType::Bluetooth, true);
+        let orders: Vec<Vec<Event>> = vec![
+            // everything in one go, in order
+            vec![Event::Airplane(false), wifi(), bt(), dev("Tai nghe", Headphones), dev("Chuột", Mouse), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), online.clone(), Event::Vpn(true)],
+            // the devices before the radios, the radios before the switch
+            vec![dev("Tai nghe", Headphones), dev("Chuột", Mouse), bt(), wifi(), Event::Airplane(false), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), online.clone(), Event::Vpn(true)],
+            // Bluetooth, one device, then the switch
+            vec![bt(), dev("Tai nghe", Headphones), Event::Airplane(false), dev("Chuột", Mouse), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), wifi(), online.clone(), Event::Vpn(true)],
+            // devices alone, then the switch
+            vec![dev("Tai nghe", Headphones), dev("Chuột", Mouse), Event::Airplane(false), wifi(), bt(), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), online.clone(), Event::Vpn(true)],
+            // Wi-Fi, devices, the switch
+            vec![wifi(), dev("Tai nghe", Headphones), dev("Chuột", Mouse), Event::Airplane(false), bt(), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), online, Event::Vpn(true)],
+        ];
+        for (n, events) in orders.iter().enumerate() {
+            let mut l: Option<ConnList> = None;
+            for (i, e) in events.iter().enumerate() {
+                l = Some(conn_list_add(l.take(), e, t0 + Duration::from_millis(100 * i as u64), expect));
+            }
+            let l = l.unwrap();
+            let rows = l.rows_shown();
+            let texts: Vec<_> = rows.iter().map(|r| (r.icon.is_some(), r.text.clone())).collect();
+            // One list, headed by the switch; no line twice; the devices once each; all of it done.
+            assert_eq!(l.head.icon, Some(render::ICON_AIRPLANE), "order {n}");
+            let mut unique = texts.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(unique.len(), texts.len(), "order {n}: a line twice: {texts:?}");
+            assert_eq!(rows.iter().filter(|r| r.icon.is_some()).count(), 4, "order {n}: {texts:?}");
+            assert!(rows.iter().all(|r| r.state == RowState::Done) && !l.pending(), "order {n}: {rows:?}");
+            // the radios, the connection and the VPN first, the devices last
+            let first_device = rows.iter().position(|r| r.icon.is_some()).unwrap();
+            assert!(rows[first_device..].iter().all(|r| r.icon.is_some()), "order {n}: {texts:?}");
+        }
     }
 
     #[test]
