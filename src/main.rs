@@ -67,6 +67,9 @@ const T_ALERT: usize = 4;
 const T_CARET: usize = 6;
 /// The foreground window changed or moved: look again once it has had a moment to settle.
 const T_SETTLE: usize = 7;
+/// The network events of one change (Wi-Fi off, then the VPN behind it) arrive a poll apart: wait for the rest.
+const T_CONN: usize = 8;
+const CONN_MS: u32 = 700;
 const SETTLE_MS: u32 = 120;
 /// Page switch morph length.
 /// Notifications kept on the Notifications page.
@@ -188,6 +191,8 @@ struct App {
     approval: Option<approve::Pending>,
     usage_watch: usage::Watch,
     usage_alerts: Vec<usage::Alert>,
+    /// Network events waiting for `T_CONN`, to be shown as one banner.
+    conn_events: Vec<connectivity::Event>,
     usage_tab: usize,
     usage_tab_chosen: bool,
     track: Option<music::Track>,
@@ -1374,6 +1379,12 @@ impl App {
                     self.caret = !self.caret;
                     self.redraw();
                 }
+                T_CONN => {
+                    unsafe { let _ = KillTimer(Some(self.hwnd), T_CONN); }
+                    if let Some(t) = connection_banner(std::mem::take(&mut self.conn_events)) {
+                        self.show_banner(t, ALERT_MS);
+                    }
+                }
                 T_ALERT => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_ALERT); }
                     self.notch.on_alert_end();
@@ -1589,9 +1600,8 @@ impl App {
             WM_CONN => {
                 // The network may just have come back: the weather catches up (a recent one is kept).
                 self.weather.refresh();
-                for e in connectivity::take_events() {
-                    self.show_banner(connection_toast(e), ALERT_MS);
-                }
+                self.conn_events.extend(connectivity::take_events());
+                unsafe { SetTimer(Some(self.hwnd), T_CONN, CONN_MS, None) };
             }
             // From the limits worker: a reading changed.
             approve::WM_APPROVE => {
@@ -1778,6 +1788,30 @@ fn open_target(target: &str) {
             None => ShellExecuteW(None, w!("open"), &windows::core::HSTRING::from(target), None, None, SW_SHOWNORMAL),
         };
     }
+}
+
+/// One banner for the events that came together: the cause first (airplane, a radio, the network, a
+/// device), the next one on its second line. A banner shows one story, and a newer one replaces the
+/// older at once, so what was last in line used to hide the rest.
+/// ponytail: two lines; a third event is not shown.
+fn connection_banner(mut events: Vec<Event>) -> Option<Toast> {
+    let rank = |e: &Event| match e {
+        Event::Airplane(_) => 0,
+        Event::Radio(..) => 1,
+        Event::Net(Net::Offline | Net::Limited { .. }) => 2,
+        Event::Net(Net::Online { .. }) => 3,
+        Event::Device { .. } | Event::DeviceBattery { .. } => 4,
+    };
+    events.sort_by_key(rank);
+    let mut toasts = events.into_iter().map(connection_toast);
+    let mut first = toasts.next()?;
+    // A banner with a body or a big figure of its own (a device and its battery) has no room for a second line.
+    if first.body.is_empty() && first.badge.is_none() {
+        if let Some(next) = toasts.next() {
+            first.body = if next.body.is_empty() { next.title } else { format!("{} · {}", next.title, next.body) };
+        }
+    }
+    Some(first)
 }
 
 /// Banner text for a connectivity change.
@@ -1980,6 +2014,7 @@ fn run() -> windows::core::Result<()> {
             approval: None,
             usage_watch: usage::Watch::default(),
             usage_alerts: Vec::new(),
+            conn_events: Vec::new(),
             usage_tab: 0,
             usage_tab_chosen: false,
             track: None,
@@ -2086,6 +2121,26 @@ mod tests {
         (a.result, a.more) = (None, 2);
         assert!(activity_toast(&a, false).title.ends_with("· +2"));
         assert!(!activity_toast(&a, true).title.contains('+'), "an ending counts nothing");
+    }
+
+    #[test]
+    fn events_that_come_together_make_one_banner_with_the_cause_first() {
+        let vpn = Event::Net(Net::Limited { name: "MyVPN".into(), wifi: false });
+        let wifi_off = Event::Radio(RadioType::Wifi, false);
+        // Wi-Fi off, then the VPN behind it loses its internet: Wi-Fi is the story, the VPN its second line.
+        for events in [vec![wifi_off.clone(), vpn.clone()], vec![vpn.clone(), wifi_off.clone()]] {
+            let t = connection_banner(events).unwrap();
+            assert_eq!((t.icon, t.title.as_str()), (Some(render::ICON_WIFI_OFF), format!("{} Wi-Fi", tr("Đã tắt", "Turned off")).as_str()));
+            assert!(t.body.contains("MyVPN") && t.body.contains(tr("Không có internet", "No internet")), "{}", t.body);
+        }
+        // Airplane mode outranks everything that came with it.
+        let t = connection_banner(vec![Event::Net(Net::Offline), wifi_off.clone(), Event::Airplane(true)]).unwrap();
+        assert_eq!(t.icon, Some(render::ICON_AIRPLANE));
+        // A device and its battery have a body and a figure of their own: nothing is merged into them.
+        let device = Event::Device { name: "Loa".into(), kind: connectivity::DeviceKind::Speaker, up: true, battery: Some(80) };
+        let t = connection_banner(vec![device.clone(), device]).unwrap();
+        assert_eq!((t.body.as_str(), t.badge.as_deref()), (tr("Đã kết nối", "Connected"), Some("80%")));
+        assert!(connection_banner(Vec::new()).is_none());
     }
 
     #[test]
