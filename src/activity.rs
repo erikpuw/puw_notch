@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
 use std::time::{Duration, Instant, SystemTime};
 
-use windows::core::{BOOL, Interface};
+use windows::core::{BOOL, HSTRING, Interface};
+use windows::Data::Json::JsonObject;
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, IUIAutomation2, TreeScope_Descendants};
@@ -108,6 +109,8 @@ pub struct Monitor {
     download_at: Option<Instant>,
     download_changed_at: Option<Instant>,
     download_speed: f64,
+    download_dirs: Vec<PathBuf>,
+    download_dirs_at: Option<Instant>,
     build_exe: Option<String>,
     build_since: Option<Instant>,
     last: Option<LiveActivity>,
@@ -145,7 +148,12 @@ impl Monitor {
     fn poll_download(&mut self, now: Instant) -> Option<LiveActivity> {
         let selected = self.download_file.as_deref().zip(self.download_changed_at)
             .map(|(path, changed)| (path, self.download_size, changed));
-        let found = find_download(&downloads_dir()?, selected, now, SystemTime::now());
+        // Browser settings change rarely; reading every profile's Preferences each tick is wasted work.
+        if self.download_dirs_at.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(30)) {
+            self.download_dirs = download_dirs();
+            self.download_dirs_at = Some(now);
+        }
+        let found = find_download(&self.download_dirs, selected, now, SystemTime::now());
         let Some((path, size)) = found else {
             self.download_file = None;
             self.download_size = 0;
@@ -309,11 +317,12 @@ pub fn extract_percent(s: &str) -> Option<u32> {
 }
 
 /// Keep the selected transfer stable; ignore abandoned partials that have not changed recently.
-fn find_download(dir: &Path, current: Option<(&Path, u64, Instant)>, now: Instant, wall_now: SystemTime) -> Option<(PathBuf, u64)> {
-    std::fs::read_dir(dir).ok()?.flatten().filter_map(|entry| {
+fn find_download(dirs: &[PathBuf], current: Option<(&Path, u64, Instant)>, now: Instant, wall_now: SystemTime) -> Option<(PathBuf, u64)> {
+    dirs.iter().filter_map(|dir| std::fs::read_dir(dir).ok()).flatten().flatten().filter_map(|entry| {
         let path = entry.path();
         if !is_download_part(&path) { return None; }
-        let metadata = entry.metadata().ok()?;
+        // The directory entry's size and time lag behind a file still open for writing; ask the file.
+        let metadata = std::fs::metadata(&path).ok()?;
         if !metadata.is_file() { return None; }
         let modified = metadata.modified().ok()?;
         // Size growth remains authoritative even when Windows delays updating LastWriteTime.
@@ -346,6 +355,32 @@ fn downloads_dir() -> Option<PathBuf> {
         }
     }
     std::env::var_os("USERPROFILE").map(|u| PathBuf::from(u).join("Downloads"))
+}
+
+/// Chromium browsers keep their own download folder (Edge set to E:\Download saves nothing in Downloads).
+const BROWSERS: &[&str] = &[r"Microsoft\Edge\User Data", r"Google\Chrome\User Data", r"BraveSoftware\Brave-Browser\User Data"];
+
+/// Windows Downloads plus every Chromium profile's download folder, without duplicates.
+fn download_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = downloads_dir().into_iter().collect();
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let profiles = local.iter().flat_map(|l| BROWSERS.iter().map(move |b| l.join(b)))
+        .filter_map(|root| std::fs::read_dir(root).ok()).flatten().flatten();
+    for profile in profiles {
+        let Ok(text) = std::fs::read_to_string(profile.path().join("Preferences")) else { continue };
+        if let Some(dir) = chromium_download_dir(&text) {
+            if !dirs.iter().any(|d| d.as_os_str().eq_ignore_ascii_case(dir.as_os_str())) {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs
+}
+
+fn chromium_download_dir(preferences: &str) -> Option<PathBuf> {
+    let root = JsonObject::Parse(&HSTRING::from(preferences)).ok()?;
+    let dir = root.GetNamedObject(&HSTRING::from("download")).ok()?.GetNamedString(&HSTRING::from("default_directory")).ok()?;
+    (!dir.is_empty()).then(|| PathBuf::from(dir.to_string()))
 }
 
 /// Build tools that count; node, python and the like run all day without building anything.
@@ -484,13 +519,14 @@ mod tests {
             }
         }
         let _cleanup = Cleanup(dir.clone());
+        let dirs = [dir.clone()];
         let old = dir.join("old.part");
         std::fs::write(&old, b"old").unwrap();
         std::fs::File::options().write(true).open(&old).unwrap()
             .set_modified(now - Duration::from_secs(60)).unwrap();
         std::fs::create_dir(dir.join("directory.part")).unwrap();
-        assert!(find_download(&dir, None, tick, now).is_none());
-        assert!(find_download(&dir, Some((&old, 3, old_tick)), tick, now).is_none(), "an abandoned selection must expire");
+        assert!(find_download(&dirs, None, tick, now).is_none());
+        assert!(find_download(&dirs, Some((&old, 3, old_tick)), tick, now).is_none(), "an abandoned selection must expire");
         let first = dir.join("first.crdownload");
         std::fs::write(&first, b"12345").unwrap();
         std::fs::File::options().write(true).open(&first).unwrap()
@@ -498,10 +534,10 @@ mod tests {
         let second = dir.join("second.part");
         std::fs::write(&second, b"1234567890").unwrap();
         std::fs::File::options().write(true).open(&second).unwrap().set_modified(now).unwrap();
-        assert_eq!(find_download(&dir, None, tick, now), Some((second.clone(), 10)));
-        assert_eq!(find_download(&dir, Some((&first, 5, tick)), tick, now), Some((first, 5)));
-        assert_eq!(find_download(&dir, Some((&old, 3, old_tick)), tick, now), Some((second, 10)));
-        assert_eq!(find_download(&dir, Some((&old, 2, old_tick)), tick, now), Some((old, 3)),
+        assert_eq!(find_download(&dirs, None, tick, now), Some((second.clone(), 10)));
+        assert_eq!(find_download(&dirs, Some((&first, 5, tick)), tick, now), Some((first, 5)));
+        assert_eq!(find_download(&dirs, Some((&old, 3, old_tick)), tick, now), Some((second, 10)));
+        assert_eq!(find_download(&dirs, Some((&old, 2, old_tick)), tick, now), Some((old, 3)),
             "a growing download stays active even if LastWriteTime is old");
     }
 
@@ -509,7 +545,7 @@ mod tests {
     #[ignore = "read-only probe of live Explorer windows and the configured Downloads folder"]
     fn live_activity_probe() {
         let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        println!("Downloads: {:?}", downloads_dir());
+        println!("Download folders: {:?}", download_dirs());
         println!("Explorer: {:?}", poll_explorer());
         if com.is_ok() { unsafe { CoUninitialize(); } }
     }
@@ -528,6 +564,14 @@ mod tests {
         assert_eq!(parse_explorer_title("File conflict"), None);
         let a = parse_explorer_title("37% complete").unwrap();
         assert_eq!((a.kind, a.progress, a.detail.as_str()), (ActivityKind::FileOp, Some(0.37), "37%"));
+    }
+
+    #[test]
+    fn chromium_profiles_name_their_own_download_folder() {
+        let prefs = r#"{"savefile":{"default_directory":"D:\\Pages"},"download":{"default_directory":"E:\\Download","prompt_for_download":false}}"#;
+        assert_eq!(chromium_download_dir(prefs), Some(PathBuf::from(r"E:\Download")));
+        assert_eq!(chromium_download_dir(r#"{"download":{"prompt_for_download":true}}"#), None, "the browser uses Windows Downloads");
+        assert_eq!(chromium_download_dir("not json"), None);
     }
 
     #[test]
