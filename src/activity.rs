@@ -342,7 +342,11 @@ pub fn is_download_part(path: &Path) -> bool {
 }
 
 pub fn clean_download_name(path: &Path) -> String {
-    path.file_stem().and_then(|n| n.to_str()).unwrap_or("download").to_string()
+    let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+    // Chromium writes "Unconfirmed 98941.crdownload" (localized: "Chưa xác nhận 98941") until it knows
+    // the real name, and keeps it for the whole download in InPrivate; that placeholder is no name.
+    let placeholder = !stem.contains('.') && stem.rsplit_once(' ').is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    if stem.is_empty() || placeholder { tr("Đang tải xuống", "Downloading").to_string() } else { stem.to_string() }
 }
 
 fn downloads_dir() -> Option<PathBuf> {
@@ -578,6 +582,10 @@ mod tests {
     fn download_names_and_parts() {
         assert_eq!(clean_download_name(Path::new("video.mp4.crdownload")), "video.mp4");
         assert_eq!(clean_download_name(Path::new("setup.exe.part")), "setup.exe");
+        for unnamed in ["Unconfirmed 98941.crdownload", "Chưa xác nhận 98941.crdownload"] {
+            assert_eq!(clean_download_name(Path::new(unnamed)), tr("Đang tải xuống", "Downloading"), "{unnamed}");
+        }
+        assert_eq!(clean_download_name(Path::new("model v4 2.gguf.crdownload")), "model v4 2.gguf");
         assert!(is_download_part(Path::new("a.crdownload")) && is_download_part(Path::new("b.PART")));
         assert!(!is_download_part(Path::new("c.mp4")));
     }
