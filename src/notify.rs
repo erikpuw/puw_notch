@@ -18,7 +18,17 @@ pub enum BannerKind {
     Approval,
 }
 
-/// One line of a checklist banner: a green dot with a tick and its text; the dot pops in from `at`.
+/// Where a step of a checklist stands: done (a green tick), being waited for (a spinning ring), not
+/// yet its turn (an empty ring), or failed (a red cross).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RowState {
+    Done,
+    Wait,
+    Todo,
+    Failed,
+}
+
+/// One line of a checklist banner: a dot (by its state) and its text; the dot pops in from `at`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub text: String,
@@ -28,12 +38,18 @@ pub struct Row {
     pub value: Option<String>,
     /// The value is a low battery: drawn red.
     pub low: bool,
+    pub state: RowState,
 }
 
 impl Row {
-    /// A line of the checklist kind (a green dot with a tick).
+    /// A step of the checklist kind in `state`.
+    pub fn step(text: String, state: RowState, at: std::time::Instant) -> Self {
+        Row { text, at, icon: None, value: None, low: false, state }
+    }
+
+    /// A line that is done (a green dot with a tick).
     pub fn line(text: String, at: std::time::Instant) -> Self {
-        Row { text, at, icon: None, value: None, low: false }
+        Self::step(text, RowState::Done, at)
     }
 }
 

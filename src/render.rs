@@ -33,7 +33,7 @@ use crate::icons::{self, Seg};
 use crate::lyrics;
 use crate::music::{Repeat, Track};
 use crate::notch::{self, target, Mode, LYRICS_EXTRA_W};
-use crate::notify::{BannerKind, Note, Row, Toast};
+use crate::notify::{BannerKind, Note, Row, RowState, Toast};
 use crate::system::Battery;
 
 mod aurora;

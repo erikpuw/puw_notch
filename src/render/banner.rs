@@ -130,14 +130,48 @@ impl Renderer {
                             continue;
                         }
                         if i + 1 < t.rows.len() {
-                            let line = self.brush(color(GREEN.0, GREEN.1, GREEN.2, ra * 0.35))?;
-                            rt.DrawLine(Vector2 { X: dx, Y: dy + 9.5 * s }, Vector2 { X: dx, Y: top + (notch::ROW_H + 1.0) * s }, &line, 1.5 * s, &self.round);
+                            let hue = if row.state == RowState::Done { color(GREEN.0, GREEN.1, GREEN.2, ra * 0.35) } else { color(0.58, 0.64, 0.72, ra * 0.2) };
+                            rt.DrawLine(Vector2 { X: dx, Y: dy + 9.5 * s }, Vector2 { X: dx, Y: top + (notch::ROW_H + 1.0) * s }, &self.brush(hue)?, 1.5 * s, &self.round);
                         }
-                        rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: dx, Y: dy }, radiusX: 7.5 * s * k, radiusY: 7.5 * s * k }, &self.brush(color(GREEN.0, GREEN.1, GREEN.2, ra))?);
-                        let (ink, u) = (self.brush(color(1.0, 1.0, 1.0, ra))?, 0.9 * k * s);
-                        rt.DrawLine(Vector2 { X: dx - 3.5 * u, Y: dy + 0.2 * u }, Vector2 { X: dx - 1.2 * u, Y: dy + 2.5 * u }, &ink, 1.7 * s, &self.round);
-                        rt.DrawLine(Vector2 { X: dx - 1.2 * u, Y: dy + 2.5 * u }, Vector2 { X: dx + 3.5 * u, Y: dy - 2.5 * u }, &ink, 1.7 * s, &self.round);
-                        text(&row.text, F_BODY, rect(tl + ROW_DOT_W * s, top + 3.0 * s, tr, top + 19.0 * s), lead, grey(0.88, ra))?;
+                        let r = 7.5 * s;
+                        let disc = D2D1_ELLIPSE { point: Vector2 { X: dx, Y: dy }, radiusX: r * k, radiusY: r * k };
+                        let ring = D2D1_ELLIPSE { point: Vector2 { X: dx, Y: dy }, radiusX: r - 0.75 * s, radiusY: r - 0.75 * s };
+                        let track = self.brush(color(0.58, 0.64, 0.72, ra * if row.state == RowState::Wait { 0.3 } else { 0.35 }))?;
+                        match row.state {
+                            RowState::Done | RowState::Failed => {
+                                let tint = if row.state == RowState::Done { GREEN } else { LOW_RED };
+                                rt.FillEllipse(&disc, &self.brush(color(tint.0, tint.1, tint.2, ra))?);
+                                let (ink, u) = (self.brush(color(1.0, 1.0, 1.0, ra))?, 0.9 * k * s);
+                                let mark: [((f32, f32), (f32, f32)); 2] = if row.state == RowState::Done {
+                                    [((-3.5, 0.2), (-1.2, 2.5)), ((-1.2, 2.5), (3.5, -2.5))]
+                                } else {
+                                    [((-2.8, -2.8), (2.8, 2.8)), ((-2.8, 2.8), (2.8, -2.8))]
+                                };
+                                for ((x0, y0), (x1, y1)) in mark {
+                                    rt.DrawLine(Vector2 { X: dx + x0 * u, Y: dy + y0 * u }, Vector2 { X: dx + x1 * u, Y: dy + y1 * u }, &ink, 1.7 * s, &self.round);
+                                }
+                            }
+                            RowState::Todo => rt.DrawEllipse(&ring, &track, 1.5 * s, None),
+                            RowState::Wait => {
+                                // A faint ring with a quarter of it turning (0.85 s a turn): the notch is checking.
+                                icon_busy = true;
+                                rt.DrawEllipse(&ring, &track, 1.5 * s, None);
+                                let head = age / 0.85 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                                let arc = self.brush(color(BLUE.0, BLUE.1, BLUE.2, ra))?;
+                                let on_ring = |a: f32| Vector2 { X: dx + (r - 0.75 * s) * a.cos(), Y: dy + (r - 0.75 * s) * a.sin() };
+                                let step = std::f32::consts::FRAC_PI_2 / 6.0;
+                                for j in 0..6 {
+                                    let a0 = head + j as f32 * step;
+                                    rt.DrawLine(on_ring(a0), on_ring(a0 + step), &arc, 1.6 * s, &self.round);
+                                }
+                            }
+                        }
+                        let ink = match row.state {
+                            RowState::Todo => grey(0.6, ra),
+                            RowState::Failed => color(1.0, 0.65, 0.65, ra),
+                            _ => grey(0.88, ra),
+                        };
+                        text(&row.text, F_BODY, rect(tl + ROW_DOT_W * s, top + 3.0 * s, tr, top + 19.0 * s), lead, ink)?;
                     }
                 }
                 // A notification names its app above the title and wraps its text over the banner's height.
