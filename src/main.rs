@@ -198,6 +198,8 @@ struct App {
     conn_list: Option<ConnList>,
     /// A VPN was up and is to come back with the network (see `vpn_expected`).
     vpn_was_up: bool,
+    /// When a VPN that was up went down with no banner on show to say why (the network may follow).
+    vpn_lost: Option<Instant>,
     usage_tab: usize,
     usage_tab_chosen: bool,
     track: Option<music::Track>,
@@ -1662,7 +1664,10 @@ impl App {
                         // The airplane switch, radios, network, VPN and devices that come together are one banner.
                         _ => {
                             // Asked before the list takes the event: a VPN that went down with the network stays expected.
-                            let expected = vpn_expected(self.vpn_was_up, &e, self.conn_list.as_ref(), now);
+                            let expected = vpn_expected(self.vpn_was_up, self.vpn_lost, &e, self.conn_list.as_ref(), now);
+                            if matches!(e, Event::Vpn(false)) && self.vpn_was_up && !expected {
+                                self.vpn_lost = Some(now);
+                            }
                             let devices = connectivity::expected_devices();
                             let replaces = self.conn_list.as_ref().is_some_and(|l| l.fresh(now));
                             let list = conn_list_add(self.conn_list.take(), &e, now, Expect { vpn: self.vpn_was_up, devices: &devices });
@@ -2356,12 +2361,17 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
     }
 }
 
+/// How long before the radio going off a VPN that dropped still counts as dropped with the network.
+const VPN_LOST: Duration = Duration::from_secs(3);
+
 /// Whether a VPN that was up is to come back when the network does. It was up (`was`), and it stays
 /// expected when it went down with the network (in the banner of Wi-Fi off or airplane mode on), not
 /// when it was switched off by itself.
-fn vpn_expected(was: bool, e: &Event, list: Option<&ConnList>, now: Instant) -> bool {
+fn vpn_expected(was: bool, lost: Option<Instant>, e: &Event, list: Option<&ConnList>, now: Instant) -> bool {
     match e {
         Event::Vpn(true) => true,
+        // The VPN can drop a moment before the radio's own event: it went down with the network after all.
+        Event::Radio(RadioType::Wifi, false) | Event::Airplane(true) | Event::Net(Net::Offline) => was || lost.is_some_and(|t| now.saturating_duration_since(t) < VPN_LOST),
         Event::Vpn(false) => list.is_some_and(|l| l.fresh(now) && matches!(l.head.icon, Some(render::ICON_AIRPLANE | render::ICON_WIFI_OFF))) && was,
         _ => was,
     }
@@ -2576,6 +2586,7 @@ fn run() -> windows::core::Result<()> {
             conn_busy: false,
             conn_list: None,
             vpn_was_up: false,
+            vpn_lost: None,
             usage_tab: 0,
             usage_tab_chosen: false,
             track: None,
@@ -3003,15 +3014,18 @@ mod tests {
     fn a_vpn_is_expected_back_only_when_it_went_down_with_the_network() {
         let t0 = Instant::now();
         let vpn_up = Event::Vpn(true);
-        assert!(vpn_expected(false, &vpn_up, None, t0), "it came up: expected from now on");
+        assert!(vpn_expected(false, None, &vpn_up, None, t0), "it came up: expected from now on");
         // Wi-Fi off, and the VPN that was on it: still expected.
         let wifi_off = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0, Expect { vpn: true, ..Expect::default() });
-        assert!(vpn_expected(true, &Event::Vpn(false), Some(&wifi_off), t0));
+        assert!(vpn_expected(true, None, &Event::Vpn(false), Some(&wifi_off), t0));
         // The VPN switched off by itself (no such banner on show): not expected.
-        assert!(!vpn_expected(true, &Event::Vpn(false), None, t0));
+        assert!(!vpn_expected(true, None, &Event::Vpn(false), None, t0));
         let other = conn_list_add(None, &Event::Net(Net::Offline), t0, Expect { vpn: true, ..Expect::default() });
-        assert!(!vpn_expected(true, &Event::Vpn(false), Some(&other), t0));
-        assert!(vpn_expected(true, &Event::Radio(RadioType::Wifi, true), None, t0), "other events change nothing");
+        assert!(!vpn_expected(true, None, &Event::Vpn(false), Some(&other), t0));
+        assert!(vpn_expected(true, None, &Event::Radio(RadioType::Wifi, true), None, t0), "other events change nothing");
+        // The VPN dropped just before the radio went off: it went with the network.
+        assert!(vpn_expected(false, Some(t0), &Event::Radio(RadioType::Wifi, false), None, t0 + Duration::from_secs(1)));
+        assert!(!vpn_expected(false, Some(t0), &Event::Radio(RadioType::Wifi, false), None, t0 + Duration::from_secs(10)));
     }
 
     #[test]
