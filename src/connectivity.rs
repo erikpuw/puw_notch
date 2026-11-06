@@ -75,26 +75,28 @@ pub enum Event {
 /// A Bluetooth device at or under this percent gets a low-battery banner.
 pub const LOW_BATTERY: u8 = 20;
 
-/// What changed between two snapshots, without the knock-on noise: turning airplane mode on
-/// is one event, not also "Wi-Fi off", "offline" and "headphones disconnected".
+/// What changed between two snapshots. While airplane mode is on nothing is told but the switch
+/// itself (Wi-Fi, Bluetooth, the network and every device are off because of it, whichever order
+/// Windows turns them off in). When it goes off, the world comes back and is told as usual.
 pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
-    let mut out = Vec::new();
     let airplane_flip = old.airplane != new.airplane;
+    if new.airplane {
+        return if airplane_flip { vec![Event::Airplane(true)] } else { Vec::new() };
+    }
+    let mut out = Vec::new();
     if airplane_flip {
-        out.push(Event::Airplane(new.airplane));
+        out.push(Event::Airplane(false));
     }
     let mut radio_off = BTreeSet::new();
-    if !airplane_flip {
-        for (kind, on) in &new.radios {
-            if old.radios.get(kind).is_some_and(|was| was != on) {
-                out.push(Event::Radio(*kind, *on));
-                if !on {
-                    radio_off.insert(*kind);
-                }
+    for (kind, on) in &new.radios {
+        if old.radios.get(kind).is_some_and(|was| was != on) {
+            out.push(Event::Radio(*kind, *on));
+            if !on {
+                radio_off.insert(*kind);
             }
         }
     }
-    let quiet_offline = airplane_flip || new.airplane || !radio_off.is_empty();
+    let quiet_offline = !radio_off.is_empty();
     if old.net != new.net && !(new.net == Net::Offline && quiet_offline) {
         out.push(Event::Net(new.net.clone()));
     }
@@ -108,7 +110,7 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
         m
     };
     let (before, after) = (names(old), names(new));
-    let quiet_disconnect = new.airplane || radio_off.contains(&RadioType::Bluetooth);
+    let quiet_disconnect = radio_off.contains(&RadioType::Bluetooth);
     for (name, &(kind, battery)) in &after {
         match before.get(name) {
             None => out.push(Event::Device { name: name.clone(), kind, up: true, battery }),
@@ -161,17 +163,16 @@ pub fn device_kind(major: i32, minor: i32, name: &str) -> DeviceKind {
     }
 }
 
-/// How long what follows a switch counts as part of it. Windows changes the airplane flag and the
-/// radios a moment apart, in either order, and the network after them.
+/// How long what follows a switch counts as part of it: the network goes a poll after a radio.
 const KNOCK_ON: Duration = Duration::from_secs(4);
 
-/// Drops what a recent switch explains: the radios after an airplane flip, "offline" after the
-/// airplane flip or a radio turned off. The switch's own event stays.
-/// ponytail: a radio the user switches within `KNOCK_ON` of an airplane flip is not announced.
+/// Drops what a recent switch explains: "offline" after a radio turned off, and Wi-Fi turning on
+/// after airplane mode (the connection that follows tells it).
+/// ponytail: with no network to join after airplane mode, Wi-Fi coming back is not told.
 fn drop_knock_on(events: &mut Vec<Event>, airplane_recent: bool, radio_off_recent: bool) {
     events.retain(|e| match e {
-        Event::Radio(..) => !airplane_recent,
-        Event::Net(Net::Offline) => !(airplane_recent || radio_off_recent),
+        Event::Radio(RadioType::Wifi, true) => !airplane_recent,
+        Event::Net(Net::Offline) => !radio_off_recent,
         _ => true,
     });
 }
@@ -428,27 +429,25 @@ mod tests {
     }
 
     #[test]
-    fn airplane_swallows_the_rest() {
+    fn airplane_on_tells_only_itself_whatever_order_windows_turns_things_off() {
         let a = snap(true, true, false, home(), &[("h", "Tai nghe", Headphones)]);
-        let b = snap(false, false, true, Net::Offline, &[]);
-        assert_eq!(changes(&a, &b), vec![Event::Airplane(true)]);
-        let c = snap(true, true, false, Net::Offline, &[]);
-        assert_eq!(changes(&b, &c), vec![Event::Airplane(false)]);
+        assert_eq!(changes(&a, &snap(false, false, true, Net::Offline, &[])), vec![Event::Airplane(true)]);
+        // The flag first; the radios, a VPN left without internet and the headset follow later.
+        let flag = snap(true, true, true, home(), &[("h", "Tai nghe", Headphones)]);
+        assert_eq!(changes(&a, &flag), vec![Event::Airplane(true)]);
+        let vpn = Net::Limited { name: "MyVPN".into(), wifi: false };
+        assert!(changes(&flag, &snap(false, false, true, vpn, &[])).is_empty(), "nothing is told while it is on");
     }
 
     #[test]
-    fn airplane_with_the_flag_first_still_swallows_the_radios_and_offline() {
-        let a = snap(true, true, false, home(), &[]);
-        // Windows set the flag first; the radios and the network follow in later snapshots.
-        let flag = snap(true, true, true, home(), &[]);
-        let radios = snap(false, false, true, home(), &[]);
-        let offline = snap(false, false, true, Net::Offline, &[]);
-        assert_eq!(changes(&a, &flag), vec![Event::Airplane(true)]);
-        let mut e = changes(&flag, &radios);
-        assert_eq!(e, vec![Event::Radio(RadioType::Wifi, false), Event::Radio(RadioType::Bluetooth, false)]);
-        drop_knock_on(&mut e, true, true);
-        assert!(e.is_empty(), "the radios are the airplane switch's own doing");
-        assert!(changes(&radios, &offline).is_empty(), "offline is expected while airplane mode is on");
+    fn airplane_off_brings_back_wifi_connected_and_bluetooth_on() {
+        let on = snap(false, false, true, Net::Offline, &[]);
+        // The flag and the radios in one snapshot, the network a poll later.
+        let mut e = changes(&on, &snap(true, true, false, Net::Offline, &[]));
+        assert_eq!(e, vec![Event::Airplane(false), Event::Radio(RadioType::Wifi, true), Event::Radio(RadioType::Bluetooth, true)]);
+        drop_knock_on(&mut e, true, false);
+        assert_eq!(e, vec![Event::Airplane(false), Event::Radio(RadioType::Bluetooth, true)], "Wi-Fi's own banner is 'connected'");
+        assert_eq!(changes(&snap(true, true, false, Net::Offline, &[]), &snap(true, true, false, home(), &[])), vec![Event::Net(home())]);
     }
 
     #[test]
@@ -461,9 +460,6 @@ mod tests {
         let mut limited = vec![Event::Net(Net::Limited { name: "Cafe".into(), wifi: true })];
         drop_knock_on(&mut limited, true, true);
         assert_eq!(limited.len(), 1, "a network with no internet is still news");
-        let mut own = vec![Event::Airplane(true)];
-        drop_knock_on(&mut own, true, true);
-        assert_eq!(own, vec![Event::Airplane(true)], "the switch's own event stays");
     }
 
     #[test]
