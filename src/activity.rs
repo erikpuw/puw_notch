@@ -2,6 +2,7 @@
 //! progress dialog's title), browser downloads (size and speed of the partial file), terminal builds
 //! (the build tool a shell started, and how long it has run).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::time::{Duration, Instant, SystemTime};
@@ -49,7 +50,7 @@ pub struct Watch {
 }
 
 struct Reader {
-    request: SyncSender<Instant>,
+    request: SyncSender<()>,
     updates: Receiver<(Option<LiveActivity>, Option<LiveActivity>)>,
     current: Option<LiveActivity>,
     finished: Option<LiveActivity>,
@@ -71,7 +72,7 @@ impl Watch {
         }
         let reader = self.reader.get_or_insert_with(|| Reader::new(target));
         // At most one sample waits behind the current scan.
-        let _ = reader.request.try_send(now);
+        let _ = reader.request.try_send(());
         self.latest(now)
     }
 
@@ -99,7 +100,7 @@ impl Watch {
 
 impl Reader {
     fn new(target: isize) -> Self {
-        let (request, requests) = sync_channel::<Instant>(1);
+        let (request, requests) = sync_channel::<()>(1);
         let (updates, receiver) = channel();
         crate::system::spawn("live-activity", move || {
             let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
@@ -108,17 +109,16 @@ impl Reader {
             loop {
                 // While something runs, sample on its own 4 times a second: a fast copy moves several
                 // percent between the UI's ticks. Idle, wait for the tick (a scan costs ~20-30 ms).
-                let now = if active {
-                    match requests.recv_timeout(Duration::from_millis(250)) {
-                        Ok(now) => now,
-                        Err(RecvTimeoutError::Timeout) => Instant::now(),
-                        Err(RecvTimeoutError::Disconnected) => break,
+                // The sample is stamped by this thread, not by the UI that asked: a speed is a size
+                // difference over the time between two reads of the file.
+                if active {
+                    if let Err(RecvTimeoutError::Disconnected) = requests.recv_timeout(Duration::from_millis(250)) {
+                        break;
                     }
-                } else {
-                    let Ok(now) = requests.recv() else { break };
-                    now
-                };
-                let current = monitor.poll(now);
+                } else if requests.recv().is_err() {
+                    break;
+                }
+                let current = monitor.poll(Instant::now());
                 let finished = monitor.take_finished();
                 let show = current.is_some() || finished.is_some();
                 active = current.is_some();
@@ -153,6 +153,8 @@ pub struct Monitor {
     download_lookup_at: Option<Instant>,
     /// The file a download that just vanished became, when it is there.
     download_done: Option<PathBuf>,
+    /// The folder's finished files when the selected partial appeared (see `completed_file`).
+    download_before: HashSet<PathBuf>,
     build_exe: Option<String>,
     build_since: Option<Instant>,
     last: Option<LiveActivity>,
@@ -204,7 +206,8 @@ impl Monitor {
         }
         let found = find_download(&self.download_dirs, selected, now, SystemTime::now());
         let Some((path, size)) = found else {
-            self.download_done = self.download_file.take().and_then(|part| completed_file(&part, self.download_size, SystemTime::now()));
+            self.download_done = self.download_file.take().and_then(|part| completed_file(&part, self.download_size, &self.download_before));
+            self.download_before.clear();
             self.download_name = None;
             self.download_lookup_at = None;
             self.download_size = 0;
@@ -225,6 +228,7 @@ impl Monitor {
             self.download_changed_at = Some(now);
             self.download_name = clean_download_name(&path);
             self.download_lookup_at = None;
+            self.download_before = finished_files(&path);
         }
         // Chromium may keep "Unconfirmed 98941" on disk the whole time; its history names the file.
         // Ask again every 2 s until the row is written (never, in InPrivate: the title stays generic).
@@ -415,27 +419,38 @@ pub fn clean_download_name(path: &Path) -> Option<String> {
 }
 
 /// The real name of `part` from a Chromium history's `(current_path, target_path, state)` rows: its own
-/// row, else the only download still in progress (state 0).
+/// row, else the only download still in progress (state 0) that is headed for the partial's folder.
 fn history_name(rows: &[Vec<String>], part: &Path) -> Option<String> {
     let name = |row: &Vec<String>| Path::new(&row[1]).file_name()?.to_str().map(str::to_string);
     let own = rows.iter().find(|r| r.len() == 3 && r[0].eq_ignore_ascii_case(part.to_str().unwrap_or_default()));
-    let mut running = rows.iter().filter(|r| r.len() == 3 && r[2] == "0");
+    let same_folder = |r: &&Vec<String>| match (Path::new(&r[1]).parent(), part.parent()) {
+        (Some(a), Some(b)) => a.as_os_str().eq_ignore_ascii_case(b.as_os_str()),
+        _ => false,
+    };
+    let mut running = rows.iter().filter(|r| r.len() == 3 && r[2] == "0").filter(same_folder);
     own.or_else(|| running.next().filter(|_| running.next().is_none())).and_then(name)
 }
 
-/// The finished file a partial download that just vanished became: the partial's own name without the
-/// extension, else (an "Unconfirmed" partial) the newest file in its folder at least as large, written just now.
-fn completed_file(part: &Path, size: u64, wall_now: SystemTime) -> Option<PathBuf> {
-    let named = part.with_extension("");
-    if clean_download_name(part).is_some() && named.is_file() {
-        return Some(named);
+/// What is in the partial's folder besides partial files: a finished download is what is new there later.
+fn finished_files(part: &Path) -> HashSet<PathBuf> {
+    part.parent().and_then(|dir| std::fs::read_dir(dir).ok()).into_iter().flatten().flatten()
+        .map(|entry| entry.path()).filter(|path| !is_download_part(path)).collect()
+}
+
+/// The finished file a partial download that just vanished became. A named partial becomes its own name
+/// without the extension (and nothing else: no such file means it was cancelled). An "Unconfirmed" one
+/// has no such name, so it is the file that appeared in its folder since `before` and is at least as
+/// large (not judged by modification time: a browser may keep the server's).
+fn completed_file(part: &Path, size: u64, before: &HashSet<PathBuf>) -> Option<PathBuf> {
+    if clean_download_name(part).is_some() {
+        let named = part.with_extension("");
+        return named.is_file().then_some(named);
     }
     std::fs::read_dir(part.parent()?).ok()?.flatten().filter_map(|entry| {
         let path = entry.path();
         let metadata = std::fs::metadata(&path).ok()?;
         let modified = metadata.modified().ok()?;
-        let fresh = wall_now.duration_since(modified).unwrap_or_default() < Duration::from_secs(15);
-        (!is_download_part(&path) && metadata.is_file() && metadata.len() >= size && fresh).then_some((path, modified))
+        (!before.contains(&path) && !is_download_part(&path) && metadata.is_file() && metadata.len() >= size).then_some((path, modified))
     }).max_by_key(|(_, modified)| *modified).map(|(path, _)| path)
 }
 
@@ -690,7 +705,9 @@ mod tests {
         assert_eq!(history_name(&rows, part).as_deref(), Some("model.gguf"));
         let other_path = [row(r"E:\Download\x.crdownload", r"E:\Download\only.iso", "0")];
         assert_eq!(history_name(&other_path, part).as_deref(), Some("only.iso"), "the one download running");
-        let two = [row("a", r"E:\a.iso", "0"), row("b", r"E:\b.iso", "0")];
+        let elsewhere = [row("x", r"D:\Other\only.iso", "0")];
+        assert_eq!(history_name(&elsewhere, part), None, "a download of another folder is not this one");
+        let two = [row("a", r"E:\Download\a.iso", "0"), row("b", r"E:\Download\b.iso", "0")];
         assert_eq!(history_name(&two, part), None, "two running: no guessing");
         assert_eq!(history_name(&[], part), None);
     }
@@ -703,13 +720,19 @@ mod tests {
         struct Cleanup(PathBuf);
         impl Drop for Cleanup { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
         let _cleanup = Cleanup(dir.clone());
-        assert_eq!(completed_file(&dir.join("Unconfirmed 1.crdownload"), 5, now), None, "cancelled: nothing left");
+        let unconfirmed = dir.join("Unconfirmed 1.crdownload");
+        // A file that was already there is no finished download, however big and fresh it is.
+        std::fs::write(dir.join("existing.bin"), vec![0u8; 100]).unwrap();
+        let before = finished_files(&unconfirmed);
+        assert_eq!(completed_file(&unconfirmed, 5, &before), None, "cancelled: nothing new");
         std::fs::write(dir.join("small.txt"), b"1").unwrap();
-        assert_eq!(completed_file(&dir.join("Unconfirmed 1.crdownload"), 5, now), None, "smaller than what was downloaded");
+        assert_eq!(completed_file(&unconfirmed, 5, &before), None, "smaller than what was downloaded");
         std::fs::write(dir.join("model.gguf"), b"123456").unwrap();
-        assert_eq!(completed_file(&dir.join("Unconfirmed 1.crdownload"), 5, now), Some(dir.join("model.gguf")));
+        assert_eq!(completed_file(&unconfirmed, 5, &before), Some(dir.join("model.gguf")));
+        // A named partial is its own file or nothing: another new file does not stand in for a cancelled one.
+        assert_eq!(completed_file(&dir.join("video.mp4.crdownload"), 1, &before), None, "cancelled named download");
         std::fs::write(dir.join("video.mp4"), b"1").unwrap();
-        assert_eq!(completed_file(&dir.join("video.mp4.crdownload"), 1, now), Some(dir.join("video.mp4")));
+        assert_eq!(completed_file(&dir.join("video.mp4.crdownload"), 1, &before), Some(dir.join("video.mp4")));
     }
 
     #[test]

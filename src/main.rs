@@ -791,7 +791,7 @@ impl App {
             self.show_banner(t, ms);
         // The same activity's banner is updated in place, also when its icon changes (the arrow
         // becoming the green tick morphs on screen).
-        } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.choices.is_empty()) {
+        } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.icon.is_some() && b.choices.is_empty()) {
             let width = self.renderer.status_banner_width(&t.title, &t.body, self.scale);
             self.notch.set_alert_width(width);
             self.banner = Some(t);
