@@ -715,12 +715,8 @@ impl App {
             self.refresh_notes();
             changed = true;
         }
-        if let Some(a) = self.activity.poll(Instant::now()) {
-            self.show_activity(activity_toast(&a, false), ACTIVITY_MS);
-        } else if let Some(a) = self.activity.take_finished() {
-            // The end stays long enough to be read, like a notification.
-            self.show_activity(activity_toast(&a, true), ALERT_MS);
-        }
+        let current = self.activity.poll(Instant::now(), self.hwnd.0 as isize);
+        self.activity_banner(current);
         if let Some(t) = new.into_iter().last() {
             // A newer one restarts the 5 s from the start (show_banner re-arms the timer).
             self.show_banner(t, ALERT_MS);
@@ -773,6 +769,16 @@ impl App {
         unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
         self.kick();
         true
+    }
+
+    /// The banner of the running activity, else of the one that just ended.
+    fn activity_banner(&mut self, current: Option<activity::LiveActivity>) {
+        if let Some(a) = current {
+            self.show_activity(activity_toast(&a, false), ACTIVITY_MS);
+        } else if let Some(a) = self.activity.take_finished() {
+            // The end stays long enough to be read, like a notification.
+            self.show_activity(activity_toast(&a, true), ALERT_MS);
+        }
     }
 
     /// The live activity's banner: it stays while the activity runs (each tick renews it and updates its
@@ -1569,6 +1575,11 @@ impl App {
                 if !self.animating {
                     self.redraw();
                 }
+            }
+            activity::WM_ACTIVITY => {
+                // A fresh sample from the worker: shown now, not at the next tick.
+                let current = self.activity.latest(Instant::now());
+                self.activity_banner(current);
             }
             render::WM_ICONS => {
                 if self.active_page == Some(Page::Notify) || (!self.hidden && self.notch.mode == Mode::Alert) {

@@ -3,19 +3,22 @@
 //! (the build tool a shell started, and how long it has run).
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::time::{Duration, Instant, SystemTime};
 
 use windows::core::{BOOL, HSTRING, Interface};
 use windows::Data::Json::JsonObject;
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, IUIAutomation2, TreeScope_Descendants};
 use windows::Win32::UI::Shell::{SHGetKnownFolderPath, FOLDERID_Downloads, KF_FLAG_DEFAULT};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
-use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible};
+use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible, PostMessageW, WM_APP};
+
+/// A sample with something to show is ready (`Watch::latest`).
+pub const WM_ACTIVITY: u32 = WM_APP + 15;
 
 use crate::i18n::tr;
 
@@ -58,20 +61,31 @@ impl Watch {
         Self { enabled, reader: None }
     }
 
-    pub fn poll(&mut self, now: Instant) -> Option<LiveActivity> {
+    /// Asks for a new sample and returns the newest one there is. Each sample that has something to
+    /// show also posts WM_ACTIVITY to `target`, so it reaches the banner without waiting for this tick.
+    pub fn poll(&mut self, now: Instant, target: isize) -> Option<LiveActivity> {
         if !self.enabled {
             // Dropping both channels stops the worker and discards old completion events.
             self.reader = None;
             return None;
         }
-        let reader = self.reader.get_or_insert_with(Reader::new);
-        for (current, finished) in reader.updates.try_iter() {
-            reader.current = current;
-            reader.finished = finished;
-            reader.received_at = now;
-        }
+        let reader = self.reader.get_or_insert_with(|| Reader::new(target));
         // At most one sample waits behind the current scan.
         let _ = reader.request.try_send(now);
+        self.latest(now)
+    }
+
+    /// The newest sample, without asking for another (for WM_ACTIVITY).
+    pub fn latest(&mut self, now: Instant) -> Option<LiveActivity> {
+        let reader = self.reader.as_mut().filter(|_| self.enabled)?;
+        for (current, finished) in reader.updates.try_iter() {
+            reader.current = current;
+            // Several samples can arrive at once; a later one must not erase an ending not yet shown.
+            if finished.is_some() {
+                reader.finished = finished;
+            }
+            reader.received_at = now;
+        }
         if now.saturating_duration_since(reader.received_at) > Duration::from_secs(5) {
             reader.current = None;
         }
@@ -84,16 +98,35 @@ impl Watch {
 }
 
 impl Reader {
-    fn new() -> Self {
+    fn new(target: isize) -> Self {
         let (request, requests) = sync_channel::<Instant>(1);
         let (updates, receiver) = channel();
         crate::system::spawn("live-activity", move || {
             let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             let mut monitor = Monitor::new(true);
-            while let Ok(now) = requests.recv() {
+            let mut active = false;
+            loop {
+                // While something runs, sample on its own 4 times a second: a fast copy moves several
+                // percent between the UI's ticks. Idle, wait for the tick (a scan costs ~20-30 ms).
+                let now = if active {
+                    match requests.recv_timeout(Duration::from_millis(250)) {
+                        Ok(now) => now,
+                        Err(RecvTimeoutError::Timeout) => Instant::now(),
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                } else {
+                    let Ok(now) = requests.recv() else { break };
+                    now
+                };
                 let current = monitor.poll(now);
-                if updates.send((current, monitor.take_finished())).is_err() {
+                let finished = monitor.take_finished();
+                let show = current.is_some() || finished.is_some();
+                active = current.is_some();
+                if updates.send((current, finished)).is_err() {
                     break;
+                }
+                if show {
+                    unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_ACTIVITY, WPARAM(0), LPARAM(0)); }
                 }
             }
             if com.is_ok() {
@@ -552,15 +585,17 @@ mod tests {
             request, updates: receiver, current: None, finished: None, received_at: now,
         }) };
         updates.send((Some(activity.clone()), None)).unwrap();
-        assert_eq!(watch.poll(now), Some(activity.clone()));
-        assert_eq!(watch.poll(now + Duration::from_millis(500)), Some(activity.clone()));
+        assert_eq!(watch.poll(now, 0), Some(activity.clone()));
+        assert_eq!(watch.latest(now + Duration::from_millis(500)), Some(activity.clone()));
         assert!(watch.take_finished().is_none(), "a pending scan is not a completed task");
         updates.send((None, Some(activity.clone()))).unwrap();
-        assert!(watch.poll(now + Duration::from_secs(1)).is_none());
-        assert_eq!(watch.take_finished(), Some(activity));
+        updates.send((None, None)).unwrap();
+        assert!(watch.latest(now + Duration::from_secs(1)).is_none());
+        assert_eq!(watch.take_finished(), Some(activity), "a later empty sample keeps the ending");
         assert!(watch.take_finished().is_none());
         watch.enabled = false;
-        assert!(watch.poll(now).is_none());
+        assert!(watch.latest(now).is_none());
+        assert!(watch.poll(now, 0).is_none());
         assert!(watch.reader.is_none() && watch.take_finished().is_none());
     }
 
@@ -615,7 +650,11 @@ mod tests {
             let rows = crate::notify::query_unlocked(h, "SELECT current_path, target_path, state FROM downloads ORDER BY id DESC LIMIT 2", 3);
             println!("History {h:?}: {rows:?}");
         }
-        println!("Explorer: {:?}", poll_explorer());
+        for _ in 0..3 {
+            let t = Instant::now();
+            let found = poll_explorer();
+            println!("Explorer ({} ms): {found:?}", t.elapsed().as_millis());
+        }
         if com.is_ok() { unsafe { CoUninitialize(); } }
     }
 
