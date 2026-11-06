@@ -302,13 +302,6 @@ const PAD: f32 = 24.0;
 const COVER: f32 = 120.0;
 const COVER_TOP: f32 = 40.0;
 const COVER_GAP: f32 = 16.0;
-/// The Music page's cover is a big arc cut by the panel: a disc centred on the panel's top-left corner (so a quarter of
-/// it shows), `DISC_R` wide, kept solid out to `DISC_SOLID` of the radius then faded to clear. The whole cover is
-/// scaled into the square the quarter fills; it is drawn under the header and the page.
-const DISC_CX: f32 = 0.0;
-const DISC_CY: f32 = 0.0;
-const DISC_R: f32 = 176.0;
-const DISC_SOLID: f32 = 0.96;
 const PLAY_BTN: f32 = 36.0;
 const SKIP_BTN: f32 = 28.0;
 const LYRICS_BTN: f32 = 28.0;
@@ -878,6 +871,14 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
     0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
+/// The cover's shadow, a blurred dark square (`Renderer::cover_shadow`): how far it reaches past the
+/// cover, how far it drops, how dark it is, and how much smaller it is drawn before being stretched
+/// (the blur). Short enough to end above the pages' bottom clip (see the test).
+const COVER_SHADOW_PAD: f32 = 8.0;
+const COVER_SHADOW_DROP: f32 = 2.0;
+const COVER_SHADOW_ALPHA: f32 = 0.55;
+const COVER_SHADOW_SHRINK: f32 = 4.0;
+
 /// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
 
@@ -1123,6 +1124,8 @@ pub struct Renderer {
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
     /// Decoded cover of the current track (keyed by Track::art_key).
     cover: Option<CoverCache>,
+    /// The cover's blurred shadow, made once per scale: (scale, bitmap).
+    cover_shadow: Option<(f32, ID2D1Bitmap)>,
     /// The aurora's two blur targets (small, mid) for one small-target size, kept across frames:
     /// a new GPU texture pair every frame stalls integrated GPUs.
     aurora_rts: RefCell<Option<((u32, u32), ID2D1BitmapRenderTarget, ID2D1BitmapRenderTarget)>>,
@@ -1248,7 +1251,7 @@ impl Renderer {
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
                 owner: Owner::Pill,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
-                fonts: None, cover: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
+                fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
         }
     }
 
@@ -1258,6 +1261,7 @@ impl Renderer {
         (self.d3d, self.ctx, self.rt) = gpu_device(&self.factory)?;
         self.surface = None;
         self.cover = None;
+        self.cover_shadow = None;
         *self.aurora_rts.get_mut() = None;
         self.app_icons.clear();
         Ok(())
@@ -1839,6 +1843,37 @@ impl Renderer {
         }
     }
 
+    /// The big cover's shadow at `scale`: a dark rounded square COVER_SHADOW_PAD larger all round,
+    /// drawn COVER_SHADOW_SHRINK times smaller and stretched back in two linear steps, which blurs
+    /// it into one smooth falloff. Made once; drawn at twice its size.
+    fn cover_shadow(&mut self, scale: f32) -> Option<ID2D1Bitmap> {
+        if let Some((s, bmp)) = &self.cover_shadow {
+            if *s == scale {
+                return Some(bmp.clone());
+            }
+        }
+        let (k, side, pad) = (COVER_SHADOW_SHRINK, COVER * scale, COVER_SHADOW_PAD * scale);
+        let n = side + 2.0 * pad;
+        let clear = color(0.0, 0.0, 0.0, 0.0);
+        let mode = D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE;
+        let bmp = unsafe {
+            let tiny = self.rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: n / k, height: n / k }), None, None, mode).ok()?;
+            tiny.BeginDraw();
+            tiny.Clear(Some(&clear));
+            let body = rect(pad / k, pad / k, (pad + side) / k, (pad + side) / k);
+            tiny.FillRoundedRectangle(&rounded(body, 14.0 * scale / k), &tiny.CreateSolidColorBrush(&color(0.0, 0.0, 0.0, 1.0), None).ok()?);
+            tiny.EndDraw(None, None).ok()?;
+            let mid = self.rt.CreateCompatibleRenderTarget(Some(&D2D_SIZE_F { width: n / 2.0, height: n / 2.0 }), None, None, mode).ok()?;
+            mid.BeginDraw();
+            mid.Clear(Some(&clear));
+            mid.DrawBitmap(&tiny.GetBitmap().ok()?, Some(&rect(0.0, 0.0, n / 2.0, n / 2.0)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+            mid.EndDraw(None, None).ok()?;
+            mid.GetBitmap().ok()?
+        };
+        self.cover_shadow = Some((scale, bmp.clone()));
+        Some(bmp)
+    }
+
     /// One frame. A failure other than the handled device loss (the GPU switching with the power
     /// plan or battery saver, a driver reset) used to stop all drawing silently: it is logged, and
     /// the device is made again so the next frame draws.
@@ -1868,8 +1903,9 @@ impl Renderer {
         self.take_icons();
         let fonts = self.fonts(scale)?;
         let cover = if page == Some(Page::Music) || (v.live && matches!(v.mode, Mode::Collapsed | Mode::Peek)) {
-            v.music.and_then(|t| self.cover(t, (DISC_R * scale).round() as u32, (20.0 * scale).round() as u32))
+            v.music.and_then(|t| self.cover(t, (COVER * scale).round() as u32, (20.0 * scale).round() as u32))
         } else { v.music.and_then(|t| self.cover.as_ref().filter(|c| c.track_key == t.art_key).and_then(|c| c.bitmaps.clone())) };
+        let cover_shadow = cover.as_ref().and_then(|_| self.cover_shadow(scale));
         let target = if v.live && page == Some(Page::Music) { self.cover.as_ref().and_then(|c| c.glow) } else { None };
         let now = Instant::now();
         let elapsed = now.duration_since(self.glow.2).as_secs_f32();
@@ -1979,14 +2015,21 @@ impl Renderer {
                 rt.DrawText(&t, &fonts[f], &b, &self.brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
                 Ok(())
             };
-            // The pill's small cover clipped to a rounded square, or a note glyph when there is none.
+            // Cover art clipped to a rounded square, or a note glyph when there is none.
             let draw_cover = |box_: D2D_RECT_F, radius: f32, a: f32| -> Result<()> {
+                // The big cover gets a soft shadow all round, a little lower, so it stands off the glow.
+                if let (true, Some(shadow)) = (box_.right - box_.left > 40.0 * s, &cover_shadow) {
+                    let (pad, drop) = (COVER_SHADOW_PAD * s, COVER_SHADOW_DROP * s);
+                    let area = rect(box_.left - pad, box_.top + drop - pad, box_.right + pad, box_.bottom + drop + pad);
+                    rt.DrawBitmap(shadow, Some(&area), COVER_SHADOW_ALPHA * a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                }
                 match &cover {
-                    Some((_, small)) => {
+                    Some((big, small)) => {
                         // Made at exactly the drawn size: placed on whole pixels, 1:1, so it stays sharp.
-                        let size = small.GetSize();
+                        let bmp = if box_.right - box_.left > 40.0 * s { big } else { small };
+                        let size = bmp.GetSize();
                         let (x, y) = (box_.left.round(), box_.top.round());
-                        let b = rt.CreateBitmapBrush(small, None, None)?;
+                        let b = rt.CreateBitmapBrush(bmp, None, None)?;
                         b.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: x, M32: y });
                         b.SetOpacity(a);
                         rt.FillRoundedRectangle(&rounded(rect(x, y, x + size.width, y + size.height), radius), &b);
@@ -2118,10 +2161,6 @@ impl Renderer {
             }
 
             let a = fade(110.0, 50.0);
-            // The Music page's cover disc: under the header and the page, and it follows the page's own fade.
-            if a > 0.0 && panel_ok && (v.page == Page::Music || matches!(v.leaving, Some((Page::Music, ..)))) {
-                self.draw_disc(&text, cover.as_ref().map(|(big, _)| big), &shape, l, s, a * gate)?;
-            }
             if a > 0.0 && panel_ok {
                 self.draw_header(&ctx, a)?;
                 self.draw_pages(&ctx, &prep, a)?;
@@ -2541,12 +2580,10 @@ mod tests {
     }
 
     #[test]
-    fn disc_cover_stays_in_the_left_column() {
-        // The faded disc may bleed off the panel's left and top edges but never reaches the text column.
-        assert!(DISC_CX + DISC_R <= SIDE + COVER + COVER_GAP, "disc ends at {}", DISC_CX + DISC_R);
-        // Its solid core ends before the text column, so only the faded rim is near the text.
-        assert!(DISC_CX + DISC_R * DISC_SOLID < SIDE + COVER + COVER_GAP);
-        assert!(DISC_SOLID > 0.0 && DISC_SOLID < 1.0);
+    fn cover_shadow_ends_above_the_page_clip() {
+        // The shadow reaches PAD past the dropped cover; pages are cut at dots_y - 3.
+        let bottom = COVER_TOP + COVER + COVER_SHADOW_DROP + COVER_SHADOW_PAD;
+        assert!(bottom <= dots_y(186.0) - 3.0, "shadow ends at {bottom}, clipped at {}", dots_y(186.0) - 3.0);
     }
 
     #[test]

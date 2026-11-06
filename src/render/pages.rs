@@ -11,7 +11,7 @@ impl Renderer {
     ) -> Result<()> {
         let rt = &self.rt;
         let Prep { weather_line, weather_empty, hour_lines, focus_icons, player_icons, note_icons, lyric_heights, lyric_tops, moon_line, tint, level, fonts } = *p;
-        let Ctx { v, s, l, r, cx, gy, text, width, micon, wx_icon, .. } = *c;
+        let Ctx { v, s, l, r, cx, gy, text, width, micon, wx_icon, cover, .. } = *c;
         let center = DWRITE_TEXT_ALIGNMENT_CENTER;
         let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
         let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
@@ -134,7 +134,7 @@ impl Renderer {
                 };
 
                 match page {
-                    Page::Music => self.draw_music(&text, &micon, &wx_icon, &player_icons, &fonts, &lyric_heights, &lyric_tops, v, l, tint, level, cl, s, a, hovered)?,
+                    Page::Music => self.draw_music(&text, &micon, &cover, &wx_icon, &player_icons, &fonts, &lyric_heights, &lyric_tops, v, l, tint, level, cl, s, a, hovered)?,
                     Page::Todo => self.draw_todo(&text, &width, &micon, &draw_input, &hover_disc, &row_tools, &row_hovered, &scrollbar, &time_color, &btns, v, lv, current, settings, (cl, cr), s, a, hovered)?,
                     Page::Notify => self.draw_notify(&text, &scrollbar, &btns, v, lv, current, &note_icons, (cl, cr), s, a, hovered)?,
                     Page::Usage => self.draw_usage(&text, &width, &btns, (cl, cr), s, a, hovered)?,
