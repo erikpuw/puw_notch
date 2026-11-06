@@ -71,7 +71,9 @@ impl Renderer {
                 rt.FillGeometry(&g, &self.brush(color(BLUE.0, BLUE.1, BLUE.2, a * pop_alpha))?, None);
                 rt.SetTransform(&base);
             } else {
-                micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), grey(1.0, a))?;
+                // A finished task's tick is green; the glyph it replaces morphs into it.
+                let c = if icon == ICON_CHECK { color(GREEN.0, GREEN.1, GREEN.2, a) } else { grey(1.0, a) };
+                micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), c)?;
             }
             let tl = ix + d + 12.0 * s;
             let mut tr = r - 22.0 * s;

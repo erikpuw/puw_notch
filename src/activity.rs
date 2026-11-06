@@ -34,6 +34,9 @@ pub struct LiveActivity {
     pub detail: String,
     /// 0.0 ..= 1.0 when the activity says how far it is; None when it does not.
     pub progress: Option<f32>,
+    /// An ended activity whose result was seen (the downloaded file is there); false while running
+    /// and when it only stopped being seen.
+    pub succeeded: bool,
 }
 
 /// UI-side reader. Filesystem and accessibility calls never run on the animation thread.
@@ -110,7 +113,13 @@ pub struct Monitor {
     download_changed_at: Option<Instant>,
     download_speed: f64,
     download_dirs: Vec<PathBuf>,
+    download_histories: Vec<PathBuf>,
     download_dirs_at: Option<Instant>,
+    /// The real name of the selected partial file, from the browser's history when the file has none yet.
+    download_name: Option<String>,
+    download_lookup_at: Option<Instant>,
+    /// The file a download that just vanished became, when it is there.
+    download_done: Option<PathBuf>,
     build_exe: Option<String>,
     build_since: Option<Instant>,
     last: Option<LiveActivity>,
@@ -132,7 +141,14 @@ impl Monitor {
         }
         let current = poll_explorer().or_else(|| self.poll_download(now)).or_else(|| self.poll_build(now));
         if current.is_none() {
-            if let Some(a) = self.last.take() {
+            if let Some(mut a) = self.last.take() {
+                if a.kind == ActivityKind::Download {
+                    if let Some(file) = self.download_done.take() {
+                        a.title = file.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+                        a.detail = std::fs::metadata(&file).map_or(a.detail, |m| download_detail(m.len(), 0.0));
+                        a.succeeded = true;
+                    }
+                }
                 self.finished = (a.kind != ActivityKind::FileOp).then_some(a);
             }
         }
@@ -150,12 +166,14 @@ impl Monitor {
             .map(|(path, changed)| (path, self.download_size, changed));
         // Browser settings change rarely; reading every profile's Preferences each tick is wasted work.
         if self.download_dirs_at.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(30)) {
-            self.download_dirs = download_dirs();
+            (self.download_dirs, self.download_histories) = download_dirs();
             self.download_dirs_at = Some(now);
         }
         let found = find_download(&self.download_dirs, selected, now, SystemTime::now());
         let Some((path, size)) = found else {
-            self.download_file = None;
+            self.download_done = self.download_file.take().and_then(|part| completed_file(&part, self.download_size, SystemTime::now()));
+            self.download_name = None;
+            self.download_lookup_at = None;
             self.download_size = 0;
             self.download_at = None;
             self.download_changed_at = None;
@@ -172,10 +190,22 @@ impl Monitor {
             self.download_speed = 0.0;
             self.download_file = Some(path.clone());
             self.download_changed_at = Some(now);
+            self.download_name = clean_download_name(&path);
+            self.download_lookup_at = None;
+        }
+        // Chromium may keep "Unconfirmed 98941" on disk the whole time; its history names the file.
+        // Ask again every 2 s until the row is written (never, in InPrivate: the title stays generic).
+        if self.download_name.is_none() && self.download_lookup_at.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(2)) {
+            self.download_lookup_at = Some(now);
+            self.download_name = self.download_histories.iter().find_map(|h| {
+                let rows = crate::notify::query_unlocked(h, "SELECT current_path, target_path, state FROM downloads ORDER BY id DESC LIMIT 20", 3)?;
+                history_name(&rows, &path)
+            });
         }
         self.download_size = size;
         self.download_at = Some(now);
-        Some(LiveActivity { kind: ActivityKind::Download, title: clean_download_name(&path), detail: download_detail(size, self.download_speed), progress: None })
+        let title = self.download_name.clone().unwrap_or_default();
+        Some(LiveActivity { kind: ActivityKind::Download, title, detail: download_detail(size, self.download_speed), progress: None, succeeded: false })
     }
 
     fn poll_build(&mut self, now: Instant) -> Option<LiveActivity> {
@@ -189,7 +219,7 @@ impl Monitor {
             self.build_since = Some(now);
         }
         let secs = self.build_since.map_or(0, |t| now.duration_since(t).as_secs());
-        Some(LiveActivity { kind: ActivityKind::Build, title: build_name(&exe).to_string(), detail: elapsed_text(secs), progress: None })
+        Some(LiveActivity { kind: ActivityKind::Build, title: build_name(&exe).to_string(), detail: elapsed_text(secs), progress: None, succeeded: false })
     }
 }
 
@@ -302,6 +332,7 @@ pub fn parse_explorer_title(title: &str) -> Option<LiveActivity> {
         title: operation.unwrap_or(tr("Đang xử lý tệp", "Working on files")).to_string(),
         detail: percent.map_or_else(|| tr("Đang xử lý…", "In progress…").to_string(), |p| format!("{p}%")),
         progress: percent.map(|p| p as f32 / 100.0),
+        succeeded: false,
     })
 }
 
@@ -341,12 +372,38 @@ pub fn is_download_part(path: &Path) -> bool {
     ["crdownload", "part", "opdownload"].iter().any(|e| ext.eq_ignore_ascii_case(e))
 }
 
-pub fn clean_download_name(path: &Path) -> String {
+/// The name of the file a partial one becomes; None while it has none yet.
+pub fn clean_download_name(path: &Path) -> Option<String> {
     let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
     // Chromium writes "Unconfirmed 98941.crdownload" (localized: "Chưa xác nhận 98941") until it knows
-    // the real name, and keeps it for the whole download in InPrivate; that placeholder is no name.
+    // the real name, and may keep it for the whole download; that placeholder is no name.
     let placeholder = !stem.contains('.') && stem.rsplit_once(' ').is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    if stem.is_empty() || placeholder { tr("Đang tải xuống", "Downloading").to_string() } else { stem.to_string() }
+    (!stem.is_empty() && !placeholder).then(|| stem.to_string())
+}
+
+/// The real name of `part` from a Chromium history's `(current_path, target_path, state)` rows: its own
+/// row, else the only download still in progress (state 0).
+fn history_name(rows: &[Vec<String>], part: &Path) -> Option<String> {
+    let name = |row: &Vec<String>| Path::new(&row[1]).file_name()?.to_str().map(str::to_string);
+    let own = rows.iter().find(|r| r.len() == 3 && r[0].eq_ignore_ascii_case(part.to_str().unwrap_or_default()));
+    let mut running = rows.iter().filter(|r| r.len() == 3 && r[2] == "0");
+    own.or_else(|| running.next().filter(|_| running.next().is_none())).and_then(name)
+}
+
+/// The finished file a partial download that just vanished became: the partial's own name without the
+/// extension, else (an "Unconfirmed" partial) the newest file in its folder at least as large, written just now.
+fn completed_file(part: &Path, size: u64, wall_now: SystemTime) -> Option<PathBuf> {
+    let named = part.with_extension("");
+    if clean_download_name(part).is_some() && named.is_file() {
+        return Some(named);
+    }
+    std::fs::read_dir(part.parent()?).ok()?.flatten().filter_map(|entry| {
+        let path = entry.path();
+        let metadata = std::fs::metadata(&path).ok()?;
+        let modified = metadata.modified().ok()?;
+        let fresh = wall_now.duration_since(modified).unwrap_or_default() < Duration::from_secs(15);
+        (!is_download_part(&path) && metadata.is_file() && metadata.len() >= size && fresh).then_some((path, modified))
+    }).max_by_key(|(_, modified)| *modified).map(|(path, _)| path)
 }
 
 fn downloads_dir() -> Option<PathBuf> {
@@ -364,21 +421,24 @@ fn downloads_dir() -> Option<PathBuf> {
 /// Chromium browsers keep their own download folder (Edge set to E:\Download saves nothing in Downloads).
 const BROWSERS: &[&str] = &[r"Microsoft\Edge\User Data", r"Google\Chrome\User Data", r"BraveSoftware\Brave-Browser\User Data"];
 
-/// Windows Downloads plus every Chromium profile's download folder, without duplicates.
-fn download_dirs() -> Vec<PathBuf> {
+/// Windows Downloads plus every Chromium profile's download folder, without duplicates; and every
+/// profile's History database (where the real name of an "Unconfirmed" download is).
+fn download_dirs() -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut dirs: Vec<PathBuf> = downloads_dir().into_iter().collect();
+    let mut histories = Vec::new();
     let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     let profiles = local.iter().flat_map(|l| BROWSERS.iter().map(move |b| l.join(b)))
         .filter_map(|root| std::fs::read_dir(root).ok()).flatten().flatten();
     for profile in profiles {
         let Ok(text) = std::fs::read_to_string(profile.path().join("Preferences")) else { continue };
+        histories.push(profile.path().join("History"));
         if let Some(dir) = chromium_download_dir(&text) {
             if !dirs.iter().any(|d| d.as_os_str().eq_ignore_ascii_case(dir.as_os_str())) {
                 dirs.push(dir);
             }
         }
     }
-    dirs
+    (dirs, histories)
 }
 
 fn chromium_download_dir(preferences: &str) -> Option<PathBuf> {
@@ -465,7 +525,7 @@ mod tests {
         let mut monitor = Monitor::new(false);
         monitor.last = Some(LiveActivity {
             kind: ActivityKind::Download, title: "file.zip".into(),
-            detail: "5 MB".into(), progress: None,
+            detail: "5 MB".into(), progress: None, succeeded: false,
         });
         assert!(monitor.poll(Instant::now()).is_none());
         assert!(monitor.take_finished().is_none());
@@ -487,7 +547,7 @@ mod tests {
         let (request, _requests) = sync_channel(1);
         let (updates, receiver) = channel();
         let now = Instant::now();
-        let activity = LiveActivity { kind: ActivityKind::Download, title: "movie.zip".into(), detail: "5 MB".into(), progress: None };
+        let activity = LiveActivity { kind: ActivityKind::Download, title: "movie.zip".into(), detail: "5 MB".into(), progress: None, succeeded: false };
         let mut watch = Watch { enabled: true, reader: Some(Reader {
             request, updates: receiver, current: None, finished: None, received_at: now,
         }) };
@@ -549,7 +609,12 @@ mod tests {
     #[ignore = "read-only probe of live Explorer windows and the configured Downloads folder"]
     fn live_activity_probe() {
         let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        println!("Download folders: {:?}", download_dirs());
+        let (dirs, histories) = download_dirs();
+        println!("Download folders: {dirs:?}");
+        for h in &histories {
+            let rows = crate::notify::query_unlocked(h, "SELECT current_path, target_path, state FROM downloads ORDER BY id DESC LIMIT 2", 3);
+            println!("History {h:?}: {rows:?}");
+        }
         println!("Explorer: {:?}", poll_explorer());
         if com.is_ok() { unsafe { CoUninitialize(); } }
     }
@@ -579,13 +644,43 @@ mod tests {
     }
 
     #[test]
+    fn an_unconfirmed_download_takes_its_name_from_the_browser_history() {
+        let row = |cur: &str, target: &str, state: &str| vec![cur.to_string(), target.to_string(), state.to_string()];
+        let part = Path::new(r"E:\Download\Chưa xác nhận 98941.crdownload");
+        let rows = [row(r"E:\Download\Chưa xác nhận 98941.crdownload", r"E:\Download\model.gguf", "0"), row(r"E:\Download\old.zip", r"E:\Download\old.zip", "1")];
+        assert_eq!(history_name(&rows, part).as_deref(), Some("model.gguf"));
+        let other_path = [row(r"E:\Download\x.crdownload", r"E:\Download\only.iso", "0")];
+        assert_eq!(history_name(&other_path, part).as_deref(), Some("only.iso"), "the one download running");
+        let two = [row("a", r"E:\a.iso", "0"), row("b", r"E:\b.iso", "0")];
+        assert_eq!(history_name(&two, part), None, "two running: no guessing");
+        assert_eq!(history_name(&[], part), None);
+    }
+
+    #[test]
+    fn a_vanished_partial_succeeded_when_its_file_is_there() {
+        let now = SystemTime::now();
+        let dir = std::env::temp_dir().join(format!("puw-done-{}-{}", std::process::id(), now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&dir).unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+        let _cleanup = Cleanup(dir.clone());
+        assert_eq!(completed_file(&dir.join("Unconfirmed 1.crdownload"), 5, now), None, "cancelled: nothing left");
+        std::fs::write(dir.join("small.txt"), b"1").unwrap();
+        assert_eq!(completed_file(&dir.join("Unconfirmed 1.crdownload"), 5, now), None, "smaller than what was downloaded");
+        std::fs::write(dir.join("model.gguf"), b"123456").unwrap();
+        assert_eq!(completed_file(&dir.join("Unconfirmed 1.crdownload"), 5, now), Some(dir.join("model.gguf")));
+        std::fs::write(dir.join("video.mp4"), b"1").unwrap();
+        assert_eq!(completed_file(&dir.join("video.mp4.crdownload"), 1, now), Some(dir.join("video.mp4")));
+    }
+
+    #[test]
     fn download_names_and_parts() {
-        assert_eq!(clean_download_name(Path::new("video.mp4.crdownload")), "video.mp4");
-        assert_eq!(clean_download_name(Path::new("setup.exe.part")), "setup.exe");
+        assert_eq!(clean_download_name(Path::new("video.mp4.crdownload")).as_deref(), Some("video.mp4"));
+        assert_eq!(clean_download_name(Path::new("setup.exe.part")).as_deref(), Some("setup.exe"));
         for unnamed in ["Unconfirmed 98941.crdownload", "Chưa xác nhận 98941.crdownload"] {
-            assert_eq!(clean_download_name(Path::new(unnamed)), tr("Đang tải xuống", "Downloading"), "{unnamed}");
+            assert_eq!(clean_download_name(Path::new(unnamed)), None, "{unnamed}");
         }
-        assert_eq!(clean_download_name(Path::new("model v4 2.gguf.crdownload")), "model v4 2.gguf");
+        assert_eq!(clean_download_name(Path::new("model v4 2.gguf.crdownload")).as_deref(), Some("model v4 2.gguf"));
         assert!(is_download_part(Path::new("a.crdownload")) && is_download_part(Path::new("b.PART")));
         assert!(!is_download_part(Path::new("c.mp4")));
     }

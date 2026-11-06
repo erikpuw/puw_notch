@@ -716,9 +716,10 @@ impl App {
             changed = true;
         }
         if let Some(a) = self.activity.poll(Instant::now()) {
-            self.show_activity(activity_toast(&a, false));
+            self.show_activity(activity_toast(&a, false), ACTIVITY_MS);
         } else if let Some(a) = self.activity.take_finished() {
-            self.show_activity(activity_toast(&a, true));
+            // The end stays long enough to be read, like a notification.
+            self.show_activity(activity_toast(&a, true), ALERT_MS);
         }
         if let Some(t) = new.into_iter().last() {
             // A newer one restarts the 5 s from the start (show_banner re-arms the timer).
@@ -776,17 +777,19 @@ impl App {
 
     /// The live activity's banner: it stays while the activity runs (each tick renews it and updates its
     /// text) and ends by itself a moment after the last one. Another banner is not pushed aside.
-    fn show_activity(&mut self, t: Toast) {
+    fn show_activity(&mut self, t: Toast, ms: u32) {
         if self.approval.is_some() {
             return;
         }
         if self.notch.mode != Mode::Alert {
-            self.show_banner(t, ACTIVITY_MS);
-        } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.icon == t.icon && b.choices.is_empty()) {
+            self.show_banner(t, ms);
+        // The same activity's banner is updated in place, also when its icon changes (the arrow
+        // becoming the green tick morphs on screen).
+        } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.choices.is_empty()) {
             let width = self.renderer.status_banner_width(&t.title, &t.body, self.scale);
             self.notch.set_alert_width(width);
             self.banner = Some(t);
-            unsafe { SetTimer(Some(self.hwnd), T_ALERT, ACTIVITY_MS, None) };
+            unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
             self.kick();
         }
     }
@@ -1698,13 +1701,20 @@ fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
         Download => (tr("Tải xuống", "Download"), render::ICON_DOWNLOAD),
         Build => (tr("Build", "Build"), render::ICON_BUILD),
     };
-    let title = if done {
-        // A vanished process or partial file can also mean failure or cancellation.
-        format!("{} {}", tr("Đã kết thúc:", "Ended:"), a.title)
-    } else if a.progress.is_some() {
-        format!("{} · {}", a.title, a.detail)
-    } else {
-        a.title.clone()
+    // A download's title says what happens and names the file once it is known ("" until then).
+    let named = |what: &str| if a.title.is_empty() { what.to_string() } else { format!("{what}: {}", a.title) };
+    if a.kind == Download && done && a.succeeded {
+        // The green tick takes the arrow's place (the banner icon morphs into it).
+        return status_toast(app, tr("Tải xuống hoàn tất", "Download complete").to_string(), &format!("{} · {}", a.title, a.detail), None, render::ICON_CHECK);
+    }
+    let title = match (a.kind, done) {
+        // No finished file: cancelled, failed, or moved away before it was seen.
+        (Download, true) => named(tr("Đã dừng tải xuống", "Download stopped")),
+        (Download, false) => named(tr("Đang tải xuống", "Downloading")),
+        // A vanished process can also mean failure or cancellation.
+        (_, true) => format!("{} {}", tr("Đã kết thúc:", "Ended:"), a.title),
+        _ if a.progress.is_some() => format!("{} · {}", a.title, a.detail),
+        _ => a.title.clone(),
     };
     status_toast(app, title, &a.detail, if done { None } else { a.progress }, icon)
 }
@@ -2027,11 +2037,24 @@ mod tests {
     fn live_activity_percentage_is_visible_alongside_the_bar() {
         let activity = activity::LiveActivity {
             kind: activity::ActivityKind::FileOp,
-            title: "Copying files".into(), detail: "42%".into(), progress: Some(0.42),
+            title: "Copying files".into(), detail: "42%".into(), progress: Some(0.42), succeeded: false,
         };
         let toast = activity_toast(&activity, false);
         assert!(toast.title.contains("42%"), "the status layout hides body text when a bar is present");
         assert_eq!(toast.level, Some(0.42));
+    }
+
+    #[test]
+    fn a_download_banner_names_the_file_and_ends_with_a_tick() {
+        let mut a = activity::LiveActivity { kind: activity::ActivityKind::Download, title: String::new(), detail: "196.6 MB".into(), progress: None, succeeded: false };
+        assert_eq!(activity_toast(&a, false).title, tr("Đang tải xuống", "Downloading"));
+        a.title = "model.gguf".into();
+        assert_eq!(activity_toast(&a, false).title, format!("{}: model.gguf", tr("Đang tải xuống", "Downloading")));
+        assert_eq!(activity_toast(&a, true).icon, Some(render::ICON_DOWNLOAD), "vanished without a file: no tick");
+        a.succeeded = true;
+        let done = activity_toast(&a, true);
+        assert_eq!((done.title.as_str(), done.icon), (tr("Tải xuống hoàn tất", "Download complete"), Some(render::ICON_CHECK)));
+        assert_eq!(done.body, "model.gguf · 196.6 MB");
     }
 
     use super::*;

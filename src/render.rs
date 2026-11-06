@@ -798,7 +798,7 @@ pub const ICON_BELL: &str = "\u{EA8F}";
 const ICON_LEFT: &str = "\u{E76B}";
 const ICON_RIGHT: &str = "\u{E76C}";
 const ICON_ADD: &str = "\u{E710}";
-const ICON_CHECK: &str = "\u{E73E}";
+pub const ICON_CHECK: &str = "\u{E73E}";
 const ICON_CLOSE: &str = "\u{E711}";
 const ICON_EDIT: &str = "\u{E70F}";
 const YELLOW: (f32, f32, f32) = (1.0, 0.8, 0.2);
@@ -3044,16 +3044,23 @@ mod tests {
             renderer.grab = true;
             let mut sheet = Vec::new();
             let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "Cho phép chạy list_projects của codebase-memory-mcp để liệt kê các project đã được index trong đồ thị mã nguồn (chỉ đọc, không thay đổi gì)?".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choices: vec!["Đồng ý".into(), "Không đồng ý".into(), "Trong app".into()] , app_id: None };
-            for (toast, lines) in [(&note, 1), (&device, 0), (&charging, 0), (&approve, 3)] {
+            let downloading = Toast { app: "Tải xuống".into(), title: "Đang tải xuống: model.gguf".into(), body: "196.6 MB · 86.5 MB/s".into(), level: None,
+                icon: Some(ICON_DOWNLOAD), image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
+            let downloaded = Toast { title: "Tải xuống hoàn tất".into(), body: "model.gguf · 1215.4 MB".into(), icon: Some(ICON_CHECK), ..downloading.clone() };
+            let banners = [(&note, 1), (&device, 0), (&charging, 0), (&approve, 3), (&downloading, 0), (&downloaded, 0)];
+            for (toast, lines) in banners {
             let view = View { mode: Mode::Alert, size: if toast.choices.is_empty() { notch::alert_size(lines) } else { notch::alert_size_choice(lines) }, time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
                 leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false,
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+            // The banner icon morphs from the previous banner's; picture it settled.
+            std::thread::sleep(std::time::Duration::from_secs_f32(anim::ICON_MORPH_S + 0.05));
+            renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
             sheet.extend_from_slice(&renderer.grabbed[..]);
             }
-            let (pixels, h) = (&sheet[..], h * 4);
+            let (pixels, h) = (&sheet[..], h * banners.len() as i32);
             let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
             bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
             bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());

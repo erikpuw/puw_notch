@@ -90,8 +90,10 @@ type ColInt = unsafe extern "system" fn(*mut c_void, c_int) -> i64;
 type ColBlob = unsafe extern "system" fn(*mut c_void, c_int) -> *const c_void;
 type ColBytes = unsafe extern "system" fn(*mut c_void, c_int) -> c_int;
 type Finalize = unsafe extern "system" fn(*mut c_void) -> c_int;
+type Close = unsafe extern "system" fn(*mut c_void) -> c_int;
 
 const SQLITE_OPEN_READONLY: c_int = 1;
+const SQLITE_OPEN_URI: c_int = 0x40;
 const SQLITE_ROW: c_int = 100;
 
 struct Sqlite {
@@ -101,6 +103,67 @@ struct Sqlite {
     col_blob: ColBlob,
     col_bytes: ColBytes,
     finalize: Finalize,
+    close: Close,
+}
+
+macro_rules! proc {
+    ($lib:expr, $name:expr) => {
+        std::mem::transmute(GetProcAddress($lib, $name)?)
+    };
+}
+
+impl Sqlite {
+    /// The System32 SQLite and a connection to `path` (a file name, or a `file:` URI with SQLITE_OPEN_URI).
+    unsafe fn open(path: &str, flags: c_int) -> Option<(Self, *mut c_void)> {
+        let lib = LoadLibraryW(w!("winsqlite3.dll")).ok()?;
+        let open: Open = proc!(lib, s!("sqlite3_open_v2"));
+        let sql = Sqlite {
+            prepare: proc!(lib, s!("sqlite3_prepare_v2")),
+            step: proc!(lib, s!("sqlite3_step")),
+            col_int: proc!(lib, s!("sqlite3_column_int64")),
+            col_blob: proc!(lib, s!("sqlite3_column_blob")),
+            col_bytes: proc!(lib, s!("sqlite3_column_bytes")),
+            finalize: proc!(lib, s!("sqlite3_finalize")),
+            close: proc!(lib, s!("sqlite3_close_v2")),
+        };
+        let cpath = CString::new(path).ok()?;
+        let mut db = std::ptr::null_mut();
+        if open(cpath.as_ptr(), &mut db, flags, std::ptr::null()) != 0 {
+            (sql.close)(db);
+            return None;
+        }
+        Some((sql, db))
+    }
+
+    unsafe fn text(&self, stmt: *mut c_void, col: c_int) -> String {
+        let p = (self.col_blob)(stmt, col) as *const u8;
+        let n = (self.col_bytes)(stmt, col).max(0) as usize;
+        if p.is_null() {
+            return String::new();
+        }
+        String::from_utf8_lossy(std::slice::from_raw_parts(p, n)).into_owned()
+    }
+}
+
+/// Every row of one read-only query on another app's database, `columns` columns each as text. The
+/// file is not locked: a browser holds its own databases exclusively while it runs.
+pub fn query_unlocked(path: &std::path::Path, q: &str, columns: c_int) -> Option<Vec<Vec<String>>> {
+    // SQLite URIs take forward slashes; '?' and '#' in a path would end it early.
+    let path = path.to_str()?.replace('\\', "/").replace('%', "%25").replace('?', "%3f").replace('#', "%23");
+    unsafe {
+        let (sql, db) = Sqlite::open(&format!("file:///{path}?mode=ro&nolock=1"), SQLITE_OPEN_READONLY | SQLITE_OPEN_URI)?;
+        let mut rows = Vec::new();
+        let mut stmt = std::ptr::null_mut();
+        let ok = CString::new(q).is_ok_and(|cq| (sql.prepare)(db, cq.as_ptr(), -1, &mut stmt, std::ptr::null_mut()) == 0);
+        if ok {
+            while (sql.step)(stmt) == SQLITE_ROW {
+                rows.push((0..columns).map(|c| sql.text(stmt, c)).collect());
+            }
+            (sql.finalize)(stmt);
+        }
+        (sql.close)(db);
+        ok.then_some(rows)
+    }
 }
 
 pub struct Reader {
@@ -111,11 +174,6 @@ pub struct Reader {
     pub cleared: i64,
 }
 
-macro_rules! proc {
-    ($lib:expr, $name:expr) => {
-        std::mem::transmute(GetProcAddress($lib, $name)?)
-    };
-}
 
 impl Reader {
     /// Opens the database; what is already there is skipped, only newer toasts are reported.
@@ -126,21 +184,7 @@ impl Reader {
 
     fn open_path(path: &str) -> Option<Self> {
         unsafe {
-            let lib = LoadLibraryW(w!("winsqlite3.dll")).ok()?;
-            let open: Open = proc!(lib, s!("sqlite3_open_v2"));
-            let sql = Sqlite {
-                prepare: proc!(lib, s!("sqlite3_prepare_v2")),
-                step: proc!(lib, s!("sqlite3_step")),
-                col_int: proc!(lib, s!("sqlite3_column_int64")),
-                col_blob: proc!(lib, s!("sqlite3_column_blob")),
-                col_bytes: proc!(lib, s!("sqlite3_column_bytes")),
-                finalize: proc!(lib, s!("sqlite3_finalize")),
-            };
-            let cpath = CString::new(path).ok()?;
-            let mut db = std::ptr::null_mut();
-            if open(cpath.as_ptr(), &mut db, SQLITE_OPEN_READONLY, std::ptr::null()) != 0 {
-                return None;
-            }
+            let (sql, db) = Sqlite::open(path, SQLITE_OPEN_READONLY)?;
             let mut r = Reader { sql, db, last_id: -1, cleared: 0 };
             r.poll();
             Some(r)
@@ -213,12 +257,7 @@ impl Reader {
     }
 
     unsafe fn text(&self, stmt: *mut c_void, col: c_int) -> String {
-        let p = (self.sql.col_blob)(stmt, col) as *const u8;
-        let n = (self.sql.col_bytes)(stmt, col).max(0) as usize;
-        if p.is_null() {
-            return String::new();
-        }
-        String::from_utf8_lossy(std::slice::from_raw_parts(p, n)).into_owned()
+        self.sql.text(stmt, col)
     }
 }
 
