@@ -840,6 +840,13 @@ struct CoverCache {
     aurora: [(f32, f32, f32); 2],
 }
 
+/// A track change in progress on the Music page: the cover that is leaving (None: there was no art, so the note
+/// placeholder is under it) and how far the new one has faded in, 0..1 over `anim::COVER_FADE_S`.
+struct CoverFade {
+    from: Option<(ID2D1Bitmap, ID2D1Bitmap)>,
+    t: f32,
+}
+
 /// Shadow of the open panel: reaches SHADOW_STEPS * SHADOW_STEP px past the edge (the window has
 /// 24+ px of margin below), SHADOW_ALPHA dark at the edge, shifted SHADOW_DY px down.
 /// Ten wide strokes instead of fourteen narrow ones: the reach is the same 12.6 px, so the
@@ -1124,6 +1131,8 @@ pub struct Renderer {
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
     /// Decoded cover of the current track (keyed by Track::art_key).
     cover: Option<CoverCache>,
+    /// The cover change being faded, if any (see `CoverFade`).
+    cover_fade: Option<CoverFade>,
     /// The cover's blurred shadow, made once per scale: (scale, bitmap).
     cover_shadow: Option<(f32, ID2D1Bitmap)>,
     /// The aurora's two blur targets (small, mid) for one small-target size, kept across frames:
@@ -1251,7 +1260,7 @@ impl Renderer {
             Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
                 owner: Owner::Pill,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
-                fonts: None, cover: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
+                fonts: None, cover: None, cover_fade: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
         }
     }
 
@@ -1262,6 +1271,7 @@ impl Renderer {
         self.surface = None;
         self.cover = None;
         self.cover_shadow = None;
+        self.cover_fade = None;
         *self.aurora_rts.get_mut() = None;
         self.app_icons.clear();
         Ok(())
@@ -1466,6 +1476,11 @@ impl Renderer {
                 Some(((fit(big)?, fit(small)?), glow_tint(&px), aurora::tints(&px)))
             });
             let (bitmaps, glow, aurora) = match decoded { Some((b, g, au)) => (Some(b), Some(g), au), None => (None, None, [GLOW_NEUTRAL; 2]) };
+            // A different track with art fades in over the cover it replaces; a re-made cover of the same track does not.
+            self.cover_fade = match (&self.cover, &bitmaps) {
+                (Some(old), Some(_)) if old.track_key != t.art_key => Some(CoverFade { from: old.bitmaps.clone(), t: 0.0 }),
+                _ => None,
+            };
             self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), sizes: (big, small), bitmaps, glow, aurora });
         }
         self.cover.as_ref().and_then(|c| c.bitmaps.clone())
@@ -1912,6 +1927,15 @@ impl Renderer {
         let dt = elapsed.min(0.1);
         let (tint, level, glow_busy) = glow_step(self.glow.0, self.glow.1, target, dt);
         self.glow = (tint, level, now);
+        // A new cover fades in over the old one for COVER_FADE_S, then the fade is dropped (and the old bitmaps with it).
+        if let Some(f) = &mut self.cover_fade {
+            f.t += dt / anim::COVER_FADE_S;
+        }
+        if self.cover_fade.as_ref().is_some_and(|f| f.t >= 1.0) {
+            self.cover_fade = None;
+        }
+        let cover_fading = self.cover_fade.is_some();
+        let cover_fade = self.cover_fade.as_ref().map(|f| (f.from.clone(), anim::cover_fade(f.t)));
         // The equaliser rises when playing starts and settles flat when it stops, not in one frame.
         let bars_to = if v.music.is_some_and(|t| t.playing) { 1.0 } else { 0.0 };
         self.bars = anim::follow(self.bars, bars_to, dt, anim::BARS_RATE);
@@ -2023,21 +2047,34 @@ impl Renderer {
                     let area = rect(box_.left - pad, box_.top + drop - pad, box_.right + pad, box_.bottom + drop + pad);
                     rt.DrawBitmap(shadow, Some(&area), COVER_SHADOW_ALPHA * a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                 }
+                let big_box = box_.right - box_.left > 40.0 * s;
+                // The picture at `k` times its size about the box's centre, `a` opaque. At full size it is placed on whole
+                // pixels, 1:1 (made at exactly the drawn size), so it stays sharp.
+                let paint = |bmp: &ID2D1Bitmap, a: f32, k: f32| -> Result<()> {
+                    let size = bmp.GetSize();
+                    let (w, h) = (size.width * k, size.height * k);
+                    let (x, y) = if k == 1.0 { (box_.left.round(), box_.top.round()) } else { ((box_.left + box_.right - w) / 2.0, (box_.top + box_.bottom - h) / 2.0) };
+                    let b = rt.CreateBitmapBrush(bmp, None, None)?;
+                    b.SetTransform(&Matrix3x2 { M11: k, M12: 0.0, M21: 0.0, M22: k, M31: x, M32: y });
+                    b.SetOpacity(a);
+                    rt.FillRoundedRectangle(&rounded(rect(x, y, x + w, y + h), radius * k), &b);
+                    Ok(())
+                };
+                let placeholder = |a: f32| -> Result<()> {
+                    rt.FillRoundedRectangle(&rounded(box_, radius), &self.brush(grey(0.2, a))?);
+                    text(ICON_NOTE, F_ICON, box_, DWRITE_TEXT_ALIGNMENT_CENTER, grey(1.0, a * 0.8))
+                };
                 match &cover {
-                    Some((big, small)) => {
-                        // Made at exactly the drawn size: placed on whole pixels, 1:1, so it stays sharp.
-                        let bmp = if box_.right - box_.left > 40.0 * s { big } else { small };
-                        let size = bmp.GetSize();
-                        let (x, y) = (box_.left.round(), box_.top.round());
-                        let b = rt.CreateBitmapBrush(bmp, None, None)?;
-                        b.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: x, M32: y });
-                        b.SetOpacity(a);
-                        rt.FillRoundedRectangle(&rounded(rect(x, y, x + size.width, y + size.height), radius), &b);
-                    }
-                    None => {
-                        rt.FillRoundedRectangle(&rounded(box_, radius), &self.brush(grey(0.2, a))?);
-                        text(ICON_NOTE, F_ICON, box_, DWRITE_TEXT_ALIGNMENT_CENTER, grey(1.0, a * 0.8))?;
-                    }
+                    Some((big, _)) if big_box => match &cover_fade {
+                        // A new track: the old cover (or the note) stays at full strength, the new one fades and grows in on top.
+                        Some((from, (fade, k))) => {
+                            match from { Some((old, _)) => paint(old, a, 1.0)?, None => placeholder(a)? }
+                            paint(big, a * fade, *k)?;
+                        }
+                        None => paint(big, a, 1.0)?,
+                    },
+                    Some((_, small)) => paint(small, a, 1.0)?,
+                    None => placeholder(a)?,
                 }
                 Ok(())
             };
@@ -2202,7 +2239,7 @@ impl Renderer {
             // coming while it is open (the halo of the sun, or of the moon at night, breathes and blinks).
             let sun_moving = v.sun_view && v.weather.sun.is_some();
             let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && (v.page_age < anim::ICON_MOTION_S || sun_moving);
-            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving)
+            Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving || cover_fading)
         }
     }
 }

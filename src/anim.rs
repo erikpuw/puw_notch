@@ -15,6 +15,16 @@ pub const LIST_GLIDE_RATE: f32 = 14.0;
 pub const BARS_RATE: f32 = 9.0;
 /// Seconds a page change takes (the old page slides out and fades, the new one comes in).
 pub const PAGE_MORPH_S: f32 = 0.32;
+/// Seconds a new cover takes to fade in over the old one, and the size it starts at (it settles to full size).
+pub const COVER_FADE_S: f32 = 0.35;
+pub const COVER_FADE_FROM: f32 = 0.96;
+
+/// The arriving cover at progress `t` (0..1) of a track change: (opacity, scale). The old cover stays underneath at full
+/// strength, so the picture never dips to black halfway.
+pub fn cover_fade(t: f32) -> (f32, f32) {
+    let e = ease_out(t);
+    (e, COVER_FADE_FROM + (1.0 - COVER_FADE_FROM) * e)
+}
 
 /// 0 -> 1 over `len` seconds from `from`, held at both ends.
 pub fn lerp_in(t: f32, from: f32, len: f32) -> f32 {
@@ -112,6 +122,19 @@ impl Spring {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cover_crossfade_lands_whole_and_full_size() {
+        assert_eq!(cover_fade(0.0), (0.0, COVER_FADE_FROM));
+        assert_eq!(cover_fade(1.0), (1.0, 1.0));
+        assert_eq!(cover_fade(5.0), (1.0, 1.0), "held once done");
+        let (mut alpha, mut scale) = (0.0, COVER_FADE_FROM);
+        for i in 1..=100 {
+            let (a, k) = cover_fade(i as f32 / 100.0);
+            assert!(a >= alpha && k >= scale && k <= 1.0, "rises, never past full size");
+            (alpha, scale) = (a, k);
+        }
+    }
 
     #[test]
     fn curves_start_and_end_where_they_should() {
