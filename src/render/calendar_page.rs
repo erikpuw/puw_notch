@@ -69,7 +69,7 @@ impl Renderer {
             }
             for k in 0..7u32 {
                 let x = gx + k as f32 * CAL_COL_W * s;
-                text(cal::weekday_short(k, english), F_LABEL, rect(x, CAL_HEAD_Y * s, x + CAL_COL_W * s, (CAL_HEAD_Y + CAL_ROW_H) * s), center, grey(0.5, a))?;
+                text(cal::weekday_short(k, english), F_BODY, rect(x, CAL_HEAD_Y * s, x + CAL_COL_W * s, (CAL_HEAD_Y + CAL_ROW_H) * s), center, grey(0.5, a))?;
             }
             let (first, days) = (cal::first_column(c.year, c.month) as i32, cal::days_in_month(c.year, c.month) as i32);
             for i in 0..42usize {
@@ -87,21 +87,21 @@ impl Renderer {
                     Some(l) => l.day.to_string(),
                     None => day.to_string(),
                 };
-                let font = if l.is_some_and(|l| l.day == 1) { F_LABEL_BOLD } else { F_LABEL };
+                let font = if l.is_some_and(|l| l.day == 1) { F_CLOCK_BOLD } else { F_CLOCK };
                 let (mx, my) = ((cell.left + cell.right) / 2.0, (cell.top + cell.bottom) / 2.0);
-                let half = ((width(&label, font) / s + 8.0).max(CAL_ROW_H) / 2.0) * s;
-                let chip = rect(mx - half, my - CAL_ROW_H * s / 2.0, mx + half, my + CAL_ROW_H * s / 2.0);
+                let half = ((width(&label, font) / s + 8.0).max(CAL_CHIP_H) / 2.0) * s;
+                let chip = rect(mx - half, my - CAL_CHIP_H * s / 2.0, mx + half, my + CAL_CHIP_H * s / 2.0);
                 let today = c.today == (c.year, c.month, day);
                 if today {
-                    rt.FillRoundedRectangle(&rounded(chip, CAL_ROW_H * s / 2.0), &self.brush(color(GREEN.0, GREEN.1, GREEN.2, a))?);
+                    rt.FillRoundedRectangle(&rounded(chip, CAL_CHIP_H * s / 2.0), &self.brush(color(GREEN.0, GREEN.1, GREEN.2, a))?);
                 } else if day == sel {
                     let inner = rect(chip.left + 0.5, chip.top + 0.5, chip.right - 0.5, chip.bottom - 0.5);
-                    rt.DrawRoundedRectangle(&rounded(inner, CAL_ROW_H * s / 2.0), &self.brush(grey(0.7, a))?, 1.0 * s, None);
+                    rt.DrawRoundedRectangle(&rounded(inner, CAL_CHIP_H * s / 2.0), &self.brush(grey(0.7, a))?, 1.0 * s, None);
                 } else if hovered == Some(Button::CalCell(i)) {
-                    rt.FillRoundedRectangle(&rounded(chip, CAL_ROW_H * s / 2.0), &self.brush(grey(0.14, a))?);
+                    rt.FillRoundedRectangle(&rounded(chip, CAL_CHIP_H * s / 2.0), &self.brush(grey(0.14, a))?);
                 }
                 let ink = if today { color(0.02, 0.13, 0.04, a) } else { grey(1.0, a) };
-                text(&label, if today { F_LABEL_BOLD } else { font }, cell, center, ink)?;
+                text(&label, if today { F_CLOCK_BOLD } else { font }, cell, center, ink)?;
             }
         }
         Ok(())

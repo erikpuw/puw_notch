@@ -769,9 +769,8 @@ const F_TEMP: usize = 17;
 const F_SONG: usize = 18;
 /// The time left on the Focus page.
 const F_TIME: usize = 19;
-/// The Calendar page's big day, and its bold 12 px (today, the first of a lunar month).
+/// The Calendar page's big day.
 const F_DAY: usize = 20;
-const F_LABEL_BOLD: usize = 21;
 /// The Calendar page (logical px from the panel's top-left, the x from the content's left): the left column
 /// (the day, its weekday, the other date, the choice) is `CAL_LEFT_W` wide and its block centred in
 /// `CAL_BLOCK_H` from `CAL_TOP`; the grid starts at `CAL_GRID_X`, seven columns, a title row, a weekday row, six rows.
@@ -787,6 +786,8 @@ const CAL_TITLE_Y: f32 = 32.0;
 const CAL_HEAD_Y: f32 = 52.0;
 const CAL_ROW0: f32 = 68.0;
 const CAL_ROW_H: f32 = 16.0;
+/// A day's disc (today), ring (picked) or hover wash: a little taller than its row.
+const CAL_CHIP_H: f32 = 18.0;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
 /// of the thin divider after the player's controls, its right margin and its width. The right
 /// margin equals the gap at the divider; the pages' clip gives way on that side while the lyrics
@@ -1495,7 +1496,6 @@ impl Renderer {
                 make(display, 21.0, DWRITE_FONT_WEIGHT_BOLD)?,
                 make(display, 46.0, DWRITE_FONT_WEIGHT_MEDIUM)?,
                 make(display, 52.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
-                make(ui, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
             ];
             self.fonts = Some((scale, set));
         }
