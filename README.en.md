@@ -38,6 +38,7 @@
 | **Health** | Water and stand-up reminders: a big figure, the day's progress as a bar, a round button to log a drink or having stood up; times and amounts under ⚙. |
 | **Weather** | Type a city once: a large icon and temperature, the next 5 slots, feels-like, humidity, wind, the day's high, °C | °F. The sun button on the city line swaps the hours for **the sun's path** (sunrise, sunset, daylight left; two rings of light round the sun fade in and out gently, a crescent moon at night). Open-Meteo data, refreshed every 30 min. |
 | **Calendar** | One month, weeks from **Monday** to Sunday (ISO 8601, the same on every PC), the day picked shown very large on the left with its weekday; click a day to look at it, ‹ › change the month. Weekday and month names follow the app's language. No holidays: each country has its own. On a PC set to Vietnam, China, Hong Kong, Macao, Taiwan or Korea, a **Solar | Lunar** choice swaps the numbers on the grid for the lunar calendar (worked out in the app, no network, the first day of a lunar month shows its month); change the region in Windows and the choice shows or hides with it, no restart. |
+| **Network banners** | Wi-Fi, Bluetooth and airplane mode each have **their own banner**. When Wi-Fi comes on or airplane mode goes off, the banner is a **list of steps**: a green tick when done, a spinner while waited for, an empty ring when not yet its turn, a red cross when it fails (the network connection, the VPN that was up before, Bluetooth and the devices that were connected before). One Bluetooth device is its own banner with the battery large; two or more are a list, a line each. Switching quickly off and on leaves only the last state. |
 | **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity (a free plan: 30 days), a tab per app (with the app's dot), only for the apps found on the PC; Claude shows two concentric rings (5 hours outside, the week inside). Codex and Antigravity show what is left, Claude what is used. A banner warns at 80 %, 95 %, or 25 % of the limit in one day. |
 
 The Limits page reads this PC only, nothing is sent:
@@ -68,6 +69,10 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 | ![Calendar](assets/screenshots/en/page-calendar.png)<br>**Calendar**: the day large, weeks from Monday, ‹ › change the month | ![Lunar calendar](assets/screenshots/en/page-calendar-lunar.png)<br>**Lunar**: the Solar \| Lunar choice swaps the grid's numbers (only where the region has one) |
 |---|---|
+
+| ![Wi-Fi on](assets/screenshots/en/banner-wifi.png)<br>**Wi-Fi on**: the connection, then the VPN that was up before | ![Airplane mode off](assets/screenshots/en/banner-airplane-off.png)<br>**Airplane mode off**: the steps are listed from the start and tick off as they happen |
+|---|---|
+| ![Airplane mode on](assets/screenshots/en/banner-airplane-on.png)<br>**Airplane mode on**: takes Wi-Fi, Bluetooth and the VPN going off with it | ![Two Bluetooth devices](assets/screenshots/en/banner-bluetooth.png)<br>**Bluetooth**: two or more devices, a line each with its battery |
 
 **Limits** of Claude, Codex and Antigravity (Claude shows what is used; Codex and Antigravity show what is left, counting down like their own apps). The Codex tab names the plan of the account in use; a free plan counts 30 days:
 

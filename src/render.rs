@@ -3403,12 +3403,25 @@ mod tests {
                 let notes = vec![note("ScreenSketch", "Screenshot copied to clipboard", "Automatically saved to screenshots folder.", 202610291557),
                     note("Zalo", tl("Anh Minh", "Alex"), tl("Tối nay 8h họp nhóm nhé", "Team call at 8 tonight"), 202610291402), note("DolbySettings", "Headphones (UGREEN HiTune Max5c)", "", 202610290207),
                     note("Outlook", tl("Lịch họp tuần", "Weekly planning"), tl("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610281730)];
+                // The network banners: the list of steps (Wi-Fi on), airplane mode off partway and on, two Bluetooth devices.
+                let now = Instant::now();
+                let net = |title: &str, icon: &'static str, rows: Vec<Row>| Toast { app: "Network".into(), title: title.into(), body: String::new(), level: None, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows };
+                let device = |name: &str, kind, battery: &str| Row { text: name.into(), at: now, icon: Some(device_icon(kind)), value: Some(battery.into()), low: false, state: RowState::Done, key: None };
+                let wifi_on = net(tl("Đã bật Wi-Fi", "Turned on Wi-Fi"), ICON_WIFI, vec![Row::line(tl("Đã kết nối Home-WiFi", "Connected to Home-WiFi").into(), now), Row::line(tl("VPN kết nối", "VPN connected").into(), now)]);
+                let air_off = net(tl("Chế độ máy bay Tắt", "Airplane mode Off"), ICON_AIRPLANE, vec![Row::line(tl("Wi-Fi bật", "Wi-Fi on").into(), now), Row::line(tl("Bluetooth bật +2 thiết bị", "Bluetooth on +2 devices").into(), now),
+                    Row::step(tl("Kết nối mạng", "Network connection").into(), RowState::Wait, now), Row::step("VPN".into(), RowState::Todo, now)]);
+                let air_on = net(tl("Chế độ máy bay Bật", "Airplane mode On"), ICON_AIRPLANE, vec![Row::line(tl("VPN tắt", "VPN off").into(), now), Row::line(tl("Bluetooth tắt", "Bluetooth off").into(), now), Row::line(tl("Wi-Fi tắt", "Wi-Fi off").into(), now)]);
+                let bluetooth = net(tl("2 thiết bị Bluetooth", "2 Bluetooth devices"), ICON_BT, vec![device("UGREEN HiTune Max5c", crate::connectivity::DeviceKind::Headphones, "80%"), device(tl("Chuột không dây", "Wireless mouse"), crate::connectivity::DeviceKind::Mouse, "56%")]);
                 // (file, style, mode, music, page, Limits tab, banner)
-                let extra: [(&str, notch::Style, Mode, Option<&Track>, Page, usize, Option<&Toast>); 14] = [
+                let extra: [(&str, notch::Style, Mode, Option<&Track>, Page, usize, Option<&Toast>); 18] = [
                     ("banner", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&notification)),
                     ("banner-water", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&water)),
                     ("banner-water-goal", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&water_goal)),
                     ("banner-standup", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&stand)),
+                    ("banner-wifi", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&wifi_on)),
+                    ("banner-airplane-off", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&air_off)),
+                    ("banner-airplane-on", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&air_on)),
+                    ("banner-bluetooth", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&bluetooth)),
                     ("page-tasks", notch::Style::Ears, Mode::Expanded, None, Page::Todo, 0, None),
                     ("page-notifications", notch::Style::Ears, Mode::Expanded, None, Page::Notify, 0, None),
                     ("style-pill-idle", notch::Style::Pill, Mode::Collapsed, None, Page::Music, 0, None),
@@ -3422,7 +3435,7 @@ mod tests {
                 ];
                 for (name, style, mode, music, page, tab, banner) in extra {
                     let live = music.is_some();
-                    let size = match banner { Some(t) if t.choices.is_empty() => notch::alert_size(if t.icon.is_some() { 0 } else { 1 }), Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None if mode == Mode::Expanded => { let [w, h] = panel_size(page); [w, h, target(mode, live)[2]] } None => target(mode, live) };
+                    let size = match banner { Some(t) if t.choices.is_empty() => { let mut size = notch::alert_size(if t.icon.is_some() { 0 } else { 1 }); size[1] += notch::ROW_H * t.rows.len() as f32; size } Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None if mode == Mode::Expanded => { let [w, h] = panel_size(page); [w, h, target(mode, live)[2]] } None => target(mode, live) };
                     let view = View { mode, size, time: "20:50", date: en_date("T2, 26/10"), battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hovered: None, page,
                         leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                         list: ListView { counts: if page == Page::Todo { (3, 1) } else { (0, 0) }, remind_before: 15, now: crate::todo::stamp(20261029, 2, 5), draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
