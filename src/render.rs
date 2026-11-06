@@ -1476,9 +1476,11 @@ impl Renderer {
                 Some(((fit(big)?, fit(small)?), glow_tint(&px), aurora::tints(&px)))
             });
             let (bitmaps, glow, aurora) = match decoded { Some((b, g, au)) => (Some(b), Some(g), au), None => (None, None, [GLOW_NEUTRAL; 2]) };
-            // A different track with art fades in over the cover it replaces; a re-made cover of the same track does not.
+            // Fade when the picture changes: a new track, or art that arrives late for the same track (over the note until
+            // then); re-making the same picture at another size does not.
+            let same_art = |old: &CoverCache| match (&old.bytes, &t.art) { (None, None) => true, (Some(a), Some(b)) => Arc::ptr_eq(a, b), _ => false };
             self.cover_fade = match (&self.cover, &bitmaps) {
-                (Some(old), Some(_)) if old.track_key != t.art_key => Some(CoverFade { from: old.bitmaps.clone(), t: 0.0 }),
+                (Some(old), Some(_)) if old.track_key != t.art_key || !same_art(old) => Some(CoverFade { from: old.bitmaps.clone(), t: 0.0 }),
                 _ => None,
             };
             self.cover = Some(CoverCache { track_key: t.art_key, bytes: t.art.clone(), sizes: (big, small), bitmaps, glow, aurora });
@@ -1928,6 +1930,10 @@ impl Renderer {
         let (tint, level, glow_busy) = glow_step(self.glow.0, self.glow.1, target, dt);
         self.glow = (tint, level, now);
         // A new cover fades in over the old one for COVER_FADE_S, then the fade is dropped (and the old bitmaps with it).
+        // It only plays while the Music page is open; a change seen elsewhere is not replayed later.
+        if page != Some(Page::Music) || v.mode != Mode::Expanded {
+            self.cover_fade = None;
+        }
         if let Some(f) = &mut self.cover_fade {
             f.t += dt / anim::COVER_FADE_S;
         }
@@ -2698,6 +2704,10 @@ mod tests {
             assert_eq!(bmp.len(), 58);
             track.art = Some(std::sync::Arc::new(bmp));
             assert!(renderer.cover(&track, 120, 20).is_some(), "late cover data must invalidate the cached empty image");
+            assert!(renderer.cover_fade.as_ref().is_some_and(|f| f.from.is_none()), "late art fades in over the note");
+            // The same picture made again at another size is not a new cover: no fade.
+            assert!(renderer.cover(&track, 140, 20).is_some());
+            assert!(renderer.cover_fade.is_none());
             assert!(renderer.cover(&track, 120, 20).is_some());
         }
     }
