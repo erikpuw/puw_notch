@@ -1930,8 +1930,10 @@ impl Renderer {
         let (tint, level, glow_busy) = glow_step(self.glow.0, self.glow.1, target, dt);
         self.glow = (tint, level, now);
         // A new cover fades in over the old one for COVER_FADE_S, then the fade is dropped (and the old bitmaps with it).
-        // It only plays while the Music page is open; a change seen elsewhere is not replayed later.
-        if page != Some(Page::Music) || v.mode != Mode::Expanded {
+        // It plays while the Music page is open or while music is visible on the pill; a change seen elsewhere is not replayed later.
+        let music_showing = (page == Some(Page::Music) && v.mode == Mode::Expanded)
+            || (v.live && matches!(v.mode, Mode::Collapsed | Mode::Peek));
+        if !music_showing {
             self.cover_fade = None;
         }
         if let Some(f) = &mut self.cover_fade {
@@ -2071,15 +2073,23 @@ impl Renderer {
                     text(ICON_NOTE, F_ICON, box_, DWRITE_TEXT_ALIGNMENT_CENTER, grey(1.0, a * 0.8))
                 };
                 match &cover {
-                    Some((big, _)) if big_box => match &cover_fade {
-                        // A new track: the old cover (or the note) stays at full strength, the new one fades and grows in on top.
-                        Some((from, (fade, k))) => {
-                            match from { Some((old, _)) => paint(old, a, 1.0)?, None => placeholder(a)? }
-                            paint(big, a * fade, *k)?;
+                    Some((big, small)) => {
+                        let bmp = if big_box { big } else { small };
+                        match &cover_fade {
+                            // A new track: the old cover (or the note) stays at full strength, the new one fades and grows in on top.
+                            Some((from, (fade, k))) => {
+                                match from {
+                                    Some((old_big, old_small)) => {
+                                        let old = if big_box { old_big } else { old_small };
+                                        paint(old, a, 1.0)?;
+                                    }
+                                    None => placeholder(a)?,
+                                }
+                                paint(bmp, a * fade, *k)?;
+                            }
+                            None => paint(bmp, a, 1.0)?,
                         }
-                        None => paint(big, a, 1.0)?,
-                    },
-                    Some((_, small)) => paint(small, a, 1.0)?,
+                    }
                     None => placeholder(a)?,
                 }
                 Ok(())
