@@ -26,7 +26,8 @@ use crate::i18n::tr;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActivityKind {
     FileOp,
-    /// Explorer deleting or recycling: its own kind for its own icon (a trash can).
+    /// Explorer moving, deleting or recycling: a kind each, for an icon each (a folder with an arrow, a trash can).
+    Move,
     Delete,
     Download,
     Build,
@@ -193,7 +194,7 @@ impl Monitor {
                         a.succeeded = true;
                     }
                 }
-                self.finished = (!matches!(a.kind, ActivityKind::FileOp | ActivityKind::Delete)).then_some(a);
+                self.finished = (!matches!(a.kind, ActivityKind::FileOp | ActivityKind::Move | ActivityKind::Delete)).then_some(a);
             }
         }
         self.last = current.clone();
@@ -410,10 +411,10 @@ fn parse_explorer_labels(title: &str, labels: &[String]) -> Option<LiveActivity>
 /// The percent is optional while Explorer is preparing, counting, or deleting files.
 pub fn parse_explorer_title(title: &str) -> Option<LiveActivity> {
     let text = title.trim_start().to_lowercase();
-    use ActivityKind::{Delete, FileOp};
+    use ActivityKind::{Delete, FileOp, Move};
     let operation = [
         (&["copying", "đang sao chép", "sao chép"][..], tr("Đang sao chép", "Copying files"), FileOp),
-        (&["moving", "đang di chuyển", "di chuyển"][..], tr("Đang di chuyển", "Moving files"), FileOp),
+        (&["moving", "đang di chuyển", "di chuyển"][..], tr("Đang di chuyển", "Moving files"), Move),
         (&["deleting", "recycling", "đang xóa", "xóa"][..], tr("Đang xóa", "Deleting files"), Delete),
         (&["preparing", "đang chuẩn bị", "chuẩn bị"][..], tr("Đang chuẩn bị", "Preparing files"), FileOp),
         (&["extracting", "đang giải nén", "giải nén"][..], tr("Đang giải nén", "Extracting files"), FileOp),
@@ -642,6 +643,8 @@ mod tests {
         let activity = parse_explorer_labels("42% complete", &["Moving 3 items from A to B".into()]).unwrap();
         assert_eq!(activity.title, tr("Đang di chuyển", "Moving files"));
         assert_eq!(activity.progress, Some(0.42));
+        let moving = parse_explorer_labels("42% complete", &["Moving 3 items from A to B".into()]).unwrap();
+        assert_eq!(moving.kind, ActivityKind::Move);
         let deleting = parse_explorer_labels("30% complete", &["Deleting 3 items from A".into()]).unwrap();
         assert_eq!((deleting.kind, deleting.progress), (ActivityKind::Delete, Some(0.30)), "its own kind, for the trash icon");
         assert!(names_operation(&deleting) && !names_operation(&parse_explorer_title("30% complete").unwrap()));

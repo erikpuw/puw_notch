@@ -1709,6 +1709,7 @@ fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
     use activity::ActivityKind::*;
     let (app, icon) = match a.kind {
         FileOp => (tr("Tệp", "Files"), render::ICON_COPY),
+        Move => (tr("Tệp", "Files"), render::ICON_MOVE),
         Delete => (tr("Tệp", "Files"), render::ICON_TRASH),
         Download => (tr("Tải xuống", "Download"), render::ICON_DOWNLOAD),
         Build => (tr("Build", "Build"), render::ICON_BUILD),
