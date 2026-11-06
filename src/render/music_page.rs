@@ -3,11 +3,61 @@
 use super::*;
 
 impl Renderer {
+    /// The cover as a disc under the page: bleeding off the panel's left edge, cut by its outline, its rim fading to
+    /// clear from `DISC_SOLID` of the radius out. `bitmap` is the cover made at the disc's size (None: a note on grey).
+    pub(super) fn draw_disc(
+        &self,
+        text: &dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
+        bitmap: Option<&ID2D1Bitmap>,
+        shape: &ID2D1PathGeometry,
+        l: f32,
+        s: f32,
+        a: f32,
+    ) -> Result<()> {
+        let rt = &self.rt;
+        let (cx, cy, r) = (l + DISC_CX * s, DISC_CY * s, DISC_R * s);
+        let area = rect(cx - r, cy - r, cx + r, cy + r);
+        unsafe {
+            let stop = |position: f32, alpha: f32| D2D1_GRADIENT_STOP { position, color: color(0.0, 0.0, 0.0, alpha) };
+            let stops = rt.CreateGradientStopCollection(&[stop(0.0, 1.0), stop(DISC_SOLID, 1.0), stop(1.0, 0.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+            let fade = rt.CreateRadialGradientBrush(
+                &D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES { center: Vector2 { X: cx, Y: cy }, gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 }, radiusX: r, radiusY: r },
+                None,
+                &stops,
+            )?;
+            // Only inside the panel's outline, and faded by the radial mask.
+            let params = D2D1_LAYER_PARAMETERS { contentBounds: area, geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: a,
+                opacityBrush: std::mem::ManuallyDrop::new(Some(fade.into())), layerOptions: D2D1_LAYER_OPTIONS_NONE };
+            rt.PushLayer(&params, None);
+            let drawn = (|| -> Result<()> {
+                match bitmap {
+                    Some(bmp) => {
+                        // Made at exactly the drawn size: placed on whole pixels, 1:1, so it stays sharp.
+                        let size = bmp.GetSize();
+                        let (x, y) = ((cx - size.width / 2.0).round(), (cy - size.height / 2.0).round());
+                        let b = rt.CreateBitmapBrush(bmp, None, None)?;
+                        b.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: x, M32: y });
+                        rt.FillRectangle(&rect(x, y, x + size.width, y + size.height), &b);
+                    }
+                    None => {
+                        rt.FillRectangle(&area, &self.brush(grey(0.2, 1.0))?);
+                        text(ICON_NOTE, F_ICON, area, DWRITE_TEXT_ALIGNMENT_CENTER, grey(1.0, 0.8))?;
+                    }
+                }
+                Ok(())
+            })();
+            rt.PopLayer();
+            drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
+            drop(std::mem::ManuallyDrop::into_inner(params.opacityBrush));
+            drawn
+        }
+    }
+
     pub(super) fn draw_music(
         &self,
         text: &dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
         micon: &dyn Fn(&'static str, &'static str, usize, D2D_RECT_F, D2D1_COLOR_F) -> Result<()>,
-        draw_cover: &dyn Fn(D2D_RECT_F, f32, f32) -> Result<()>,
         wx_icon: &dyn Fn(&icons::Icon, &[ID2D1PathGeometry], f32, f32, f32, Option<((f32, f32, f32), (f32, f32, f32))>, f32, f32) -> Result<()>,
         player_icons: &[(&'static icons::Icon, Vec<ID2D1PathGeometry>)],
         fonts: &[IDWriteTextFormat],
@@ -28,7 +78,6 @@ impl Renderer {
             let top = COVER_TOP * s;
             // The player is the left 480 px of the panel (the standard width), wider or not.
             let cr = l + (notch::target(Mode::Expanded, false)[0] - SIDE) * s;
-            draw_cover(rect(cl, top, cl + COVER * s, top + COVER * s), 14.0 * s, a)?;
             let tl = cl + (COVER + COVER_GAP) * s;
             match v.music {
                 Some(t) => {
