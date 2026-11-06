@@ -467,25 +467,60 @@ fn asset_job_current(shared: &Mutex<Option<Track>>, page_open: &AtomicBool, pill
         && needs_assets(c, page_open.load(Ordering::Relaxed), pill_visible.load(Ordering::Relaxed))))
 }
 
+/// How many times, and how far apart, a thumbnail that is still the previous track's is read again before it is taken as the cover.
+const ART_RETRIES: u32 = 8;
+const ART_RETRY_WAIT: Duration = Duration::from_millis(250);
+
+/// A new track's picture that equals the previous track's: the player changed the title first and its thumbnail has not caught up yet.
+fn art_is_stale(previous: Option<&Arc<Vec<u8>>>, fresh: Option<&Arc<Vec<u8>>>) -> bool {
+    matches!((previous, fresh), (Some(p), Some(f)) if **p == **f)
+}
+
 fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<GlobalSystemMediaTransportControlsSession>)>, target: isize, page_open: Arc<AtomicBool>, pill_visible: Arc<AtomicBool>) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
+    // The last picture published and the track it was for.
+    let mut last: Option<(u64, Arc<Vec<u8>>)> = None;
     while let Ok(mut job) = rx.recv() {
         for newer in rx.try_iter() { job = newer; }
         let (t, session) = job;
         if !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
-        let art = t.art.clone().or_else(|| if t.art_ready { None } else { match session {
-            Some(s) => s.TryGetMediaPropertiesAsync().and_then(|o| o.get())
-                .and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)),
-            None if t.source_id == crate::itunes::SOURCE_ID => crate::itunes::artwork(&t.title, &t.artist),
-            None => None,
-        }.map(Arc::new) });
-        if let Ok(mut g) = shared.lock() {
-            if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) {
-                cur.art = art;
-                cur.art_ready = true;
+        // Shows `art` on the track this job is for; `ready` is false while a stale thumbnail is shown and will be read again.
+        let publish = |art: Option<Arc<Vec<u8>>>, ready: bool| {
+            if let Ok(mut g) = shared.lock() {
+                if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) {
+                    cur.art = art;
+                    cur.art_ready = ready;
+                }
             }
+            unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
+        };
+        let previous = last.as_ref().filter(|(key, _)| *key != t.art_key).map(|(_, art)| art.clone());
+        let mut art = t.art.clone();
+        if art.is_none() && !t.art_ready {
+            match &session {
+                // A player often sets the title first and its thumbnail a moment later: until the picture differs from the
+                // previous track's it is shown but not trusted, and read again (an album's tracks share a cover, so after
+                // ART_RETRIES the same picture is taken).
+                Some(s) => for attempt in 0..ART_RETRIES {
+                    let fresh = s.TryGetMediaPropertiesAsync().and_then(|o| o.get()).and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)).map(Arc::new);
+                    // One allocation for the picture already shown, so the renderer sees no change.
+                    let fresh = match (fresh, &previous) { (Some(f), Some(p)) if *f == **p => Some(p.clone()), (f, _) => f };
+                    let stale = art_is_stale(previous.as_ref(), fresh.as_ref());
+                    let done = !stale || attempt + 1 == ART_RETRIES;
+                    art = fresh;
+                    if attempt == 0 || done { publish(art.clone(), done); }
+                    if done || !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { break; }
+                    std::thread::sleep(ART_RETRY_WAIT);
+                },
+                None => {
+                    if t.source_id == crate::itunes::SOURCE_ID { art = crate::itunes::artwork(&t.title, &t.artist).map(Arc::new); }
+                    publish(art.clone(), true);
+                }
+            }
+        } else {
+            publish(art.clone(), true);
         }
-        unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_MUSIC, WPARAM(0), LPARAM(0)); }
+        if let Some(a) = &art { last = Some((t.art_key, a.clone())); }
         if !page_open.load(Ordering::Relaxed) || !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
         // The lyrics come over the network and can take seconds: on their own thread, so the next
         // track's cover does not wait for them. One fetch per track at a time.
@@ -777,6 +812,15 @@ pub fn current_line(lines: &[(u64, String)], pos_ms: u64) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn art_equal_to_the_previous_tracks_is_stale_until_it_changes() {
+        let (old, new) = (Arc::new(vec![1u8, 2, 3]), Arc::new(vec![9u8]));
+        assert!(art_is_stale(Some(&old), Some(&Arc::new(vec![1u8, 2, 3]))), "same picture as the last track: the player has not caught up");
+        assert!(!art_is_stale(Some(&old), Some(&new)), "a different picture is the new cover");
+        assert!(!art_is_stale(None, Some(&old)), "nothing before it: nothing to be stale against");
+        assert!(!art_is_stale(Some(&old), None), "no picture at all is not a stale one");
+    }
 
     #[test]
     fn repeat_goes_off_all_one_off_and_maps_to_windows_modes() {
