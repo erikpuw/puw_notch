@@ -2096,9 +2096,9 @@ impl ConnList {
 
     /// An event that is one of the steps waited for turns it. False: it is an ordinary line.
     fn step_event(&mut self, e: &Event, now: Instant) -> bool {
-        let waiting = |r: &Option<Row>| r.as_ref().is_some_and(|r| r.state != RowState::Done);
         match e {
-            Event::Net(Net::Online { .. }) if waiting(&self.net) => {
+            // (told again after it is done, Windows does that when Wi-Fi flaps: the same step, not a second line)
+            Event::Net(Net::Online { .. }) if self.net.is_some() => {
                 self.net = Some(Row::line(row_text(e), now));
                 if let Some(v) = self.vpn.as_mut().filter(|v| v.state == RowState::Todo) {
                     (v.state, v.at) = (RowState::Wait, now);
@@ -2113,7 +2113,7 @@ impl ConnList {
                 true
             }
             // The VPN comes after the connection, wanted before or not: it is the line under it.
-            Event::Vpn(true) if waiting(&self.vpn) || (self.vpn.is_none() && self.net.is_some()) => {
+            Event::Vpn(true) if self.vpn.is_some() || self.net.is_some() => {
                 self.vpn = Some(Row::line(row_text(e), now));
                 true
             }
@@ -2954,6 +2954,23 @@ mod tests {
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, false), at(2000), vpn);
         assert_eq!(l.head.title, format!("{} Wi-Fi", tr("Đã tắt", "Turned off")));
         assert!(l.rows_shown().is_empty());
+    }
+
+    #[test]
+    fn a_step_told_again_after_it_is_done_is_not_a_second_line() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let vpn = Expect { vpn: true, ..Expect::default() };
+        let online = Event::Net(Net::Online { name: "W".into(), wifi: true });
+        // Windows tells the connection and the VPN again when Wi-Fi flaps: each stays one line.
+        for start in [Event::Radio(RadioType::Wifi, true), Event::Airplane(false)] {
+            let mut l = conn_list_add(None, &start, t0, vpn);
+            for (ms, e) in [(500, &online), (900, &Event::Vpn(true)), (1000, &online), (1100, &Event::Vpn(true)), (1200, &Event::Radio(RadioType::Wifi, true)), (1300, &online)] {
+                l = conn_list_add(Some(l), e, at(ms), vpn);
+            }
+            let texts: Vec<String> = l.rows_shown().into_iter().map(|r| r.text).filter(|t| t.starts_with(tr("Đã kết nối", "Connected to")) || t.contains("VPN")).collect();
+            assert_eq!(texts.len(), 2, "{texts:?}");
+        }
     }
 
     #[test]
