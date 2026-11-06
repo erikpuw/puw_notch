@@ -302,12 +302,13 @@ const PAD: f32 = 24.0;
 const COVER: f32 = 120.0;
 const COVER_TOP: f32 = 40.0;
 const COVER_GAP: f32 = 16.0;
-/// The Music page's cover is a disc (centre, radius, and the fraction of the radius kept solid before it fades to
-/// clear), bleeding off the panel's left edge and cut by its outline; it is drawn under the header and the page.
-const DISC_CX: f32 = 88.0;
-const DISC_CY: f32 = 96.0;
-const DISC_R: f32 = 86.0;
-const DISC_SOLID: f32 = 0.93;
+/// The Music page's cover is a big arc cut by the panel: a disc centred on the panel's top-left corner (so a quarter of
+/// it shows), `DISC_R` wide, kept solid out to `DISC_SOLID` of the radius then faded to clear. The whole cover is
+/// scaled into the square the quarter fills; it is drawn under the header and the page.
+const DISC_CX: f32 = 0.0;
+const DISC_CY: f32 = 0.0;
+const DISC_R: f32 = 176.0;
+const DISC_SOLID: f32 = 0.96;
 const PLAY_BTN: f32 = 36.0;
 const SKIP_BTN: f32 = 28.0;
 const LYRICS_BTN: f32 = 28.0;
@@ -1867,7 +1868,7 @@ impl Renderer {
         self.take_icons();
         let fonts = self.fonts(scale)?;
         let cover = if page == Some(Page::Music) || (v.live && matches!(v.mode, Mode::Collapsed | Mode::Peek)) {
-            v.music.and_then(|t| self.cover(t, (2.0 * DISC_R * scale).round() as u32, (20.0 * scale).round() as u32))
+            v.music.and_then(|t| self.cover(t, (DISC_R * scale).round() as u32, (20.0 * scale).round() as u32))
         } else { v.music.and_then(|t| self.cover.as_ref().filter(|c| c.track_key == t.art_key).and_then(|c| c.bitmaps.clone())) };
         let target = if v.live && page == Some(Page::Music) { self.cover.as_ref().and_then(|c| c.glow) } else { None };
         let now = Instant::now();

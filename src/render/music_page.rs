@@ -16,7 +16,9 @@ impl Renderer {
     ) -> Result<()> {
         let rt = &self.rt;
         let (cx, cy, r) = (l + DISC_CX * s, DISC_CY * s, DISC_R * s);
-        let area = rect(cx - r, cy - r, cx + r, cy + r);
+        // The disc's centre is the panel's corner: the whole cover fills the square `r` wide there, and only its quarter
+        // inside the arc shows.
+        let area = rect(cx, cy, cx + r, cy + r);
         unsafe {
             let stop = |position: f32, alpha: f32| D2D1_GRADIENT_STOP { position, color: color(0.0, 0.0, 0.0, alpha) };
             let stops = rt.CreateGradientStopCollection(&[stop(0.0, 1.0), stop(DISC_SOLID, 1.0), stop(1.0, 0.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
@@ -35,7 +37,7 @@ impl Renderer {
                     Some(bmp) => {
                         // Made at exactly the drawn size: placed on whole pixels, 1:1, so it stays sharp.
                         let size = bmp.GetSize();
-                        let (x, y) = ((cx - size.width / 2.0).round(), (cy - size.height / 2.0).round());
+                        let (x, y) = (cx.round(), cy.round());
                         let b = rt.CreateBitmapBrush(bmp, None, None)?;
                         b.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: x, M32: y });
                         rt.FillRectangle(&rect(x, y, x + size.width, y + size.height), &b);
