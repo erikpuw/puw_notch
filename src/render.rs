@@ -798,7 +798,11 @@ pub const ICON_BELL: &str = "\u{EA8F}";
 const ICON_LEFT: &str = "\u{E76B}";
 const ICON_RIGHT: &str = "\u{E76C}";
 const ICON_ADD: &str = "\u{E710}";
-pub const ICON_CHECK: &str = "\u{E73E}";
+const ICON_CHECK: &str = "\u{E73E}";
+/// A finished task: a check inside a ring (Segoe MDL2 "Completed"); the banner draws it green.
+pub const ICON_DONE: &str = "\u{E930}";
+/// Explorer deleting or recycling.
+pub const ICON_TRASH: &str = "\u{E74D}";
 const ICON_CLOSE: &str = "\u{E711}";
 const ICON_EDIT: &str = "\u{E70F}";
 const YELLOW: (f32, f32, f32) = (1.0, 0.8, 0.2);
@@ -3046,8 +3050,9 @@ mod tests {
             let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "Cho phép chạy list_projects của codebase-memory-mcp để liệt kê các project đã được index trong đồ thị mã nguồn (chỉ đọc, không thay đổi gì)?".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choices: vec!["Đồng ý".into(), "Không đồng ý".into(), "Trong app".into()] , app_id: None };
             let downloading = Toast { app: "Tải xuống".into(), title: "Đang tải xuống: model.gguf".into(), body: "196.6 MB · 86.5 MB/s".into(), level: None,
                 icon: Some(ICON_DOWNLOAD), image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
-            let downloaded = Toast { title: "Tải xuống hoàn tất".into(), body: "model.gguf · 1215.4 MB".into(), icon: Some(ICON_CHECK), ..downloading.clone() };
-            let banners = [(&note, 1), (&device, 0), (&charging, 0), (&approve, 3), (&downloading, 0), (&downloaded, 0)];
+            let downloaded = Toast { title: "Tải xuống hoàn tất".into(), body: "model.gguf · 1215.4 MB".into(), icon: Some(ICON_DONE), ..downloading.clone() };
+            let deleting = Toast { app: "Tệp".into(), title: "Đang xóa · 42%".into(), body: "42%".into(), level: Some(0.42), icon: Some(ICON_TRASH), ..downloading.clone() };
+            let banners = [(&note, 1), (&device, 0), (&charging, 0), (&approve, 3), (&downloading, 0), (&downloaded, 0), (&deleting, 0)];
             for (toast, lines) in banners {
             let view = View { mode: Mode::Alert, size: if toast.choices.is_empty() { notch::alert_size(lines) } else { notch::alert_size_choice(lines) }, time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,

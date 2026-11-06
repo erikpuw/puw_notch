@@ -26,6 +26,8 @@ use crate::i18n::tr;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActivityKind {
     FileOp,
+    /// Explorer deleting or recycling: its own kind for its own icon (a trash can).
+    Delete,
     Download,
     Build,
 }
@@ -129,6 +131,8 @@ impl Reader {
                     unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_ACTIVITY, WPARAM(0), LPARAM(0)); }
                 }
             }
+            // Its UI Automation object must go before COM does.
+            drop(monitor);
             if com.is_ok() {
                 unsafe { CoUninitialize(); }
             }
@@ -155,6 +159,11 @@ pub struct Monitor {
     download_done: Option<PathBuf>,
     /// The folder's finished files when the selected partial appeared (see `completed_file`).
     download_before: HashSet<PathBuf>,
+    /// UI Automation, created on first use and kept (it is the expensive part of reading Explorer).
+    automation: Option<IUIAutomation>,
+    /// The operation read from the dialog with this window handle (see `poll_explorer`).
+    explorer_op: Option<(isize, ActivityKind, String)>,
+    explorer_ui_at: Option<Instant>,
     build_exe: Option<String>,
     build_since: Option<Instant>,
     last: Option<LiveActivity>,
@@ -174,7 +183,7 @@ impl Monitor {
             self.finished = None;
             return None;
         }
-        let current = poll_explorer().or_else(|| self.poll_download(now)).or_else(|| self.poll_build(now));
+        let current = self.poll_explorer(now).or_else(|| self.poll_download(now)).or_else(|| self.poll_build(now));
         if current.is_none() {
             if let Some(mut a) = self.last.take() {
                 if a.kind == ActivityKind::Download {
@@ -184,7 +193,7 @@ impl Monitor {
                         a.succeeded = true;
                     }
                 }
-                self.finished = (a.kind != ActivityKind::FileOp).then_some(a);
+                self.finished = (!matches!(a.kind, ActivityKind::FileOp | ActivityKind::Delete)).then_some(a);
             }
         }
         self.last = current.clone();
@@ -194,6 +203,66 @@ impl Monitor {
     /// The activity that just ended, once.
     pub fn take_finished(&mut self) -> Option<LiveActivity> {
         self.finished.take()
+    }
+
+    /// Explorer's progress dialogs, a minimized one too. The window title carries the percent and costs
+    /// nothing to read. Which operation it is (copy, move, delete) is only in the dialog's text, and
+    /// reading that is a cross-process UI Automation walk of ~20-30 ms: once per dialog, not per sample.
+    /// (No lighter way exists: Explorer's IFileOperationProgressSink callbacks only reach the process
+    /// that started the operation.)
+    fn poll_explorer(&mut self, now: Instant) -> Option<LiveActivity> {
+        let windows = explorer_windows();
+        if windows.is_empty() {
+            self.explorer_op = None;
+            return None;
+        }
+        for hwnd in windows {
+            let id = hwnd.0 as isize;
+            let title = window_title(hwnd);
+            let mut activity = parse_explorer_title(&title);
+            if activity.as_ref().is_some_and(names_operation) {
+                return activity;
+            }
+            let known = self.explorer_op.as_ref().filter(|(h, ..)| *h == id).map(|(_, kind, name)| (*kind, name.clone()));
+            if let (Some(a), Some((kind, name))) = (activity.as_mut(), known) {
+                (a.kind, a.title) = (kind, name);
+                return activity;
+            }
+            // Not read yet: look at the dialog's text, but not more than once a second while it says nothing.
+            if self.explorer_ui_at.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_secs(1)) {
+                if activity.is_some() { return activity; }
+                continue;
+            }
+            self.explorer_ui_at = Some(now);
+            let labels = self.dialog_labels(hwnd);
+            if let Some(a) = parse_explorer_labels(&title, &labels) {
+                if names_operation(&a) {
+                    self.explorer_op = Some((id, a.kind, a.title.clone()));
+                }
+                return Some(a);
+            }
+        }
+        None
+    }
+
+    fn dialog_labels(&mut self, hwnd: HWND) -> Vec<String> {
+        if self.automation.is_none() {
+            self.automation = new_automation();
+        }
+        let mut labels = Vec::new();
+        let Some(automation) = &self.automation else { return labels };
+        unsafe {
+            if let (Ok(root), Ok(condition)) = (automation.ElementFromHandle(hwnd), automation.CreateTrueCondition()) {
+                if let Ok(elements) = root.FindAll(TreeScope_Descendants, &condition) {
+                    for i in 0..elements.Length().unwrap_or(0).clamp(0, 64) {
+                        if let Ok(name) = elements.GetElement(i).and_then(|e| e.CurrentName()) {
+                            labels.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        labels
     }
 
     fn poll_download(&mut self, now: Instant) -> Option<LiveActivity> {
@@ -273,8 +342,7 @@ fn elapsed_text(secs: u64) -> String {
     if secs >= 60 { format!("{}m {:02}s", secs / 60, secs % 60) } else { format!("{secs}s") }
 }
 
-/// Explorer's progress windows, including a minimized dialog and its operation label.
-fn poll_explorer() -> Option<LiveActivity> {
+fn explorer_windows() -> Vec<HWND> {
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if IsWindowVisible(hwnd).as_bool() {
             let mut class = [0u16; 64];
@@ -285,42 +353,31 @@ fn poll_explorer() -> Option<LiveActivity> {
         }
         true.into()
     }
-
     let mut windows = Vec::<HWND>::new();
     unsafe { let _ = EnumWindows(Some(visit), LPARAM(&mut windows as *mut _ as isize)); }
-    if windows.is_empty() {
-        return None;
-    }
-    let automation: Option<IUIAutomation> = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok() };
-    if let Some(timeout) = automation.as_ref().and_then(|a| a.cast::<IUIAutomation2>().ok()) {
+    windows
+}
+
+fn window_title(hwnd: HWND) -> String {
+    let mut title = [0u16; 256];
+    let n = unsafe { GetWindowTextW(hwnd, &mut title) }.max(0) as usize;
+    String::from_utf16_lossy(&title[..n])
+}
+
+fn new_automation() -> Option<IUIAutomation> {
+    let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()? };
+    if let Ok(timeout) = automation.cast::<IUIAutomation2>() {
         unsafe {
             let _ = timeout.SetConnectionTimeout(200);
             let _ = timeout.SetTransactionTimeout(200);
         }
     }
-    for hwnd in windows {
-        let mut title = [0u16; 256];
-        let n = unsafe { GetWindowTextW(hwnd, &mut title) }.max(0) as usize;
-        let title = String::from_utf16_lossy(&title[..n]);
-        let mut labels = Vec::new();
-        if let Some(automation) = &automation {
-            unsafe {
-                if let (Ok(root), Ok(condition)) = (automation.ElementFromHandle(hwnd), automation.CreateTrueCondition()) {
-                    if let Ok(elements) = root.FindAll(TreeScope_Descendants, &condition) {
-                        for i in 0..elements.Length().unwrap_or(0).clamp(0, 64) {
-                            if let Ok(name) = elements.GetElement(i).and_then(|e| e.CurrentName()) {
-                                labels.push(name.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(activity) = parse_explorer_labels(&title, &labels) {
-            return Some(activity);
-        }
-    }
-    None
+    Some(automation)
+}
+
+/// Whether `a` says which operation runs (a dialog that is only counting or preparing does not yet).
+fn names_operation(a: &LiveActivity) -> bool {
+    a.title != tr("Đang xử lý tệp", "Working on files") && a.title != tr("Đang chuẩn bị", "Preparing files")
 }
 
 fn parse_explorer_labels(title: &str, labels: &[String]) -> Option<LiveActivity> {
@@ -336,7 +393,7 @@ fn parse_explorer_labels(title: &str, labels: &[String]) -> Option<LiveActivity>
             match &mut activity {
                 Some(current) => {
                     if current.title == generic && found.title != generic {
-                        current.title = found.title;
+                        (current.kind, current.title) = (found.kind, found.title);
                     }
                     if current.progress.is_none() && found.progress.is_some() {
                         current.progress = found.progress;
@@ -353,20 +410,21 @@ fn parse_explorer_labels(title: &str, labels: &[String]) -> Option<LiveActivity>
 /// The percent is optional while Explorer is preparing, counting, or deleting files.
 pub fn parse_explorer_title(title: &str) -> Option<LiveActivity> {
     let text = title.trim_start().to_lowercase();
+    use ActivityKind::{Delete, FileOp};
     let operation = [
-        (&["copying", "đang sao chép", "sao chép"][..], tr("Đang sao chép", "Copying files")),
-        (&["moving", "đang di chuyển", "di chuyển"][..], tr("Đang di chuyển", "Moving files")),
-        (&["deleting", "recycling", "đang xóa", "xóa"][..], tr("Đang xóa", "Deleting files")),
-        (&["preparing", "đang chuẩn bị", "chuẩn bị"][..], tr("Đang chuẩn bị", "Preparing files")),
-        (&["extracting", "đang giải nén", "giải nén"][..], tr("Đang giải nén", "Extracting files")),
-    ].into_iter().find_map(|(prefixes, label)| prefixes.iter().any(|p| text.starts_with(p)).then_some(label));
+        (&["copying", "đang sao chép", "sao chép"][..], tr("Đang sao chép", "Copying files"), FileOp),
+        (&["moving", "đang di chuyển", "di chuyển"][..], tr("Đang di chuyển", "Moving files"), FileOp),
+        (&["deleting", "recycling", "đang xóa", "xóa"][..], tr("Đang xóa", "Deleting files"), Delete),
+        (&["preparing", "đang chuẩn bị", "chuẩn bị"][..], tr("Đang chuẩn bị", "Preparing files"), FileOp),
+        (&["extracting", "đang giải nén", "giải nén"][..], tr("Đang giải nén", "Extracting files"), FileOp),
+    ].into_iter().find(|(prefixes, ..)| prefixes.iter().any(|p| text.starts_with(p)));
     let percent = extract_percent(title);
     if operation.is_none() && percent.is_none() {
         return None;
     }
     Some(LiveActivity {
-        kind: ActivityKind::FileOp,
-        title: operation.unwrap_or(tr("Đang xử lý tệp", "Working on files")).to_string(),
+        kind: operation.map_or(FileOp, |(_, _, kind)| kind),
+        title: operation.map_or(tr("Đang xử lý tệp", "Working on files"), |(_, label, _)| label).to_string(),
         detail: percent.map_or_else(|| tr("Đang xử lý…", "In progress…").to_string(), |p| format!("{p}%")),
         progress: percent.map(|p| p as f32 / 100.0),
         succeeded: false,
@@ -584,7 +642,11 @@ mod tests {
         let activity = parse_explorer_labels("42% complete", &["Moving 3 items from A to B".into()]).unwrap();
         assert_eq!(activity.title, tr("Đang di chuyển", "Moving files"));
         assert_eq!(activity.progress, Some(0.42));
+        let deleting = parse_explorer_labels("30% complete", &["Deleting 3 items from A".into()]).unwrap();
+        assert_eq!((deleting.kind, deleting.progress), (ActivityKind::Delete, Some(0.30)), "its own kind, for the trash icon");
+        assert!(names_operation(&deleting) && !names_operation(&parse_explorer_title("30% complete").unwrap()));
         let preparing = parse_explorer_labels("File Explorer", &["Preparing to copy".into()]).unwrap();
+        assert!(!names_operation(&preparing), "preparing is not an operation to remember for the dialog");
         assert_eq!(preparing.progress, None);
         assert!(parse_explorer_labels("File conflict", &["Replace".into(), "Skip".into()]).is_none());
         assert!(parse_explorer_labels("File conflict", &["archive100%.zip".into()]).is_none());
@@ -665,9 +727,10 @@ mod tests {
             let rows = crate::notify::query_unlocked(h, "SELECT current_path, target_path, state FROM downloads ORDER BY id DESC LIMIT 2", 3);
             println!("History {h:?}: {rows:?}");
         }
+        let mut monitor = Monitor::new(true);
         for _ in 0..3 {
             let t = Instant::now();
-            let found = poll_explorer();
+            let found = monitor.poll_explorer(t);
             println!("Explorer ({} ms): {found:?}", t.elapsed().as_millis());
         }
         if com.is_ok() { unsafe { CoUninitialize(); } }

@@ -1709,6 +1709,7 @@ fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
     use activity::ActivityKind::*;
     let (app, icon) = match a.kind {
         FileOp => (tr("Tệp", "Files"), render::ICON_COPY),
+        Delete => (tr("Tệp", "Files"), render::ICON_TRASH),
         Download => (tr("Tải xuống", "Download"), render::ICON_DOWNLOAD),
         Build => (tr("Build", "Build"), render::ICON_BUILD),
     };
@@ -1716,7 +1717,7 @@ fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
     let named = |what: &str| if a.title.is_empty() { what.to_string() } else { format!("{what}: {}", a.title) };
     if a.kind == Download && done && a.succeeded {
         // The green tick takes the arrow's place (the banner icon morphs into it).
-        return status_toast(app, tr("Tải xuống hoàn tất", "Download complete").to_string(), &format!("{} · {}", a.title, a.detail), None, render::ICON_CHECK);
+        return status_toast(app, tr("Tải xuống hoàn tất", "Download complete").to_string(), &format!("{} · {}", a.title, a.detail), None, render::ICON_DONE);
     }
     let title = match (a.kind, done) {
         // No finished file: cancelled, failed, or moved away before it was seen.
@@ -2064,7 +2065,7 @@ mod tests {
         assert_eq!(activity_toast(&a, true).icon, Some(render::ICON_DOWNLOAD), "vanished without a file: no tick");
         a.succeeded = true;
         let done = activity_toast(&a, true);
-        assert_eq!((done.title.as_str(), done.icon), (tr("Tải xuống hoàn tất", "Download complete"), Some(render::ICON_CHECK)));
+        assert_eq!((done.title.as_str(), done.icon), (tr("Tải xuống hoàn tất", "Download complete"), Some(render::ICON_DONE)));
         assert_eq!(done.body, "model.gguf · 196.6 MB");
     }
 
