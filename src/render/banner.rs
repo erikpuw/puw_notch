@@ -89,7 +89,8 @@ impl Renderer {
                         text(b, F_BADGE, rect(tr - 80.0 * s, 0.0, tr, nh + 4.0 * s), trail, grey(1.0, a))?;
                         tr -= 86.0 * s;
                     }
-                    let mid = nh / 2.0;
+                    // With lines under it the title keeps the place it has in a one-line banner.
+                    let mid = if t.rows.is_empty() { nh / 2.0 } else { 26.0 * s };
                     let (title_top, body_top, bar_y) = if t.level.is_some() {
                         (mid - 15.0 * s, 0.0, mid + 9.0 * s)
                     } else if t.body.is_empty() {
@@ -107,6 +108,25 @@ impl Renderer {
                         }
                         // One line under the title.
                         None => text(&t.body, F_BODY, rect(tl, body_top, tr, body_top + 16.0 * s), lead, grey(0.75, a))?,
+                    }
+                    // A checklist: a green dot with a tick (it pops in as its line arrives), a thin line
+                    // down to the next dot, the text beside it (the timeline of the jarvis island).
+                    for (i, row) in t.rows.iter().enumerate() {
+                        let top = (40.0 + notch::ROW_H * i as f32) * s;
+                        let age = row.at.elapsed().as_secs_f32();
+                        icon_busy |= age < 0.4;
+                        let (k, alpha) = icons::pop(age);
+                        let (dx, dy) = (tl + 7.5 * s, top + 10.5 * s);
+                        let ra = a * alpha;
+                        if i + 1 < t.rows.len() {
+                            let line = self.brush(color(GREEN.0, GREEN.1, GREEN.2, ra * 0.35))?;
+                            rt.DrawLine(Vector2 { X: dx, Y: dy + 9.5 * s }, Vector2 { X: dx, Y: top + (notch::ROW_H + 1.0) * s }, &line, 1.5 * s, &self.round);
+                        }
+                        rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: dx, Y: dy }, radiusX: 7.5 * s * k, radiusY: 7.5 * s * k }, &self.brush(color(GREEN.0, GREEN.1, GREEN.2, ra))?);
+                        let (ink, u) = (self.brush(color(1.0, 1.0, 1.0, ra))?, 0.9 * k * s);
+                        rt.DrawLine(Vector2 { X: dx - 3.5 * u, Y: dy + 0.2 * u }, Vector2 { X: dx - 1.2 * u, Y: dy + 2.5 * u }, &ink, 1.7 * s, &self.round);
+                        rt.DrawLine(Vector2 { X: dx - 1.2 * u, Y: dy + 2.5 * u }, Vector2 { X: dx + 3.5 * u, Y: dy - 2.5 * u }, &ink, 1.7 * s, &self.round);
+                        text(&row.text, F_BODY, rect(tl + ROW_DOT_W * s, top + 3.0 * s, tr, top + 19.0 * s), lead, grey(0.88, ra))?;
                     }
                 }
                 // A notification names its app above the title and wraps its text over the banner's height.

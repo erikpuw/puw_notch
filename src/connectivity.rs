@@ -57,6 +57,8 @@ pub struct Snapshot {
     pub radios: BTreeMap<RadioType, bool>,
     pub airplane: bool,
     pub net: Net,
+    /// A VPN's own network (Tailscale and the like) is up. Only counts with a network under it, see `changes`.
+    pub vpn: bool,
     /// Connected Bluetooth devices: id -> (name, kind, battery percent if the device reports one).
     pub devices: BTreeMap<String, (String, DeviceKind, Option<u8>)>,
 }
@@ -66,6 +68,8 @@ pub enum Event {
     Radio(RadioType, bool),
     Airplane(bool),
     Net(Net),
+    /// A VPN came up (a network is under it) or went down (the network went, or the VPN did).
+    Vpn(bool),
     /// Connected (with its battery when known) or disconnected.
     Device { name: String, kind: DeviceKind, up: bool, battery: Option<u8> },
     /// A connected device's battery: reported after it connected, or just dropped to `LOW_BATTERY`.
@@ -75,17 +79,15 @@ pub enum Event {
 /// A Bluetooth device at or under this percent gets a low-battery banner.
 pub const LOW_BATTERY: u8 = 20;
 
-/// What changed between two snapshots. While airplane mode is on nothing is told but the switch
-/// itself (Wi-Fi, Bluetooth, the network and every device are off because of it, whichever order
-/// Windows turns them off in). When it goes off, the world comes back and is told as usual.
+/// What changed between two snapshots, in the order it should be told: the airplane switch, the
+/// radios, the network, the VPN, then devices. A banner groups what comes together (see main.rs);
+/// here only the knock-on noise is left out: "offline" and "headphones disconnected" after a radio
+/// or the airplane switch went off.
 pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
-    let airplane_flip = old.airplane != new.airplane;
-    if new.airplane {
-        return if airplane_flip { vec![Event::Airplane(true)] } else { Vec::new() };
-    }
     let mut out = Vec::new();
+    let airplane_flip = old.airplane != new.airplane;
     if airplane_flip {
-        out.push(Event::Airplane(false));
+        out.push(Event::Airplane(new.airplane));
     }
     let mut radio_off = BTreeSet::new();
     for (kind, on) in &new.radios {
@@ -96,9 +98,15 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
             }
         }
     }
-    let quiet_offline = !radio_off.is_empty();
+    let quiet_offline = new.airplane || !radio_off.is_empty();
     if old.net != new.net && !(new.net == Net::Offline && quiet_offline) {
         out.push(Event::Net(new.net.clone()));
+    }
+    // A VPN lives on a network: it is "up" only with one under it, so it is told after the network
+    // that carries it came back, and told down when that network goes (it is not told alone then).
+    let vpn_up = |s: &Snapshot| s.vpn && s.net != Net::Offline;
+    if vpn_up(old) != vpn_up(new) {
+        out.push(Event::Vpn(vpn_up(new)));
     }
     // Devices, by name (a headset can show up over classic and LE at once, one of them with the battery).
     let names = |s: &Snapshot| {
@@ -110,7 +118,7 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
         m
     };
     let (before, after) = (names(old), names(new));
-    let quiet_disconnect = radio_off.contains(&RadioType::Bluetooth);
+    let quiet_disconnect = new.airplane || radio_off.contains(&RadioType::Bluetooth);
     for (name, &(kind, battery)) in &after {
         match before.get(name) {
             None => out.push(Event::Device { name: name.clone(), kind, up: true, battery }),
@@ -163,18 +171,12 @@ pub fn device_kind(major: i32, minor: i32, name: &str) -> DeviceKind {
     }
 }
 
-/// How long what follows a switch counts as part of it: the network goes a poll after a radio.
+/// How long "offline" after a radio went off counts as part of it: the network goes a poll later.
 const KNOCK_ON: Duration = Duration::from_secs(4);
 
-/// Drops what a recent switch explains: "offline" after a radio turned off, and Wi-Fi turning on
-/// after airplane mode (the connection that follows tells it).
-/// ponytail: with no network to join after airplane mode, Wi-Fi coming back is not told.
-fn drop_knock_on(events: &mut Vec<Event>, airplane_recent: bool, radio_off_recent: bool) {
-    events.retain(|e| match e {
-        Event::Radio(RadioType::Wifi, true) => !airplane_recent,
-        Event::Net(Net::Offline) => !radio_off_recent,
-        _ => true,
-    });
+/// Drops "offline" right after a radio went off (the radio's own event says it).
+fn drop_knock_on(events: &mut Vec<Event>, radio_off_recent: bool) {
+    events.retain(|e| !(radio_off_recent && *e == Event::Net(Net::Offline)));
 }
 
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
@@ -260,7 +262,7 @@ pub fn watch(hwnd: HWND) {
         let mut kinds: BTreeMap<String, DeviceKind> = BTreeMap::new();
         let mut last = snapshot(&mut kinds);
         let mut quick = 0;
-        let (mut airplane_at, mut radio_off_at): (Option<Instant>, Option<Instant>) = (None, None);
+        let mut radio_off_at: Option<Instant> = None;
         loop {
             if wait(if quick > 0 { QUICK } else { POLL }) {
                 quick = QUICK_POLLS;
@@ -270,11 +272,7 @@ pub fn watch(hwnd: HWND) {
             let now = snapshot(&mut kinds);
             let mut events = changes(&last, &now);
             last = now;
-            let recent = |at: Option<Instant>| at.is_some_and(|t| t.elapsed() < KNOCK_ON);
-            drop_knock_on(&mut events, recent(airplane_at), recent(radio_off_at));
-            if events.iter().any(|e| matches!(e, Event::Airplane(_))) {
-                airplane_at = Some(Instant::now());
-            }
+            drop_knock_on(&mut events, radio_off_at.is_some_and(|t| t.elapsed() < KNOCK_ON));
             if events.iter().any(|e| matches!(e, Event::Radio(_, false))) {
                 radio_off_at = Some(Instant::now());
             }
@@ -290,7 +288,8 @@ pub fn watch(hwnd: HWND) {
 }
 
 fn snapshot(kinds: &mut BTreeMap<String, DeviceKind>) -> Snapshot {
-    Snapshot { radios: radios(), airplane: airplane(), net: network(), devices: devices(kinds) }
+    let profiles = profiles();
+    Snapshot { radios: radios(), airplane: airplane(), net: net_of(&profiles), vpn: vpn_of(&profiles), devices: devices(kinds) }
 }
 
 fn radios() -> BTreeMap<RadioType, bool> {
@@ -328,17 +327,50 @@ fn airplane() -> bool {
     r == ERROR_SUCCESS && value == 1
 }
 
-fn network() -> Net {
-    let Ok(p) = NetworkInformation::GetInternetConnectionProfile() else { return Net::Offline };
-    let level = p.GetNetworkConnectivityLevel().unwrap_or(NetworkConnectivityLevel::None);
-    let wifi = p.IsWlanConnectionProfile().unwrap_or(false);
-    let ssid = if wifi { p.WlanConnectionProfileDetails().and_then(|d| d.GetConnectedSsid()).ok() } else { None };
-    let name = ssid.or_else(|| p.ProfileName().ok()).map(|n| n.to_string()).unwrap_or_default();
-    match level {
-        NetworkConnectivityLevel::InternetAccess => Net::Online { name, wifi },
-        NetworkConnectivityLevel::None => Net::Offline,
-        _ => Net::Limited { name, wifi },
+/// A connection profile, as far as the network and the VPN are told from it.
+struct Profile {
+    name: String,
+    /// IANA interface type: 6 Ethernet, 71 Wi-Fi, 243/244 mobile broadband; a VPN's is something else (Tailscale: 53).
+    iftype: u32,
+    wlan: bool,
+    level: NetworkConnectivityLevel,
+}
+
+impl Profile {
+    fn physical(&self) -> bool {
+        matches!(self.iftype, 6 | 71 | 243 | 244)
     }
+}
+
+fn profiles() -> Vec<Profile> {
+    let Ok(list) = NetworkInformation::GetConnectionProfiles() else { return Vec::new() };
+    list.into_iter().map(|p| {
+        let wlan = p.IsWlanConnectionProfile().unwrap_or(false);
+        let ssid = if wlan { p.WlanConnectionProfileDetails().and_then(|d| d.GetConnectedSsid()).ok() } else { None };
+        Profile {
+            name: ssid.or_else(|| p.ProfileName().ok()).map(|n| n.to_string()).unwrap_or_default(),
+            iftype: p.NetworkAdapter().and_then(|a| a.IanaInterfaceType()).unwrap_or(0),
+            wlan,
+            level: p.GetNetworkConnectivityLevel().unwrap_or(NetworkConnectivityLevel::None),
+        }
+    }).collect()
+}
+
+/// The network the PC is on: the first Wi-Fi / Ethernet / mobile one that reaches the internet, else
+/// a Wi-Fi one without internet. A VPN's own network (it has "local access" only) never counts: with
+/// Wi-Fi off it used to be what was left, and the banner said "no internet, Tailscale".
+fn net_of(profiles: &[Profile]) -> Net {
+    if let Some(p) = profiles.iter().find(|p| p.physical() && p.level == NetworkConnectivityLevel::InternetAccess) {
+        return Net::Online { name: p.name.clone(), wifi: p.wlan };
+    }
+    match profiles.iter().find(|p| p.physical() && p.wlan && p.level != NetworkConnectivityLevel::None) {
+        Some(p) => Net::Limited { name: p.name.clone(), wifi: true },
+        None => Net::Offline,
+    }
+}
+
+fn vpn_of(profiles: &[Profile]) -> bool {
+    profiles.iter().any(|p| !p.physical() && p.level != NetworkConnectivityLevel::None)
 }
 
 fn devices(kinds: &mut BTreeMap<String, DeviceKind>) -> BTreeMap<String, (String, DeviceKind, Option<u8>)> {
@@ -403,6 +435,7 @@ mod tests {
             radios: [(RadioType::Wifi, wifi), (RadioType::Bluetooth, bt)].into_iter().collect(),
             airplane,
             net,
+            vpn: false,
             devices: devices.iter().map(|(i, n, k, b)| (i.to_string(), (n.to_string(), *k, *b))).collect(),
         }
     }
@@ -428,26 +461,41 @@ mod tests {
         assert_eq!(changes(&c, &a), vec![Event::Net(home())]);
     }
 
-    #[test]
-    fn airplane_on_tells_only_itself_whatever_order_windows_turns_things_off() {
-        let a = snap(true, true, false, home(), &[("h", "Tai nghe", Headphones)]);
-        assert_eq!(changes(&a, &snap(false, false, true, Net::Offline, &[])), vec![Event::Airplane(true)]);
-        // The flag first; the radios, a VPN left without internet and the headset follow later.
-        let flag = snap(true, true, true, home(), &[("h", "Tai nghe", Headphones)]);
-        assert_eq!(changes(&a, &flag), vec![Event::Airplane(true)]);
-        let vpn = Net::Limited { name: "MyVPN".into(), wifi: false };
-        assert!(changes(&flag, &snap(false, false, true, vpn, &[])).is_empty(), "nothing is told while it is on");
+    fn with_vpn(mut s: Snapshot) -> Snapshot {
+        s.vpn = true;
+        s
     }
 
     #[test]
-    fn airplane_off_brings_back_wifi_connected_and_bluetooth_on() {
-        let on = snap(false, false, true, Net::Offline, &[]);
-        // The flag and the radios in one snapshot, the network a poll later.
-        let mut e = changes(&on, &snap(true, true, false, Net::Offline, &[]));
-        assert_eq!(e, vec![Event::Airplane(false), Event::Radio(RadioType::Wifi, true), Event::Radio(RadioType::Bluetooth, true)]);
-        drop_knock_on(&mut e, true, false);
-        assert_eq!(e, vec![Event::Airplane(false), Event::Radio(RadioType::Bluetooth, true)], "Wi-Fi's own banner is 'connected'");
-        assert_eq!(changes(&snap(true, true, false, Net::Offline, &[]), &snap(true, true, false, home(), &[])), vec![Event::Net(home())]);
+    fn airplane_on_lists_the_radios_and_the_vpn_but_not_the_offline_or_the_headset() {
+        let a = with_vpn(snap(true, true, false, home(), &[("h", "Tai nghe", Headphones)]));
+        let b = snap(false, false, true, Net::Offline, &[]);
+        assert_eq!(
+            changes(&a, &with_vpn(b)),
+            vec![Event::Airplane(true), Event::Radio(RadioType::Wifi, false), Event::Radio(RadioType::Bluetooth, false), Event::Vpn(false)]
+        );
+    }
+
+    #[test]
+    fn airplane_off_lists_the_radios_then_the_network_then_the_vpn() {
+        let on = with_vpn(snap(false, false, true, Net::Offline, &[]));
+        let radios = snap(true, true, false, Net::Offline, &[]);
+        assert_eq!(changes(&on, &with_vpn(radios.clone())), vec![Event::Airplane(false), Event::Radio(RadioType::Wifi, true), Event::Radio(RadioType::Bluetooth, true)]);
+        // the VPN is not up while there is no network under it; it comes with the network
+        let online = with_vpn(snap(true, true, false, home(), &[]));
+        assert_eq!(changes(&with_vpn(radios), &online), vec![Event::Net(home()), Event::Vpn(true)]);
+    }
+
+    #[test]
+    fn a_vpn_goes_down_with_its_network_and_comes_up_after_it() {
+        let a = with_vpn(snap(true, true, false, home(), &[]));
+        // Wi-Fi off: the radio, and the VPN that was on it; "offline" is the radio's doing
+        assert_eq!(changes(&a, &with_vpn(snap(false, true, false, Net::Offline, &[]))), vec![Event::Radio(RadioType::Wifi, false), Event::Vpn(false)]);
+        // the VPN switched off by itself, the network stays
+        assert_eq!(changes(&a, &snap(true, true, false, home(), &[])), vec![Event::Vpn(false)]);
+        // a VPN adapter alone, with no network, is not "connected"
+        let lonely = with_vpn(snap(true, true, false, Net::Offline, &[]));
+        assert!(changes(&snap(true, true, false, Net::Offline, &[]), &lonely).is_empty());
     }
 
     #[test]
@@ -455,11 +503,28 @@ mod tests {
         // Wi-Fi off and the network gone are one poll apart.
         let mut e = changes(&snap(false, true, false, home(), &[]), &snap(false, true, false, Net::Offline, &[]));
         assert_eq!(e, vec![Event::Net(Net::Offline)]);
-        drop_knock_on(&mut e, false, true);
+        drop_knock_on(&mut e, true);
         assert!(e.is_empty());
         let mut limited = vec![Event::Net(Net::Limited { name: "Cafe".into(), wifi: true })];
-        drop_knock_on(&mut limited, true, true);
+        drop_knock_on(&mut limited, true);
         assert_eq!(limited.len(), 1, "a network with no internet is still news");
+    }
+
+    #[test]
+    fn the_network_is_wifi_or_ethernet_never_the_vpn() {
+        let p = |name: &str, iftype, wlan, level| Profile { name: name.into(), iftype, wlan, level };
+        use NetworkConnectivityLevel as L;
+        // what this PC reports (Wi-Fi up, Tailscale up, the rest down)
+        let now = [p("Ethernet", 6, false, L::None), p("Tailscale", 53, false, L::LocalAccess), p("JihoonKim", 71, true, L::InternetAccess)];
+        assert_eq!(net_of(&now), Net::Online { name: "JihoonKim".into(), wifi: true });
+        assert!(vpn_of(&now));
+        // Wi-Fi off: only the VPN's own network is left, which is neither a network nor "limited"
+        let off = [p("Ethernet", 6, false, L::None), p("Tailscale", 53, false, L::LocalAccess), p("JihoonKim", 71, true, L::None)];
+        assert_eq!(net_of(&off), Net::Offline);
+        // a Wi-Fi without internet is limited; a VPN down is not there
+        let cafe = [p("Cafe", 71, true, L::LocalAccess), p("Tailscale", 53, false, L::None)];
+        assert_eq!(net_of(&cafe), Net::Limited { name: "Cafe".into(), wifi: true });
+        assert!(!vpn_of(&cafe));
     }
 
     #[test]

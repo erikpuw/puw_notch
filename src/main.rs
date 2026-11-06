@@ -51,7 +51,7 @@ use i18n::tr;
 use audio::{WM_MIC, WM_VOLUME};
 use status::{WM_LOCKKEY, WM_VOLUMEKEY};
 use screen::WM_SCREENEVENT;
-use notify::Toast;
+use notify::{Row, Toast};
 use weather::WM_WEATHER;
 use focus::Focus;
 use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS, NOTE_ROWS, PAGES};
@@ -194,6 +194,8 @@ struct App {
     /// Network banners waiting their turn, in the order the events came; `conn_busy` while one holds the slot.
     conn_queue: Vec<Toast>,
     conn_busy: bool,
+    /// The checklist banner of the network events that came together, while it still shows.
+    conn_list: Option<ConnList>,
     usage_tab: usize,
     usage_tab_chosen: bool,
     track: Option<music::Track>,
@@ -767,9 +769,10 @@ impl App {
         }
         // A status banner without the big figure (battery, Bluetooth) is as wide as its lines.
         if t.icon.is_some() && t.choices.is_empty() && t.badge.is_none() {
-            let width = self.renderer.status_banner_width(&t.title, &t.body, self.scale);
+            let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
             self.notch.set_alert_width(width);
         }
+        self.notch.set_alert_rows(t.rows.len() as u8);
         self.banner = Some(t);
         self.banner_at = Instant::now();
         unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
@@ -784,6 +787,24 @@ impl App {
         } else if let Some(a) = self.activity.take_finished() {
             // The end stays long enough to be read, like a notification.
             self.show_activity(activity_toast(&a, true), ALERT_MS);
+        }
+    }
+
+    /// The checklist banner: shown at once, and while it shows a new line makes it taller in place
+    /// (the dot of the new line pops in) and keeps it on for another full time.
+    fn show_connection_list(&mut self, t: Toast) {
+        if self.approval.is_some() {
+            return;
+        }
+        if self.notch.mode == Mode::Alert && self.banner.as_ref().is_some_and(|b| b.app == t.app && b.choices.is_empty()) {
+            let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
+            self.notch.set_alert_width(width);
+            self.notch.set_alert_rows(t.rows.len() as u8);
+            self.banner = Some(t);
+            unsafe { SetTimer(Some(self.hwnd), T_ALERT, ALERT_MS, None) };
+            self.kick();
+        } else {
+            self.show_banner(t, ALERT_MS);
         }
     }
 
@@ -812,7 +833,7 @@ impl App {
         // The same activity's banner is updated in place, also when its icon changes (the arrow
         // becoming the green tick morphs on screen).
         } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.icon.is_some() && b.choices.is_empty()) {
-            let width = self.renderer.status_banner_width(&t.title, &t.body, self.scale);
+            let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
             self.notch.set_alert_width(width);
             self.banner = Some(t);
             unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
@@ -833,7 +854,7 @@ impl App {
                 continue;
             }
             let choices = if p.options.is_empty() { vec![tr("Đồng ý", "Allow").to_string(), tr("Không", "Deny").to_string()] } else { p.options.clone() };
-            let toast = Toast { app: p.app.clone(), title: p.title.clone(), body: p.detail.clone(), level: None, icon: Some(render::ICON_WARN), image: None, open: None, badge: None, choices, app_id: None };
+            let toast = Toast { app: p.app.clone(), title: p.title.clone(), body: p.detail.clone(), level: None, icon: Some(render::ICON_WARN), image: None, open: None, badge: None, choices, app_id: None, rows: Vec::new() };
             if self.show_banner(toast, approve::BANNER.as_millis() as u32) {
                 self.approval = Some(p);
                 return;
@@ -1610,8 +1631,18 @@ impl App {
             WM_CONN => {
                 // The network may just have come back: the weather catches up (a recent one is kept).
                 self.weather.refresh();
-                self.conn_queue.extend(connectivity::take_events().into_iter().map(connection_toast));
-                if !self.conn_busy {
+                for e in connectivity::take_events() {
+                    if matches!(e, Event::Device { .. } | Event::DeviceBattery { .. }) {
+                        // A device has its own banner (name, state, battery): they wait their turn.
+                        self.conn_queue.push(connection_toast(e));
+                    } else {
+                        // The airplane switch, radios, network and VPN that come together are one banner.
+                        let list = conn_list_add(self.conn_list.take(), &e, Instant::now());
+                        self.show_connection_list(list_toast(&list));
+                        self.conn_list = Some(list);
+                    }
+                }
+                if !self.conn_busy && !self.conn_queue.is_empty() {
                     self.next_connection_banner();
                 }
             }
@@ -1723,7 +1754,7 @@ fn app_icon(small: bool) -> HICON {
 }
 
 fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
-    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None }
+    Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() }
 }
 
 /// The banner of a live activity (or, `done`, of one that just ended).
@@ -1802,6 +1833,62 @@ fn open_target(target: &str) {
     }
 }
 
+/// The banner of a burst of network events. The first is its head (icon and title, as when it comes
+/// alone); what comes while it shows is a line under it. Windows turns the airplane switch, the
+/// radios, the network and the VPN one after another, and one banner tells all of it.
+struct ConnList {
+    head: Toast,
+    /// What the head's event reads as a line, for when it has to become one (see `conn_list_add`).
+    head_row: String,
+    rows: Vec<Row>,
+    at: Instant,
+}
+
+/// The line an event makes under a head.
+fn row_text(e: &Event) -> String {
+    let radio = |name: &str, on: bool| format!("{name} {}", if on { tr("bật", "on") } else { tr("tắt", "off") });
+    match e {
+        Event::Radio(RadioType::Wifi, on) => radio("Wi-Fi", *on),
+        Event::Radio(RadioType::Bluetooth, on) => radio("Bluetooth", *on),
+        Event::Radio(RadioType::Mobile, on) => radio(tr("Mạng di động", "Mobile data"), *on),
+        Event::Airplane(on) => format!("{} {}", tr("Chế độ máy bay", "Airplane mode"), on_off(*on)),
+        Event::Net(Net::Online { name, .. }) => format!("{} {name}", tr("Đã kết nối", "Connected to")),
+        Event::Net(Net::Limited { .. }) => tr("Không có internet", "No internet").to_string(),
+        Event::Net(Net::Offline) => tr("Mất kết nối mạng", "Disconnected").to_string(),
+        Event::Vpn(up) => tr(if *up { "VPN kết nối" } else { "VPN tắt" }, if *up { "VPN connected" } else { "VPN off" }).to_string(),
+        Event::Device { name, .. } | Event::DeviceBattery { name, .. } => name.clone(),
+    }
+}
+
+/// `prev` (the list on show, if any) with the event told. A list lasts as long as its banner shows
+/// (`ALERT_MS` after the last line); an event after that starts a new one.
+fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant) -> ConnList {
+    let fresh = prev.filter(|l| now.saturating_duration_since(l.at) < Duration::from_millis(ALERT_MS as u64));
+    match fresh {
+        Some(mut l) if !matches!(e, Event::Airplane(_)) => {
+            let text = row_text(e);
+            if text != l.head_row && !l.rows.iter().any(|r| r.text == text) {
+                l.rows.push(Row { text, at: now });
+            }
+            l.at = now;
+            l
+        }
+        prev => {
+            // Windows can turn the radios off before it flips the airplane switch: what was told stays,
+            // as lines under the switch.
+            let rows = prev
+                .filter(|l| l.head.icon != Some(render::ICON_AIRPLANE) && matches!(e, Event::Airplane(_)))
+                .map(|l| std::iter::once(Row { text: l.head_row, at: l.at }).chain(l.rows).collect())
+                .unwrap_or_default();
+            ConnList { head: connection_toast(e.clone()), head_row: row_text(e), rows, at: now }
+        }
+    }
+}
+
+fn list_toast(l: &ConnList) -> Toast {
+    Toast { rows: l.rows.clone(), ..l.head.clone() }
+}
+
 /// Banner text for a connectivity change.
 fn connection_toast(e: Event) -> Toast {
     match e {
@@ -1809,6 +1896,7 @@ fn connection_toast(e: Event) -> Toast {
         Event::Radio(RadioType::Bluetooth, on) => status_toast("Bluetooth", format!("{} Bluetooth", if on { tr("Đã bật", "Turned on") } else { tr("Đã tắt", "Turned off") }), "", None, render::ICON_BT),
         Event::Radio(RadioType::Mobile, on) => status_toast(tr("Mạng di động", "Mobile data"), format!("{} {}", tr("Mạng di động", "Mobile data"), on_off(on)), "", None, render::ICON_MOBILE),
         Event::Airplane(on) => status_toast(tr("Chế độ máy bay", "Airplane mode"), format!("{} {}", tr("Chế độ máy bay", "Airplane mode"), on_off(on)), "", None, render::ICON_AIRPLANE),
+        Event::Vpn(up) => status_toast("VPN", tr(if up { "VPN đã kết nối" } else { "VPN đã tắt" }, if up { "VPN connected" } else { "VPN off" }).to_string(), "", None, render::ICON_VPN),
         Event::Net(Net::Online { name, wifi }) => {
             let (source, icon) = if wifi { ("Wi-Fi", render::ICON_WIFI) } else { (tr("Mạng", "Network"), render::ICON_ETHERNET) };
             status_toast(source, format!("{} {name}", tr("Đã kết nối", "Connected to")), "", None, icon)
@@ -2004,6 +2092,7 @@ fn run() -> windows::core::Result<()> {
             usage_alerts: Vec::new(),
             conn_queue: Vec::new(),
             conn_busy: false,
+            conn_list: None,
             usage_tab: 0,
             usage_tab_chosen: false,
             track: None,
@@ -2110,6 +2199,32 @@ mod tests {
         (a.result, a.more) = (None, 2);
         assert!(activity_toast(&a, false).title.ends_with("· +2"));
         assert!(!activity_toast(&a, true).title.contains('+'), "an ending counts nothing");
+    }
+
+    #[test]
+    fn network_events_that_come_together_are_one_banner_with_lines() {
+        let t0 = Instant::now();
+        let later = |ms: u64| t0 + Duration::from_millis(ms);
+        let texts = |l: &ConnList| l.rows.iter().map(|r| r.text.clone()).collect::<Vec<String>>();
+        let wifi_off = Event::Radio(RadioType::Wifi, false);
+        // Wi-Fi off, and the VPN that was on it: the head is Wi-Fi, the VPN a line under it.
+        let l = conn_list_add(None, &wifi_off, t0);
+        assert_eq!((l.head.icon, l.rows.len()), (Some(render::ICON_WIFI_OFF), 0), "alone it is the banner it always was");
+        let l = conn_list_add(Some(l), &Event::Vpn(false), later(600));
+        assert_eq!((l.head.title.as_str(), texts(&l)), (format!("{} Wi-Fi", tr("Đã tắt", "Turned off")).as_str(), vec![tr("VPN tắt", "VPN off").to_string()]));
+        // Airplane mode on: the switch is the head, each thing that went off a line, none told twice.
+        let mut l = conn_list_add(None, &Event::Airplane(true), t0);
+        for (ms, e) in [(100, wifi_off.clone()), (200, Event::Radio(RadioType::Bluetooth, false)), (300, Event::Vpn(false)), (400, wifi_off.clone())] {
+            l = conn_list_add(Some(l), &e, later(ms));
+        }
+        assert_eq!(l.head.icon, Some(render::ICON_AIRPLANE));
+        assert_eq!(texts(&l), [tr("Wi-Fi tắt", "Wi-Fi off"), tr("Bluetooth tắt", "Bluetooth off"), tr("VPN tắt", "VPN off")]);
+        // Radios first, the switch after: what was told becomes the first lines under the switch.
+        let l = conn_list_add(Some(conn_list_add(None, &wifi_off, t0)), &Event::Airplane(true), later(300));
+        assert_eq!((l.head.icon, texts(&l)), (Some(render::ICON_AIRPLANE), vec![tr("Wi-Fi tắt", "Wi-Fi off").to_string()]));
+        // The banner has gone by the time the next one comes: a new list.
+        let l = conn_list_add(Some(l), &Event::Vpn(true), later(300 + ALERT_MS as u64 + 1));
+        assert_eq!((l.head.title.as_str(), l.rows.len()), (tr("VPN đã kết nối", "VPN connected"), 0));
     }
 
     #[test]

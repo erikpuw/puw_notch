@@ -33,7 +33,7 @@ use crate::icons::{self, Seg};
 use crate::lyrics;
 use crate::music::{Repeat, Track};
 use crate::notch::{self, target, Mode, LYRICS_EXTRA_W};
-use crate::notify::{BannerKind, Note, Toast};
+use crate::notify::{BannerKind, Note, Row, Toast};
 use crate::system::Battery;
 
 mod aurora;
@@ -712,6 +712,8 @@ const F_BODY_WRAP: usize = 6;
 /// Text column of a notification banner: its 420 px width minus icon (18 + 36 + 12) and right pad 22.
 const BANNER_TEXT_W: f32 = 420.0 - 88.0;
 const BANNER_MIN_W: f32 = 220.0;
+/// A checklist line: its dot (15) and the gap to its text (11).
+const ROW_DOT_W: f32 = 26.0;
 const F_SMALL_ICON: usize = 7;
 const F_BIG: usize = 8;
 /// Icon of a banner: larger than the 16 px of the buttons (the banner has no ring around it).
@@ -801,6 +803,8 @@ const ICON_ADD: &str = "\u{E710}";
 const ICON_CHECK: &str = "\u{E73E}";
 /// A finished task: a check inside a ring (Segoe MDL2 "Completed"); the banner draws it green.
 pub const ICON_DONE: &str = "\u{E930}";
+/// A VPN (Segoe MDL2 "VPN").
+pub const ICON_VPN: &str = "\u{E705}";
 /// A task that failed: a cross in a ring (drawn red).
 pub const ICON_FAILED: &str = "\u{EA39}";
 /// Explorer deleting or recycling.
@@ -1840,7 +1844,7 @@ impl Renderer {
     /// Returns true while an icon morph is still playing (the caller keeps frames coming).
     /// Width (design px) a status banner needs to hold its title and body beside the icon, never
     /// narrower than `BANNER_MIN_W` (the level bar of volume and brightness needs room).
-    pub fn status_banner_width(&mut self, title: &str, body: &str, scale: f32) -> f32 {
+    pub fn status_banner_width(&mut self, title: &str, body: &str, rows: &[Row], scale: f32) -> f32 {
         let Ok(fonts) = self.fonts(scale) else { return notch::alert_size(0)[0] };
         let line = |text: &str, font: usize| -> f32 {
             let u: Vec<u16> = text.encode_utf16().collect();
@@ -1853,7 +1857,9 @@ impl Renderer {
             }
         };
         // Left margin, icon and its gap, the text, the right margin.
-        (18.0 + 36.0 + 12.0 + line(title, F_TITLE).max(line(body, F_BODY)).ceil() + 22.0).clamp(BANNER_MIN_W, 420.0)
+        // A line of a checklist has its dot (and the gap to its text) in front of the text.
+        let text = rows.iter().map(|r| line(&r.text, F_BODY) + ROW_DOT_W).fold(line(title, F_TITLE).max(line(body, F_BODY)), f32::max);
+        (18.0 + 36.0 + 12.0 + text.ceil() + 22.0).clamp(BANNER_MIN_W, 420.0)
     }
 
     /// Lines `text` wraps to in a notification banner (its body font and width, at `scale`).
@@ -2328,7 +2334,7 @@ mod tests {
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Shrink"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
-            let toast = Toast { app: "Claude".into(), title: "x".into(), body: "y".into(), level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
+            let toast = Toast { app: "Claude".into(), title: "x".into(), body: "y".into(), level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() };
             let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
             macro_rules! view { ($mode:expr, $banner:expr) => { View { mode: $mode, size: [520.0, 139.0, 24.0], time: "20:49", date: "T2, 26/10",
                 battery: Some(Battery { percent: 76, charging: false, saver: false }), banner: $banner, music: None, live: false, robot: None, phase: 0.0,
@@ -3043,17 +3049,17 @@ mod tests {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (500i32, 110i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Banner preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
-            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()), badge: None, choices: Vec::new(), app_id: None };
+            let note = Toast { app: "powershell".into(), title: "Anh Minh".into(), body: "Tối nay 8h họp nhóm nhé, nhớ mang laptop.".into(), level: None, icon: None, image: None, open: Some("powershell".into()), badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() };
             let device = Toast { app: "Bluetooth".into(), title: "UGREEN HiTune Max5c".into(), body: "Đã kết nối".into(), level: None,
-                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None, badge: Some("80%".into()), choices: Vec::new(), app_id: None };
+                icon: Some(device_icon(crate::connectivity::DeviceKind::Headphones)), image: None, open: None, badge: Some("80%".into()), choices: Vec::new(), app_id: None, rows: Vec::new() };
             let charging = Toast { app: "Pin".into(), title: "Đang sạc".into(), body: "Đã cắm sạc".into(), level: None,
-                icon: Some(ICON_PLUG), image: None, open: None, badge: Some("70%".into()), choices: Vec::new(), app_id: None };
+                icon: Some(ICON_PLUG), image: None, open: None, badge: Some("70%".into()), choices: Vec::new(), app_id: None, rows: Vec::new() };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
-            let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "Cho phép chạy list_projects của codebase-memory-mcp để liệt kê các project đã được index trong đồ thị mã nguồn (chỉ đọc, không thay đổi gì)?".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choices: vec!["Đồng ý".into(), "Không đồng ý".into(), "Trong app".into()] , app_id: None };
+            let approve = Toast { app: "Claude".into(), title: "Bash".into(), body: "Cho phép chạy list_projects của codebase-memory-mcp để liệt kê các project đã được index trong đồ thị mã nguồn (chỉ đọc, không thay đổi gì)?".into(), level: None, icon: Some(ICON_WARN), image: None, open: None, badge: None, choices: vec!["Đồng ý".into(), "Không đồng ý".into(), "Trong app".into()] , app_id: None, rows: Vec::new() };
             let downloading = Toast { app: "Tải xuống".into(), title: "Đang tải xuống: model.gguf".into(), body: "196.6 MB · 86.5 MB/s".into(), level: None,
-                icon: Some(ICON_DOWNLOAD), image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
+                icon: Some(ICON_DOWNLOAD), image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() };
             let downloaded = Toast { title: "Tải xuống hoàn tất".into(), body: "model.gguf · 1215.4 MB".into(), icon: Some(ICON_DONE), ..downloading.clone() };
             let deleting = Toast { app: "Tệp".into(), title: "Đang xóa · 42%".into(), body: "42%".into(), level: Some(0.42), icon: Some(ICON_TRASH), ..downloading.clone() };
             let moving = Toast { title: "Đang di chuyển · 42%".into(), icon: Some(ICON_MOVE), ..deleting.clone() };
@@ -3321,16 +3327,16 @@ mod tests {
                 snap.apps[2] = Some(vec![bar(tl("Gemini · Tuần", "Gemini · Week"), true, 0.4, 150), bar(tl("Gemini · 5 giờ", "Gemini · 5 h"), false, 0.0, 4), bar(tl("Claude · GPT · Tuần", "Claude · GPT · Week"), true, 36.0, 160),
                     bar(tl("Claude · GPT · 5 giờ", "Claude · GPT · 5 h"), false, 30.0, 4), bar(tl("Argon · Tuần", "Argon · Week"), true, 89.0, 150)]);
                 let toast = |app: &str, title: &str, body: &str, choices: &[&str]| Toast { app: app.into(), title: title.into(), body: body.into(), level: None, icon: Some(ICON_WARN),
-                    image: None, open: None, badge: None, choices: choices.iter().map(|c| c.to_string()).collect(), app_id: None };
+                    image: None, open: None, badge: None, choices: choices.iter().map(|c| c.to_string()).collect(), app_id: None, rows: Vec::new() };
                 let claude_ask = toast("Claude", tl("Duyệt lệnh", "Approve command"), tl("Cho phép chạy công cụ get_architecture của codebase-memory-mcp cho project này (chỉ đọc)?", "Allow the get_architecture tool of codebase-memory-mcp to run for this project (read only)?"),
                     if english { &["Allow", "Deny", "In the app"] } else { &["Đồng ý", "Không đồng ý", "Trong app"] });
                 // powershell's own icon (the shell's AppsFolder knows it by this id) stands in the banner.
                 let notification = Toast { app: "powershell".into(), title: tl("Anh Minh", "Alex").into(), body: tl("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop.").into(),
                     level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(),
-                    app_id: Some(r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe".into()) };
+                    app_id: Some(r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe".into()), rows: Vec::new() };
                 // The reminders of the Health page: a status banner each (icon, title, a bar of today's water or a second line).
                 let status = |app: &str, title: &str, body: &str, level: Option<f32>, icon: &'static str| Toast { app: app.into(), title: title.into(), body: body.into(), level,
-                    icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
+                    icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() };
                 let water = status(tl("Uống nước", "Water"), tl("Đến giờ uống 250 ml nước", "Time to drink 250 ml"), "", Some(0.375), ICON_DROP);
                 let water_goal = status(tl("Uống nước", "Water"), tl("Đạt mục tiêu 2.0 L hôm nay", "Goal of 2.0 L reached today"), "", Some(1.0), ICON_DROP);
                 let stand = status(tl("Đứng dậy đi lại", "Stand up and move"), tl("Bạn đã ngồi 45 phút liền", "You have been sitting for 45 min"),
@@ -3536,7 +3542,7 @@ mod tests {
             note("Outlook", t("Lịch họp tuần", "Weekly planning"), t("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610290910),
             note("Spotify", t("Danh sách mới cho bạn", "New playlist for you"), t("Nhạc tập trung buổi sáng", "Morning focus"), 202610290805)];
         let toast = Toast { app: "Zalo".into(), title: t("Anh Minh", "Alex"), body: t("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop."),
-            level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(), app_id: None };
+            level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() };
         let wx = State { place: Some(Place { name: t("Đà Nẵng", "Da Nang"), lat: 16.0, lon: 108.0 }),
             now: Some(Now { temp: 29.0, feels: 32.0, humidity: 78.0, wind: 9.0, sky: Sky::PartlyCloudy, day: true }), updated: Some(202610290930), ..State::default() };
         let health = Health::default();

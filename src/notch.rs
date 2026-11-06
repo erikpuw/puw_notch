@@ -50,6 +50,9 @@ pub fn alert_size_choice(lines: u8) -> [f32; 3] {
     [520.0, BANNER_TEXT_TOP + lines.clamp(1, 3) as f32 * BANNER_LINE_H + 42.0, 24.0]
 }
 
+/// Height one line of a checklist banner adds to a status banner.
+pub const ROW_H: f32 = 22.0;
+
 pub fn alert_size(lines: u8) -> [f32; 3] {
     if lines == 0 {
         return target(Mode::Alert, false);
@@ -141,6 +144,8 @@ pub struct Notch {
     alert_lines: u8,
     /// Width of a status banner that fits its text (0 = the standard width).
     alert_width: f32,
+    /// Lines of a checklist banner: the banner is taller by `ROW_H` each.
+    alert_rows: u8,
     /// The banner is a question with buttons (wider, see `alert_size_choice`).
     alert_choice: bool,
     /// The lyrics show beside the player: the open panel is LYRICS_EXTRA_W wider.
@@ -154,7 +159,7 @@ pub struct Notch {
 
 impl Notch {
     pub fn new(minimal: bool) -> Self {
-        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_width: 0.0, alert_choice: false, wide: false, panel: [target(Mode::Expanded, false)[0], target(Mode::Expanded, false)[1]], obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
+        let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_width: 0.0, alert_rows: 0, alert_choice: false, wide: false, panel: [target(Mode::Expanded, false)[0], target(Mode::Expanded, false)[1]], obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
         // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
         for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
@@ -235,8 +240,14 @@ impl Notch {
         self.mode = Mode::Alert;
         self.alert_lines = lines;
         self.alert_width = 0.0;
+        self.alert_rows = 0;
         self.alert_choice = false;
         true
+    }
+
+    /// The status banner on show has `rows` lines under its title.
+    pub fn set_alert_rows(&mut self, rows: u8) {
+        self.alert_rows = rows;
     }
 
     /// The status banner just shown is `width` wide, to fit its lines.
@@ -258,6 +269,7 @@ impl Notch {
             if self.alert_width > 0.0 {
                 size[0] = self.alert_width;
             }
+            size[1] += ROW_H * self.alert_rows as f32;
             return size;
         }
         let mut t = target(self.mode, self.live);

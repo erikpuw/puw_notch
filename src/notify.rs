@@ -18,6 +18,13 @@ pub enum BannerKind {
     Approval,
 }
 
+/// One line of a checklist banner: a green dot with a tick and its text; the dot pops in from `at`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    pub text: String,
+    pub at: std::time::Instant,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Toast {
     pub app: String,
@@ -37,6 +44,8 @@ pub struct Toast {
     pub choices: Vec<String>,
     /// The app's user model id: its own icon stands in the banner (None: the bell).
     pub app_id: Option<String>,
+    /// A checklist under the title (a status banner only): one line per thing that happened with it.
+    pub rows: Vec<Row>,
 }
 
 impl Toast {
@@ -212,7 +221,7 @@ impl Reader {
                 let (title, body) = parse_payload(&payload);
                 if !title.is_empty() {
                     let open = parse_open(&aumid, &payload);
-                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload), open, badge: None, choices: Vec::new(), app_id: Some(aumid.clone()).filter(|a| !a.is_empty()) });
+                    out.push(Toast { app: app_name(&aumid), title, body, level: None, icon: None, image: parse_image(&payload), open, badge: None, choices: Vec::new(), app_id: Some(aumid.clone()).filter(|a| !a.is_empty()), rows: Vec::new() });
                 }
             }
             (self.sql.finalize)(stmt);
