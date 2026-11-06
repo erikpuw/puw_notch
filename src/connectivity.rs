@@ -102,9 +102,9 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
     if old.net != new.net && !(new.net == Net::Offline && quiet_offline) {
         out.push(Event::Net(new.net.clone()));
     }
-    // A VPN lives on a network: it is "up" only with one under it, so it is told after the network
-    // that carries it came back, and told down when that network goes (it is not told alone then).
-    let vpn_up = |s: &Snapshot| s.vpn && s.net != Net::Offline;
+    // A VPN lives on a network that reaches the internet: it is "up" only with one under it, so it is
+    // told after that network came back, and told down when the network goes (not told alone then).
+    let vpn_up = |s: &Snapshot| s.vpn && matches!(s.net, Net::Online { .. });
     if vpn_up(old) != vpn_up(new) {
         out.push(Event::Vpn(vpn_up(new)));
     }
@@ -169,6 +169,21 @@ pub fn device_kind(major: i32, minor: i32, name: &str) -> DeviceKind {
     } else {
         Other
     }
+}
+
+/// A network that reaches nothing right after it connects is still being checked by Windows ("no
+/// internet" for a few seconds, then online): it is told only when it stays so this long.
+const LIMITED_AFTER: Duration = Duration::from_secs(8);
+
+/// `net` as it is to be told: a limited network that has not stayed limited for `LIMITED_AFTER` is
+/// still what the network was (`last`). `since` is when it became limited.
+fn settle(net: Net, last: &Net, since: &mut Option<Instant>, now: Instant) -> Net {
+    if !matches!(net, Net::Limited { .. }) {
+        *since = None;
+        return net;
+    }
+    let start = *since.get_or_insert(now);
+    if now.saturating_duration_since(start) >= LIMITED_AFTER { net } else { last.clone() }
 }
 
 /// How long "offline" after a radio went off counts as part of it: the network goes a poll later.
@@ -263,13 +278,20 @@ pub fn watch(hwnd: HWND) {
         let mut last = snapshot(&mut kinds);
         let mut quick = 0;
         let mut radio_off_at: Option<Instant> = None;
+        let mut limited_since: Option<Instant> = None;
         loop {
             if wait(if quick > 0 { QUICK } else { POLL }) {
                 quick = QUICK_POLLS;
             } else {
                 quick = quick.saturating_sub(1);
             }
-            let now = snapshot(&mut kinds);
+            let mut now = snapshot(&mut kinds);
+            let settled = settle(now.net.clone(), &last.net, &mut limited_since, Instant::now());
+            if settled != now.net {
+                // Look again soon: the limited network will be told, or turn out online.
+                quick = quick.max(2);
+            }
+            now.net = settled;
             let mut events = changes(&last, &now);
             last = now;
             drop_knock_on(&mut events, radio_off_at.is_some_and(|t| t.elapsed() < KNOCK_ON));
@@ -508,6 +530,33 @@ mod tests {
         let mut limited = vec![Event::Net(Net::Limited { name: "Cafe".into(), wifi: true })];
         drop_knock_on(&mut limited, true);
         assert_eq!(limited.len(), 1, "a network with no internet is still news");
+    }
+
+    #[test]
+    fn a_vpn_waits_for_a_network_with_internet() {
+        let limited = Net::Limited { name: "JihoonKim".into(), wifi: true };
+        // Wi-Fi joined without internet yet, the VPN already there: not "connected" until the network is
+        let vpn_first = with_vpn(snap(true, true, false, limited, &[]));
+        assert!(changes(&snap(true, true, false, Net::Offline, &[]), &vpn_first).iter().all(|e| !matches!(e, Event::Vpn(_))));
+        let online = with_vpn(snap(true, true, false, home(), &[]));
+        assert_eq!(changes(&vpn_first, &online), vec![Event::Net(home()), Event::Vpn(true)]);
+    }
+
+    #[test]
+    fn a_network_that_has_no_internet_for_a_moment_is_not_told() {
+        let t0 = Instant::now();
+        let limited = || Net::Limited { name: "JihoonKim".into(), wifi: true };
+        let mut since = None;
+        // just joined: still the network it was
+        assert_eq!(settle(limited(), &Net::Offline, &mut since, t0), Net::Offline);
+        assert_eq!(settle(limited(), &Net::Offline, &mut since, t0 + Duration::from_secs(7)), Net::Offline);
+        // online in time: the limited state never was
+        assert_eq!(settle(home(), &Net::Offline, &mut since, t0 + Duration::from_secs(7)), home());
+        assert!(since.is_none());
+        // it stayed limited: told
+        let mut since = None;
+        settle(limited(), &Net::Offline, &mut since, t0);
+        assert_eq!(settle(limited(), &Net::Offline, &mut since, t0 + LIMITED_AFTER), limited());
     }
 
     #[test]
