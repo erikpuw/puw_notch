@@ -9,13 +9,14 @@ use std::time::{Duration, Instant, SystemTime};
 
 use windows::core::{BOOL, HSTRING, Interface};
 use windows::Data::Json::JsonObject;
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, IUIAutomation2, TreeScope_Descendants};
 use windows::Win32::UI::Shell::{SHGetKnownFolderPath, FOLDERID_Downloads, KF_FLAG_DEFAULT};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible, PostMessageW, WM_APP};
 
 /// A sample with something to show is ready (`Watch::latest`).
@@ -41,9 +42,13 @@ pub struct LiveActivity {
     pub detail: String,
     /// 0.0 ..= 1.0 when the activity says how far it is; None when it does not.
     pub progress: Option<f32>,
-    /// An ended activity whose result was seen (the downloaded file is there); false while running
-    /// and when it only stopped being seen.
-    pub succeeded: bool,
+    /// An ended activity: Some(true) when it is seen to have worked (the downloaded file is there, the
+    /// build exited 0), Some(false) when it failed; None while it runs and when it only stopped being seen.
+    pub result: Option<bool>,
+    /// The file a finished download became.
+    pub file: Option<PathBuf>,
+    /// How many other activities run at the same time (this one is the first of them).
+    pub more: usize,
 }
 
 /// UI-side reader. Filesystem and accessibility calls never run on the animation thread.
@@ -167,7 +172,12 @@ pub struct Monitor {
     explorer_ui_at: Option<Instant>,
     build_exe: Option<String>,
     build_since: Option<Instant>,
-    last: Option<LiveActivity>,
+    /// The build process being timed, kept open so its exit code can be read once it is gone.
+    build_pid: Option<u32>,
+    build_proc: Option<Proc>,
+    build_exit: Option<u32>,
+    /// What ran at the last sample.
+    last: Vec<LiveActivity>,
     finished: Option<LiveActivity>,
 }
 
@@ -176,29 +186,36 @@ impl Monitor {
         Self { enabled, ..Default::default() }
     }
 
-    /// What runs right now (None when nothing, or when switched off). An activity that was there
-    /// and is gone becomes `take_finished`, except file operations: Explorer says it is done itself.
+    /// What runs right now (None when nothing, or when switched off): the first of the running activities
+    /// (Explorer, then a download, then a build), with how many others run beside it. All are read every
+    /// time, each keeps its own state, and one behind another still ends. An activity that was there and
+    /// is gone becomes `take_finished`, except file operations: Explorer says it is done itself.
+    /// ponytail: one ending is kept per sample; two ending in the same 250 ms show only the first.
     pub fn poll(&mut self, now: Instant) -> Option<LiveActivity> {
         if !self.enabled {
-            self.last = None;
+            self.last.clear();
             self.finished = None;
             return None;
         }
-        let current = self.poll_explorer(now).or_else(|| self.poll_download(now)).or_else(|| self.poll_build(now));
-        if current.is_none() {
-            if let Some(mut a) = self.last.take() {
-                if a.kind == ActivityKind::Download {
-                    if let Some(file) = self.download_done.take() {
-                        a.title = file.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-                        a.detail = std::fs::metadata(&file).map_or(a.detail, |m| download_detail(m.len(), 0.0));
-                        a.succeeded = true;
-                    }
-                }
-                self.finished = (!matches!(a.kind, ActivityKind::FileOp | ActivityKind::Move | ActivityKind::Delete)).then_some(a);
+        let mut running: Vec<LiveActivity> = [self.poll_explorer(now), self.poll_download(now), self.poll_build(now)].into_iter().flatten().collect();
+        if let Some(mut a) = ended_activity(std::mem::take(&mut self.last), &running) {
+            match a.kind {
+                ActivityKind::Download => if let Some(file) = self.download_done.take() {
+                    a.title = file.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+                    a.detail = std::fs::metadata(&file).map_or(a.detail, |m| download_detail(m.len(), 0.0));
+                    (a.result, a.file) = (Some(true), Some(file));
+                },
+                ActivityKind::Build => a.result = self.build_exit.take().map(|code| code == 0),
+                _ => {}
             }
+            self.finished = Some(a);
         }
-        self.last = current.clone();
-        current
+        self.last = running.clone();
+        let more = running.len().saturating_sub(1);
+        if let Some(first) = running.first_mut() {
+            first.more = more;
+        }
+        running.into_iter().next()
     }
 
     /// The activity that just ended, once.
@@ -312,21 +329,60 @@ impl Monitor {
         self.download_size = size;
         self.download_at = Some(now);
         let title = self.download_name.clone().unwrap_or_default();
-        Some(LiveActivity { kind: ActivityKind::Download, title, detail: download_detail(size, self.download_speed), progress: None, succeeded: false })
+        Some(LiveActivity { kind: ActivityKind::Download, title, detail: download_detail(size, self.download_speed), progress: None, result: None, file: None, more: 0 })
     }
 
     fn poll_build(&mut self, now: Instant) -> Option<LiveActivity> {
-        let Some(exe) = pick_build(&process_list()) else {
-            self.build_exe = None;
-            self.build_since = None;
+        let Some((pid, exe)) = pick_build(&process_list()) else {
+            // The tool is gone: its exit code says how it ended. None when it is still running (its
+            // terminal closed) or was not ours to open (an elevated one): then only "ended" is known.
+            self.build_exit = self.build_proc.take().and_then(|p| p.exit_code());
+            (self.build_pid, self.build_exe, self.build_since) = (None, None, None);
             return None;
         };
+        if self.build_pid != Some(pid) {
+            self.build_pid = Some(pid);
+            self.build_proc = Proc::open(pid);
+        }
         if self.build_exe.as_deref() != Some(exe.as_str()) {
             self.build_exe = Some(exe.clone());
             self.build_since = Some(now);
         }
         let secs = self.build_since.map_or(0, |t| now.duration_since(t).as_secs());
-        Some(LiveActivity { kind: ActivityKind::Build, title: build_name(&exe).to_string(), detail: elapsed_text(secs), progress: None, succeeded: false })
+        Some(LiveActivity { kind: ActivityKind::Build, title: build_name(&exe).to_string(), detail: elapsed_text(secs), progress: None, result: None, file: None, more: 0 })
+    }
+}
+
+/// The activity of the last sample that is no longer running, if any. Explorer's kinds are one source.
+fn ended_activity(last: Vec<LiveActivity>, running: &[LiveActivity]) -> Option<LiveActivity> {
+    last.into_iter().find(|a| !is_file_op(a.kind) && !running.iter().any(|r| r.kind == a.kind))
+}
+
+/// Explorer's kinds are one source: a dialog that turns from "preparing" into a move is not an end.
+fn is_file_op(kind: ActivityKind) -> bool {
+    matches!(kind, ActivityKind::FileOp | ActivityKind::Move | ActivityKind::Delete)
+}
+
+/// A process opened only to ask how it ended.
+struct Proc(HANDLE);
+
+impl Proc {
+    fn open(pid: u32) -> Option<Self> {
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok().map(Self) }
+    }
+
+    /// The exit code, None while the process still runs.
+    fn exit_code(&self) -> Option<u32> {
+        const STILL_ACTIVE: u32 = 259;
+        let mut code = 0;
+        unsafe { GetExitCodeProcess(self.0, &mut code).ok()? };
+        (code != STILL_ACTIVE).then_some(code)
+    }
+}
+
+impl Drop for Proc {
+    fn drop(&mut self) {
+        unsafe { let _ = CloseHandle(self.0); }
     }
 }
 
@@ -428,7 +484,7 @@ pub fn parse_explorer_title(title: &str) -> Option<LiveActivity> {
         title: operation.map_or(tr("Đang xử lý tệp", "Working on files"), |(_, label, _)| label).to_string(),
         detail: percent.map_or_else(|| tr("Đang xử lý…", "In progress…").to_string(), |p| format!("{p}%")),
         progress: percent.map(|p| p as f32 / 100.0),
-        succeeded: false,
+        result: None, file: None, more: 0,
     })
 }
 
@@ -577,11 +633,11 @@ fn build_name(exe: &str) -> &'static str {
 
 /// The build tool a terminal started, from `(pid, parent pid, exe)` of every process; the tools a
 /// tool starts itself (rustc under cargo) have a tool as parent and do not count twice.
-pub fn pick_build(procs: &[(u32, u32, String)]) -> Option<String> {
+pub fn pick_build(procs: &[(u32, u32, String)]) -> Option<(u32, String)> {
     procs
         .iter()
         .find(|(_, parent, exe)| listed(BUILD_TOOLS, exe) && procs.iter().any(|(pid, _, p)| pid == parent && listed(TERMINALS, p)))
-        .map(|(_, _, exe)| exe.clone())
+        .map(|(pid, _, exe)| (*pid, exe.clone()))
 }
 
 fn process_list() -> Vec<(u32, u32, String)> {
@@ -630,10 +686,10 @@ mod tests {
     #[test]
     fn disabling_does_not_report_success_for_a_running_task() {
         let mut monitor = Monitor::new(false);
-        monitor.last = Some(LiveActivity {
+        monitor.last = vec![LiveActivity {
             kind: ActivityKind::Download, title: "file.zip".into(),
-            detail: "5 MB".into(), progress: None, succeeded: false,
-        });
+            detail: "5 MB".into(), progress: None, result: None, file: None, more: 0,
+        }];
         assert!(monitor.poll(Instant::now()).is_none());
         assert!(monitor.take_finished().is_none());
     }
@@ -660,7 +716,7 @@ mod tests {
         let (request, _requests) = sync_channel(1);
         let (updates, receiver) = channel();
         let now = Instant::now();
-        let activity = LiveActivity { kind: ActivityKind::Download, title: "movie.zip".into(), detail: "5 MB".into(), progress: None, succeeded: false };
+        let activity = LiveActivity { kind: ActivityKind::Download, title: "movie.zip".into(), detail: "5 MB".into(), progress: None, result: None, file: None, more: 0 };
         let mut watch = Watch { enabled: true, reader: Some(Reader {
             request, updates: receiver, current: None, finished: None, received_at: now,
         }) };
@@ -737,6 +793,29 @@ mod tests {
             println!("Explorer ({} ms): {found:?}", t.elapsed().as_millis());
         }
         if com.is_ok() { unsafe { CoUninitialize(); } }
+    }
+
+    #[test]
+    fn a_process_tells_how_it_exited_only_once_it_is_gone() {
+        let mut child = std::process::Command::new("cmd").args(["/c", "exit 3"]).spawn().unwrap();
+        let proc = Proc::open(child.id()).expect("open own child");
+        child.wait().unwrap();
+        assert_eq!(proc.exit_code(), Some(3));
+        let mut running = std::process::Command::new("cmd").args(["/c", "pause"]).stdin(std::process::Stdio::piped()).spawn().unwrap();
+        let proc = Proc::open(running.id()).unwrap();
+        assert_eq!(proc.exit_code(), None, "still running");
+        running.kill().unwrap();
+        running.wait().unwrap();
+    }
+
+    #[test]
+    fn a_hidden_activity_still_ends_and_counts_toward_the_others() {
+        let act = |kind| LiveActivity { kind, title: "x".into(), detail: String::new(), progress: None, result: None, file: None, more: 0 };
+        // A copy and a build ran at the last sample; now only the copy remains (as a delete dialog).
+        let last = vec![act(ActivityKind::Move), act(ActivityKind::Build)];
+        let ended = ended_activity(last.clone(), &[act(ActivityKind::Delete)]);
+        assert_eq!(ended.map(|a| a.kind), Some(ActivityKind::Build), "the build ended behind the copy; move to delete is no end");
+        assert!(ended_activity(last, &[act(ActivityKind::FileOp), act(ActivityKind::Build)]).is_none(), "nothing ended");
     }
 
     #[test]
@@ -824,9 +903,9 @@ mod tests {
     fn only_a_build_tool_a_terminal_started_counts() {
         let p = |pid, parent, exe: &str| (pid, parent, exe.to_string());
         let shell = [p(1, 0, "powershell.exe"), p(2, 1, "cargo.exe"), p(3, 2, "rustc.exe")];
-        assert_eq!(pick_build(&shell).as_deref(), Some("cargo.exe"));
+        assert_eq!(pick_build(&shell).map(|(_, exe)| exe).as_deref(), Some("cargo.exe"));
         let wrapped = [p(1, 0, "pwsh.exe"), p(2, 1, "rtk.exe"), p(3, 2, "cargo.exe")];
-        assert_eq!(pick_build(&wrapped).as_deref(), Some("cargo.exe"));
+        assert_eq!(pick_build(&wrapped).map(|(_, exe)| exe).as_deref(), Some("cargo.exe"));
         let ide = [p(1, 0, "Code.exe"), p(2, 1, "cargo.exe")];
         assert_eq!(pick_build(&ide), None, "not from a terminal");
         let nested = [p(1, 0, "cmd.exe"), p(2, 1, "node.exe")];

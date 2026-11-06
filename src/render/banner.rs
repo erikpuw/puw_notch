@@ -72,7 +72,11 @@ impl Renderer {
                 rt.SetTransform(&base);
             } else {
                 // A finished task's check-in-a-ring is green; the glyph it replaces morphs into it.
-                let c = if icon == ICON_DONE { color(GREEN.0, GREEN.1, GREEN.2, a) } else { grey(1.0, a) };
+                let c = match icon {
+                    ICON_DONE => color(GREEN.0, GREEN.1, GREEN.2, a),
+                    ICON_FAILED => color(LOW_RED.0, LOW_RED.1, LOW_RED.2, a),
+                    _ => grey(1.0, a),
+                };
                 micon("banner", icon, F_BANNER_ICON, rect(ix, iy, ix + d, iy + d), c)?;
             }
             let tl = ix + d + 12.0 * s;

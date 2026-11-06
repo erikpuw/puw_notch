@@ -1716,11 +1716,21 @@ fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
     };
     // A download's title says what happens and names the file once it is known ("" until then).
     let named = |what: &str| if a.title.is_empty() { what.to_string() } else { format!("{what}: {}", a.title) };
-    if a.kind == Download && done && a.succeeded {
-        // The green tick takes the arrow's place (the banner icon morphs into it).
-        return status_toast(app, tr("Tải xuống hoàn tất", "Download complete").to_string(), &format!("{} · {}", a.title, a.detail), None, render::ICON_DONE);
+    // An ending whose outcome is known: a green check in a ring, or a red cross, takes the icon's place
+    // (the banner icon morphs into it).
+    match (a.kind, done, a.result) {
+        (Download, true, Some(true)) => {
+            // A click on it opens the folder with the file selected.
+            let open = a.file.as_ref().map(|f| format!("select:{}", f.display()));
+            return Toast { open, ..status_toast(app, tr("Tải xuống hoàn tất", "Download complete").to_string(), &format!("{} · {}", a.title, a.detail), None, render::ICON_DONE) };
+        }
+        (Build, true, Some(ok)) => {
+            let (what, icon) = if ok { (tr("hoàn tất", "finished"), render::ICON_DONE) } else { (tr("thất bại", "failed"), render::ICON_FAILED) };
+            return status_toast(app, format!("{} {what}", a.title), &a.detail, None, icon);
+        }
+        _ => {}
     }
-    let title = match (a.kind, done) {
+    let mut title = match (a.kind, done) {
         // No finished file: cancelled, failed, or moved away before it was seen.
         (Download, true) => named(tr("Đã dừng tải xuống", "Download stopped")),
         (Download, false) => named(tr("Đang tải xuống", "Downloading")),
@@ -1729,6 +1739,10 @@ fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
         _ if a.progress.is_some() => format!("{} · {}", a.title, a.detail),
         _ => a.title.clone(),
     };
+    // Others run beside it: a count at the end of the title (a badge would take width from the text).
+    if a.more > 0 && !done {
+        title = format!("{title} · +{}", a.more);
+    }
     status_toast(app, title, &a.detail, if done { None } else { a.progress }, icon)
 }
 
@@ -1756,10 +1770,13 @@ fn on_off(on: bool) -> &'static str {
 /// notch never takes focus, so hand the click's foreground right on (as Windows does for a toast
 /// click); otherwise the app opens behind the window in front.
 fn open_target(target: &str) {
-    let target = windows::core::HSTRING::from(target);
     unsafe {
         let _ = AllowSetForegroundWindow(ASFW_ANY);
-        ShellExecuteW(None, w!("open"), &target, None, None, SW_SHOWNORMAL);
+        match target.strip_prefix("select:") {
+            // A finished download: its folder with the file selected.
+            Some(file) => ShellExecuteW(None, w!("open"), w!("explorer.exe"), &windows::core::HSTRING::from(format!("/select,\"{file}\"")), None, SW_SHOWNORMAL),
+            None => ShellExecuteW(None, w!("open"), &windows::core::HSTRING::from(target), None, None, SW_SHOWNORMAL),
+        };
     }
 }
 
@@ -2050,7 +2067,7 @@ mod tests {
     fn live_activity_percentage_is_visible_alongside_the_bar() {
         let activity = activity::LiveActivity {
             kind: activity::ActivityKind::FileOp,
-            title: "Copying files".into(), detail: "42%".into(), progress: Some(0.42), succeeded: false,
+            title: "Copying files".into(), detail: "42%".into(), progress: Some(0.42), result: None, file: None, more: 0,
         };
         let toast = activity_toast(&activity, false);
         assert!(toast.title.contains("42%"), "the status layout hides body text when a bar is present");
@@ -2058,13 +2075,34 @@ mod tests {
     }
 
     #[test]
+    fn a_build_ends_with_a_check_or_a_cross_and_others_running_are_counted() {
+        let mut a = activity::LiveActivity { kind: activity::ActivityKind::Build, title: "Cargo".into(), detail: "1m 15s".into(), progress: None, result: Some(true), file: None, more: 0 };
+        assert_eq!(activity_toast(&a, true).icon, Some(render::ICON_DONE));
+        a.result = Some(false);
+        let failed = activity_toast(&a, true);
+        assert_eq!((failed.icon, failed.title.as_str()), (Some(render::ICON_FAILED), format!("Cargo {}", tr("thất bại", "failed")).as_str()));
+        a.result = None;
+        assert_eq!(activity_toast(&a, true).icon, Some(render::ICON_BUILD), "exit code unknown: only 'ended'");
+        (a.result, a.more) = (None, 2);
+        assert!(activity_toast(&a, false).title.ends_with("· +2"));
+        assert!(!activity_toast(&a, true).title.contains('+'), "an ending counts nothing");
+    }
+
+    #[test]
+    fn a_finished_download_opens_its_folder_with_the_file_selected_on_click() {
+        let a = activity::LiveActivity { kind: activity::ActivityKind::Download, title: "model.gguf".into(), detail: "1 MB".into(), progress: None, result: Some(true), file: Some(r"E:\Download\model.gguf".into()), more: 0 };
+        assert_eq!(activity_toast(&a, true).open.as_deref(), Some(r"select:E:\Download\model.gguf"));
+        assert_eq!(activity_toast(&a, false).open, None, "a running download opens nothing");
+    }
+
+    #[test]
     fn a_download_banner_names_the_file_and_ends_with_a_tick() {
-        let mut a = activity::LiveActivity { kind: activity::ActivityKind::Download, title: String::new(), detail: "196.6 MB".into(), progress: None, succeeded: false };
+        let mut a = activity::LiveActivity { kind: activity::ActivityKind::Download, title: String::new(), detail: "196.6 MB".into(), progress: None, result: None, file: None, more: 0 };
         assert_eq!(activity_toast(&a, false).title, tr("Đang tải xuống", "Downloading"));
         a.title = "model.gguf".into();
         assert_eq!(activity_toast(&a, false).title, format!("{}: model.gguf", tr("Đang tải xuống", "Downloading")));
         assert_eq!(activity_toast(&a, true).icon, Some(render::ICON_DOWNLOAD), "vanished without a file: no tick");
-        a.succeeded = true;
+        a.result = Some(true);
         let done = activity_toast(&a, true);
         assert_eq!((done.title.as_str(), done.icon), (tr("Tải xuống hoàn tất", "Download complete"), Some(render::ICON_DONE)));
         assert_eq!(done.body, "model.gguf · 196.6 MB");

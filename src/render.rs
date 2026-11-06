@@ -801,6 +801,8 @@ const ICON_ADD: &str = "\u{E710}";
 const ICON_CHECK: &str = "\u{E73E}";
 /// A finished task: a check inside a ring (Segoe MDL2 "Completed"); the banner draws it green.
 pub const ICON_DONE: &str = "\u{E930}";
+/// A task that failed: a cross in a ring (drawn red).
+pub const ICON_FAILED: &str = "\u{EA39}";
 /// Explorer deleting or recycling.
 pub const ICON_TRASH: &str = "\u{E74D}";
 /// Explorer moving files (Segoe MDL2 "MoveToFolder").
@@ -3056,7 +3058,10 @@ mod tests {
             let deleting = Toast { app: "Tệp".into(), title: "Đang xóa · 42%".into(), body: "42%".into(), level: Some(0.42), icon: Some(ICON_TRASH), ..downloading.clone() };
             let moving = Toast { title: "Đang di chuyển · 42%".into(), icon: Some(ICON_MOVE), ..deleting.clone() };
             let copying = Toast { title: "Đang sao chép · 42%".into(), icon: Some(ICON_COPY), ..deleting.clone() };
-            let banners = [(&note, 1), (&device, 0), (&charging, 0), (&approve, 3), (&downloading, 0), (&downloaded, 0), (&deleting, 0), (&moving, 0), (&copying, 0)];
+            let plus = Toast { title: "Đang sao chép · 42% · +1".into(), icon: Some(ICON_COPY), ..deleting.clone() };
+            let built = Toast { app: "Build".into(), title: "Cargo hoàn tất".into(), body: "1m 15s".into(), level: None, icon: Some(ICON_DONE), ..deleting.clone() };
+            let failed = Toast { title: "Cargo thất bại".into(), icon: Some(ICON_FAILED), ..built.clone() };
+            let banners = [(&note, 1), (&device, 0), (&charging, 0), (&approve, 3), (&downloading, 0), (&downloaded, 0), (&deleting, 0), (&moving, 0), (&copying, 0), (&plus, 0), (&built, 0), (&failed, 0)];
             for (toast, lines) in banners {
             let view = View { mode: Mode::Alert, size: if toast.choices.is_empty() { notch::alert_size(lines) } else { notch::alert_size_choice(lines) }, time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
