@@ -24,6 +24,7 @@ mod todo;
 mod usage;
 mod usb;
 mod weather;
+mod activity;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -72,6 +73,8 @@ const SETTLE_MS: u32 = 120;
 const NOTES_MAX: usize = 30;
 const CARET_MS: u32 = 530;
 const CHECK_MS: u32 = 500;
+/// A live activity's banner lasts this long past the last tick that renewed it.
+const ACTIVITY_MS: u32 = 1500;
 /// A pill that has rested this long (5 s) gives its pages back to Windows: Task Manager then shows
 /// a few MB instead of what the last panel touched. They come back on demand. (The other notch app
 /// trims as it enters its resting state, too.)
@@ -117,6 +120,7 @@ const MENU_VOLUME_KEYS: usize = 17;
 const MENU_STYLE_EARS: usize = 18;
 const MENU_STYLE_PILL: usize = 19;
 const MENU_APPROVE: usize = 20;
+const MENU_ACTIVITY: usize = 21;
 /// The page choices of the "Pages" submenu: this + the page's index in `PAGES`.
 const MENU_PAGE: usize = 30;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
@@ -228,6 +232,7 @@ struct App {
     /// Where the Notifications list is drawn, in rows: eases toward `note_scroll`.
     note_pos: f32,
     health: health::Health,
+    activity: activity::Watch,
     focus: Focus,
     /// Health card showing its settings.
     settings_open: Option<Card>,
@@ -383,7 +388,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { pages: render::pages_on(), minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), sun_view: self.sun_view, notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared) }
+        system::Settings { pages: render::pages_on(), minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), sun_view: self.sun_view, notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared), activity: self.activity.enabled }
     }
 
     /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
@@ -710,6 +715,11 @@ impl App {
             self.refresh_notes();
             changed = true;
         }
+        if let Some(a) = self.activity.poll(Instant::now()) {
+            self.show_activity(activity_toast(&a, false));
+        } else if let Some(a) = self.activity.take_finished() {
+            self.show_activity(activity_toast(&a, true));
+        }
         if let Some(t) = new.into_iter().last() {
             // A newer one restarts the 5 s from the start (show_banner re-arms the timer).
             self.show_banner(t, ALERT_MS);
@@ -762,6 +772,23 @@ impl App {
         unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
         self.kick();
         true
+    }
+
+    /// The live activity's banner: it stays while the activity runs (each tick renews it and updates its
+    /// text) and ends by itself a moment after the last one. Another banner is not pushed aside.
+    fn show_activity(&mut self, t: Toast) {
+        if self.approval.is_some() {
+            return;
+        }
+        if self.notch.mode != Mode::Alert {
+            self.show_banner(t, ACTIVITY_MS);
+        } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.icon == t.icon && b.choices.is_empty()) {
+            let width = self.renderer.status_banner_width(&t.title, &t.body, self.scale);
+            self.notch.set_alert_width(width);
+            self.banner = Some(t);
+            unsafe { SetTimer(Some(self.hwnd), T_ALERT, ACTIVITY_MS, None) };
+            self.kick();
+        }
     }
 
     /// The next approval request as a banner with Allow / Deny. One that cannot show now (the panel
@@ -1215,6 +1242,7 @@ impl App {
             if let Ok(more) = CreatePopupMenu() {
                 let _ = AppendMenuW(more, MF_STRING | check(self.approve.is_enabled()), MENU_APPROVE, &text(tr("Duyệt ngay trên notch", "Approve on the notch")));
                 let _ = AppendMenuW(more, MF_STRING | check(status::taking_volume_keys()), MENU_VOLUME_KEYS, &text(tr("Ẩn bảng âm lượng của Windows", "Hide Windows volume popup")));
+                let _ = AppendMenuW(more, MF_STRING | check(self.activity.enabled), MENU_ACTIVITY, &text(tr("Tác vụ nền trực tiếp", "Live activities")));
                 let _ = AppendMenuW(menu, MF_POPUP, more.0 as usize, &text(tr("Tính năng khác", "More features")));
             }
             let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, &text(tr("Khởi động cùng Windows", "Start with Windows")));
@@ -1262,6 +1290,11 @@ impl App {
                         self.weather.refresh();
                     }
                     self.refresh_music();
+                    system::save_settings(self.settings());
+                    self.kick();
+                }
+                MENU_ACTIVITY => {
+                    self.activity.enabled = !self.activity.enabled;
                     system::save_settings(self.settings());
                     self.kick();
                 }
@@ -1657,6 +1690,25 @@ fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, ico
     Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None }
 }
 
+/// The banner of a live activity (or, `done`, of one that just ended).
+fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
+    use activity::ActivityKind::*;
+    let (app, icon) = match a.kind {
+        FileOp => (tr("Tệp", "Files"), render::ICON_COPY),
+        Download => (tr("Tải xuống", "Download"), render::ICON_DOWNLOAD),
+        Build => (tr("Build", "Build"), render::ICON_BUILD),
+    };
+    let title = if done {
+        // A vanished process or partial file can also mean failure or cancellation.
+        format!("{} {}", tr("Đã kết thúc:", "Ended:"), a.title)
+    } else if a.progress.is_some() {
+        format!("{} · {}", a.title, a.detail)
+    } else {
+        a.title.clone()
+    };
+    status_toast(app, title, &a.detail, if done { None } else { a.progress }, icon)
+}
+
 /// The banner for a Pomodoro segment that ended.
 fn focus_toast(done: focus::Done) -> Toast {
     let min = |k: focus::Kind| k.minutes();
@@ -1919,6 +1971,7 @@ fn run() -> windows::core::Result<()> {
             note_scroll: 0,
             note_pos: 0.0,
             health: health::Health::load(system::today()),
+            activity: activity::Watch::new(settings.activity),
             focus: Focus::default(),
             settings_open: None,
             page_anim: None,
@@ -1970,6 +2023,17 @@ fn run() -> windows::core::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn live_activity_percentage_is_visible_alongside_the_bar() {
+        let activity = activity::LiveActivity {
+            kind: activity::ActivityKind::FileOp,
+            title: "Copying files".into(), detail: "42%".into(), progress: Some(0.42),
+        };
+        let toast = activity_toast(&activity, false);
+        assert!(toast.title.contains("42%"), "the status layout hides body text when a bar is present");
+        assert_eq!(toast.level, Some(0.42));
+    }
+
     use super::*;
 
     #[test]

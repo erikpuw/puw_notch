@@ -22,6 +22,7 @@
 | **Notch** | Giờ, vòng pin (xanh khi sạc, vàng khi tiết kiệm pin, đỏ từ 20%), sóng nhạc. Rê chuột để mở bảng. Hai kiểu chọn ở tray: tai thỏ hoặc viên thuốc nổi. |
 | **Tự né** | Thu mini khi đè lên chữ bên dưới (nhiều tab như Edge, Terminal), ẩn khi chơi game hoặc xem phim toàn màn hình. Nó hỏi thẳng cửa sổ phía dưới (chỗ trống của thanh tiêu đề hay tab, nút) chứ không chụp màn hình, nên không phải giấu mình khỏi chụp: vẫn hiện khi quay, chia sẻ màn hình và điều khiển từ xa. |
 | **Banner** | Thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, Wi-Fi, Bluetooth (kèm % pin thiết bị), mạng, pin, tiết kiệm pin, USB. Thông báo Windows hiện **icon của chính app** (36 px) và giờ nhận; nút × tắt sớm; ảnh chụp màn hình có ảnh thu nhỏ, bấm để mở. |
+| **Tác vụ trực tiếp** | Banner sao chép, di chuyển, xóa tệp trong Explorer kèm phần trăm và thanh tiến trình; tải file hiện dung lượng đã tải và tốc độ; giữ theo dõi lệnh build trong terminal. Bật / tắt ở tray → Tính năng khác → Tác vụ nền trực tiếp. |
 | **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity (xin quyền dùng công cụ, câu hỏi chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt; banner tự đóng sau 20 giây (app hỏi lại như thường) và đóng ngay khi bạn trả lời trong app, tắt hẳn ở tray. Cách thiết lập ở [dưới](#thiết-lập-cho-claude-code-tuỳ-chọn). |
 | **Robot** | 30 giây không đụng máy thì mặt LED (chỉ có đôi mắt) thay đồng hồ: nhìn quanh, thỉnh thoảng liếc sang bên, mừng một lần (mắt `> <` xanh, hai ngôi sao) khi pin vừa đầy, buồn (mắt đỏ, phích cắm nhấp nháy) khi pin từ 20% trở xuống mà chưa sạc. Động chuột lại thì `^ ^` và liếc theo chuột; 5 phút thì ngủ. Bật / tắt ở tray. |
 | **Nhẹ** | Chỉ tải phần đang hiện: lời bài hát khi mở trang Nhạc, icon khi mở trang Thông báo; ẩn toàn màn hình thì ngừng tải. Khi nghỉ chỉ chừng 7 MB RAM và 0% CPU, đang phát nhạc ở dạng pill chừng 14 MB, mở trang Nhạc có aurora chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
@@ -48,6 +49,16 @@ Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:
 | **Antigravity** | Máy chủ cục bộ của chính app, chỉ khi app đang mở |
 
 Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY 4.0), icon thời tiết và pin [Lucide](https://lucide.dev) (ISC), icon banner [Tabler Icons](https://tabler.io/icons) (MIT).
+
+## Tác vụ nền trực tiếp
+
+Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặc định tắt; lựa chọn được lưu).
+
+- **Explorer:** đọc cửa sổ tiến trình sao chép, di chuyển, xóa/chuyển vào thùng rác và giải nén. Banner có tên thao tác, phần trăm và thanh tiến trình; khi Explorer đang chuẩn bị hoặc đếm tệp mà chưa có phần trăm, chỉ hiện trạng thái đang xử lý. Không bắt được thao tác quá nhanh, không mở cửa sổ tiến trình, hoặc công cụ quản lý file khác.
+- **Download:** theo dõi file tạm .crdownload, .part, .opdownload trong thư mục **Downloads do Windows cấu hình**, kể cả thư mục đã chuyển sang ổ khác. Hiện tên file, MB đã tải và MB/s; bỏ qua file tạm không tăng dung lượng trong 30 giây (tải bị hủy hoặc tạm dừng lâu sẽ nhường lượt tải mới). Không suy đoán phần trăm vì file tạm không cho biết tổng dung lượng; chưa theo dõi thư mục tải tùy chọn khác của trình duyệt.
+- **Banner:** hiện một tác vụ mỗi lần, ưu tiên Explorer, rồi download, rồi build terminal có sẵn. Tự cập nhật khi tác vụ chạy, nhường thông báo khác và câu hỏi duyệt. Dòng **Đã kết thúc** cho download/build chỉ có nghĩa tác vụ không còn được phát hiện, có thể do hoàn tất, hủy hoặc lỗi.
+
+Việc quét chạy trên luồng nền, không chặn luồng vẽ notch. Tắt tính năng sẽ dừng luồng theo dõi và bỏ trạng thái cũ.
 
 ## Ảnh chụp
 

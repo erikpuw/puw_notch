@@ -236,11 +236,13 @@ pub struct Settings {
     pub pages: u8,
     /// The Weather page shows the sun's path in place of the hours ahead.
     pub sun_view: bool,
+    /// Live activity for file operations, downloads, and terminal builds (default: off).
+    pub activity: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111, sun_view: false }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111, sun_view: false, activity: false }
     }
 }
 
@@ -253,6 +255,7 @@ fn parse_settings(text: &str) -> Settings {
             "robot=0" => s.robot = false,
             "volkeys=1" => s.volume_keys = true,
             "approve=0" => s.approve = false,
+            "activity=1" => s.activity = true,
             other => {
                 if let Some(style) = other.strip_prefix("style=") {
                     s.style = crate::notch::Style::from_tag(style).unwrap_or_default();
@@ -286,8 +289,9 @@ pub fn save_settings(s: Settings) {
         let city = s.place.as_ref().map_or(String::new(), |p| format!("city={}\n", crate::weather::place_line(p)));
         let unit = s.unit.map_or(String::new(), |u| format!("unit={}\n", u.tag()));
         let sun = if s.sun_view { "sunview=1\n" } else { "" };
+        let act = if s.activity { "activity=1\n" } else { "" };
         let cleared = if s.notes_cleared > 0 { format!("notes_cleared={}\n", s.notes_cleared) } else { String::new() };
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\nstyle={}\napprove={}\npages={}\n{city}{unit}{sun}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8, s.style.tag(), s.approve as u8, s.pages));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\nstyle={}\napprove={}\npages={}\n{city}{unit}{sun}{act}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8, s.style.tag(), s.approve as u8, s.pages));
     }
 }
 
@@ -479,7 +483,7 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111, sun_view: false });
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111, sun_view: false, activity: false });
         assert_eq!(parse_settings("pages=5\n").pages, 5);
         assert_eq!(parse_settings("pages=0\n").pages, 0b111_1111, "never none");
         assert_eq!(parse_settings("pages=63\n").pages, 0b111_1111, "a mask saved before the Focus page gets it too");
