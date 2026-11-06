@@ -304,10 +304,10 @@ const COVER_TOP: f32 = 40.0;
 const COVER_GAP: f32 = 16.0;
 /// The Music page's cover is a disc (centre, radius, and the fraction of the radius kept solid before it fades to
 /// clear), bleeding off the panel's left edge and cut by its outline; it is drawn under the header and the page.
-const DISC_CX: f32 = 62.0;
-const DISC_CY: f32 = 100.0;
-const DISC_R: f32 = 112.0;
-const DISC_SOLID: f32 = 0.9;
+const DISC_CX: f32 = 48.0;
+const DISC_CY: f32 = 24.0;
+const DISC_R: f32 = 130.0;
+const DISC_SOLID: f32 = 0.93;
 const PLAY_BTN: f32 = 36.0;
 const SKIP_BTN: f32 = 28.0;
 const LYRICS_BTN: f32 = 28.0;
