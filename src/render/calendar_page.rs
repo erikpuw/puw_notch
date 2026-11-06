@@ -100,7 +100,9 @@ impl Renderer {
                 } else if hovered == Some(Button::CalCell(i)) {
                     rt.FillRoundedRectangle(&rounded(chip, CAL_CHIP_H * s / 2.0), &self.brush(grey(0.14, a))?);
                 }
-                let ink = if today { color(0.02, 0.13, 0.04, a) } else { grey(1.0, a) };
+                // Today is dark on its green disc; the first day of a lunar month ("1/10") is yellow, so it stands out where a
+                // bolder weight at 14 px would not.
+                let ink = if today { color(0.02, 0.13, 0.04, a) } else if l.is_some_and(|l| l.day == 1) { color(YELLOW.0, YELLOW.1, YELLOW.2, a) } else { grey(1.0, a) };
                 text(&label, if today { F_CLOCK_BOLD } else { font }, cell, center, ink)?;
             }
         }
