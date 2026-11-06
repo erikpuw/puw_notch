@@ -2352,6 +2352,11 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
             if matches!(e, Event::Airplane(false)) {
                 l.start_bt(expect.devices.len(), now);
             }
+            // A VPN that was up goes with airplane mode, told by its own event or not (it may be down already
+            // when the switch is flipped again quickly): its line is there either way.
+            if matches!(e, Event::Airplane(true)) && expect.vpn {
+                l.rows.push(Row::line(row_text(&Event::Vpn(false)), now).keyed(Some("vpn")));
+            }
             // One device is its own banner when it connects (the battery large); a list of lines is for two or more.
             if matches!(e, Event::Radio(RadioType::Bluetooth, true)) && expect.devices.len() >= 2 {
                 l.start_devices(expect.devices, now);
@@ -3008,6 +3013,24 @@ mod tests {
             let texts: Vec<String> = l.rows_shown().into_iter().map(|r| r.text).filter(|t| t.starts_with(tr("Đã kết nối", "Connected to")) || t.contains("VPN")).collect();
             assert_eq!(texts.len(), 2, "{texts:?}");
         }
+    }
+
+    #[test]
+    fn airplane_mode_on_tells_the_vpn_off_even_when_it_was_down_already() {
+        let t0 = Instant::now();
+        let vpn = Expect { vpn: true, ..Expect::default() };
+        let texts = |l: &ConnList| l.rows_shown().into_iter().map(|r| r.text).collect::<Vec<_>>();
+        let vpn_off = row_text(&Event::Vpn(false));
+        // Off and on again quickly: the VPN has not come back, no event tells it going, the line is there.
+        let mut l = conn_list_add(None, &Event::Airplane(false), t0, vpn);
+        l = conn_list_add(Some(l), &Event::Airplane(true), t0 + Duration::from_millis(300), vpn);
+        assert_eq!(texts(&l).iter().filter(|t| **t == vpn_off).count(), 1);
+        // The event that does come is the same line, not a second one.
+        l = conn_list_add(Some(l), &Event::Vpn(false), t0 + Duration::from_millis(500), vpn);
+        assert_eq!(texts(&l).iter().filter(|t| **t == vpn_off).count(), 1);
+        // No VPN was up: no line.
+        let l = conn_list_add(None, &Event::Airplane(true), t0, Expect::default());
+        assert!(!texts(&l).contains(&vpn_off));
     }
 
     #[test]
