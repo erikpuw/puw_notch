@@ -23,6 +23,18 @@ pub enum BannerKind {
 pub struct Row {
     pub text: String,
     pub at: std::time::Instant,
+    /// A device's line: its icon stands where the dot would, `value` (its battery) at the right end.
+    pub icon: Option<&'static str>,
+    pub value: Option<String>,
+    /// The value is a low battery: drawn red.
+    pub low: bool,
+}
+
+impl Row {
+    /// A line of the checklist kind (a green dot with a tick).
+    pub fn line(text: String, at: std::time::Instant) -> Self {
+        Row { text, at, icon: None, value: None, low: false }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

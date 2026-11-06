@@ -118,6 +118,17 @@ impl Renderer {
                         let (k, alpha) = icons::pop(age);
                         let (dx, dy) = (tl + 7.5 * s, top + 10.5 * s);
                         let ra = a * alpha;
+                        if let Some(glyph) = row.icon {
+                            // A device: its icon, its name, its battery at the right end (red when low).
+                            text(glyph, F_ICON, rect(tl - 1.0 * s, top + 2.0 * s, tl + 17.0 * s, top + 20.0 * s), center, grey(1.0, ra))?;
+                            let end = if row.value.is_some() { tr - 52.0 * s } else { tr };
+                            text(&row.text, F_BODY, rect(tl + ROW_DOT_W * s, top + 3.0 * s, end, top + 19.0 * s), lead, grey(0.9, ra))?;
+                            if let Some(v) = &row.value {
+                                let ink = if row.low { color(LOW_RED.0, LOW_RED.1, LOW_RED.2, ra) } else { grey(1.0, ra) };
+                                text(v, F_TITLE, rect(tr - 50.0 * s, top + 2.0 * s, tr, top + 20.0 * s), trail, ink)?;
+                            }
+                            continue;
+                        }
                         if i + 1 < t.rows.len() {
                             let line = self.brush(color(GREEN.0, GREEN.1, GREEN.2, ra * 0.35))?;
                             rt.DrawLine(Vector2 { X: dx, Y: dy + 9.5 * s }, Vector2 { X: dx, Y: top + (notch::ROW_H + 1.0) * s }, &line, 1.5 * s, &self.round);

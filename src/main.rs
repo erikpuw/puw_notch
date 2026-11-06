@@ -797,7 +797,7 @@ impl App {
             return;
         }
         if self.notch.mode == Mode::Alert && self.banner.as_ref().is_some_and(|b| b.app == t.app && b.choices.is_empty()) {
-            let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
+            let width = if t.badge.is_none() { self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale) } else { 0.0 };
             self.notch.set_alert_width(width);
             self.notch.set_alert_rows(t.rows.len() as u8);
             self.banner = Some(t);
@@ -1632,14 +1632,27 @@ impl App {
                 // The network may just have come back: the weather catches up (a recent one is kept).
                 self.weather.refresh();
                 for e in connectivity::take_events() {
-                    if matches!(e, Event::Device { .. } | Event::DeviceBattery { .. }) {
-                        // A device has its own banner (name, state, battery): they wait their turn.
-                        self.conn_queue.push(connection_toast(e));
-                    } else {
-                        // The airplane switch, radios, network and VPN that come together are one banner.
-                        let list = conn_list_add(self.conn_list.take(), &e, Instant::now());
-                        self.show_connection_list(list_toast(&list));
-                        self.conn_list = Some(list);
+                    let now = Instant::now();
+                    match &e {
+                        // A device that goes has its own banner; those wait their turn.
+                        Event::Device { up: false, .. } => self.conn_queue.push(connection_toast(e)),
+                        Event::DeviceBattery { name, percent, .. } => {
+                            if self.conn_list.as_mut().is_some_and(|l| device_battery(l, name, *percent, now)) {
+                                let t = self.conn_list.as_ref().map(list_toast);
+                                if let Some(t) = t {
+                                    self.show_connection_list(t);
+                                }
+                            } else {
+                                // Not on show (a battery that just ran low): a banner of its own.
+                                self.conn_queue.push(connection_toast(e));
+                            }
+                        }
+                        // The airplane switch, radios, network, VPN and devices that come together are one banner.
+                        _ => {
+                            let list = conn_list_add(self.conn_list.take(), &e, now);
+                            self.show_connection_list(list_toast(&list));
+                            self.conn_list = Some(list);
+                        }
                     }
                 }
                 if !self.conn_busy && !self.conn_queue.is_empty() {
@@ -1842,6 +1855,101 @@ struct ConnList {
     head_row: String,
     rows: Vec<Row>,
     at: Instant,
+    /// The banner of one Bluetooth device (name, state, its battery large): a second device turns it into a list.
+    single: bool,
+    /// The head says how many devices there are ("3 Bluetooth devices"), the lines are those devices.
+    devices_head: bool,
+    devices: usize,
+}
+
+impl ConnList {
+    fn new(head: Toast, head_row: String, rows: Vec<Row>, at: Instant) -> Self {
+        ConnList { head, head_row, rows, at, single: false, devices_head: false, devices: 0 }
+    }
+
+    /// Whether its banner still shows (it stays `ALERT_MS` after the last line).
+    fn fresh(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.at) < Duration::from_millis(ALERT_MS as u64)
+    }
+
+    /// Devices that connect while it shows are lines in it: after "Bluetooth on", after airplane mode, or
+    /// in a list of devices.
+    fn takes_devices(&self) -> bool {
+        self.devices_head || matches!(self.head.icon, Some(render::ICON_BT | render::ICON_AIRPLANE))
+    }
+}
+
+/// A list shows at most this many lines (the airplane switch, the radios, the network and the devices).
+const MAX_ROWS: usize = 6;
+
+fn devices_title(n: usize) -> String {
+    format!("{n} {}", tr("thiết bị Bluetooth", "Bluetooth devices"))
+}
+
+fn device_row(name: &str, icon: &'static str, value: Option<String>, at: Instant) -> Row {
+    let low = value.as_deref().and_then(|v| v.trim_end_matches('%').parse::<u8>().ok()).is_some_and(|p| p <= connectivity::LOW_BATTERY);
+    Row { text: name.to_string(), at, icon: Some(icon), value, low }
+}
+
+/// A Bluetooth device connected. Alone it is its own banner (the battery large, the point of it); one
+/// more while that shows, and the banner becomes a list with a line each; after "Bluetooth on" or
+/// airplane mode off the devices are lines in that banner.
+fn device_connected(fresh: Option<ConnList>, e: &Event, now: Instant) -> ConnList {
+    let Event::Device { name, kind, battery, .. } = e else { unreachable!("a device event") };
+    let value = battery.map(|p| format!("{p}%"));
+    match fresh {
+        Some(mut l) if l.single => {
+            if l.head.title == *name {
+                l.head.badge = l.head.badge.take().or(value);
+            } else {
+                let first = device_row(&l.head.title, l.head.icon.unwrap_or(render::ICON_BT), l.head.badge.clone(), l.at);
+                l.rows = vec![first, device_row(name, render::device_icon(*kind), value, now)];
+                (l.single, l.devices_head, l.devices) = (false, true, 2);
+                l.head = status_toast("Bluetooth", devices_title(2), "", None, render::ICON_BT);
+            }
+            l.at = now;
+            l
+        }
+        Some(mut l) if l.takes_devices() => {
+            match l.rows.iter_mut().find(|r| r.icon.is_some() && r.text == *name) {
+                Some(row) => row.value = value.or(row.value.take()),
+                None => {
+                    l.devices += 1;
+                    if l.rows.len() < MAX_ROWS {
+                        l.rows.push(device_row(name, render::device_icon(*kind), value, now));
+                    }
+                }
+            }
+            if l.devices_head {
+                l.head.title = devices_title(l.devices);
+            }
+            l.at = now;
+            l
+        }
+        _ => ConnList { single: true, ..ConnList::new(connection_toast(e.clone()), name.clone(), Vec::new(), now) },
+    }
+}
+
+/// A device's battery reading came after it connected: it goes in its banner or line, not a banner of
+/// its own. False when the device is not on show.
+fn device_battery(l: &mut ConnList, name: &str, percent: u8, now: Instant) -> bool {
+    if !l.fresh(now) {
+        return false;
+    }
+    let value = format!("{percent}%");
+    if l.single && l.head.title == name {
+        l.head.badge = Some(value);
+        if percent <= connectivity::LOW_BATTERY {
+            l.head.body = tr("Pin yếu, nên sạc", "Low battery, charge soon").to_string();
+        }
+    } else if let Some(row) = l.rows.iter_mut().find(|r| r.icon.is_some() && r.text == name) {
+        row.low = percent <= connectivity::LOW_BATTERY;
+        row.value = Some(value);
+    } else {
+        return false;
+    }
+    l.at = now;
+    true
 }
 
 /// The line an event makes under a head.
@@ -1863,12 +1971,15 @@ fn row_text(e: &Event) -> String {
 /// `prev` (the list on show, if any) with the event told. A list lasts as long as its banner shows
 /// (`ALERT_MS` after the last line); an event after that starts a new one.
 fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant) -> ConnList {
-    let fresh = prev.filter(|l| now.saturating_duration_since(l.at) < Duration::from_millis(ALERT_MS as u64));
+    let fresh = prev.filter(|l| l.fresh(now));
+    if matches!(e, Event::Device { up: true, .. }) {
+        return device_connected(fresh, e, now);
+    }
     match fresh {
         Some(mut l) if !matches!(e, Event::Airplane(_)) => {
             let text = row_text(e);
-            if text != l.head_row && !l.rows.iter().any(|r| r.text == text) {
-                l.rows.push(Row { text, at: now });
+            if text != l.head_row && !l.rows.iter().any(|r| r.text == text) && l.rows.len() < MAX_ROWS {
+                l.rows.push(Row::line(text, now));
             }
             l.at = now;
             l
@@ -1878,9 +1989,9 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant) -> ConnList {
             // as lines under the switch.
             let rows = prev
                 .filter(|l| l.head.icon != Some(render::ICON_AIRPLANE) && matches!(e, Event::Airplane(_)))
-                .map(|l| std::iter::once(Row { text: l.head_row, at: l.at }).chain(l.rows).collect())
+                .map(|l| std::iter::once(Row::line(l.head_row, l.at)).chain(l.rows).collect())
                 .unwrap_or_default();
-            ConnList { head: connection_toast(e.clone()), head_row: row_text(e), rows, at: now }
+            ConnList::new(connection_toast(e.clone()), row_text(e), rows, now)
         }
     }
 }
@@ -2225,6 +2336,39 @@ mod tests {
         // The banner has gone by the time the next one comes: a new list.
         let l = conn_list_add(Some(l), &Event::Vpn(true), later(300 + ALERT_MS as u64 + 1));
         assert_eq!((l.head.title.as_str(), l.rows.len()), (tr("VPN đã kết nối", "VPN connected"), 0));
+    }
+
+    #[test]
+    fn bluetooth_devices_are_one_banner_that_becomes_a_list() {
+        use connectivity::DeviceKind::{Headphones, Mouse};
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let dev = |name: &str, kind, battery| Event::Device { name: name.into(), kind, up: true, battery };
+        // One device: the banner it always was, its battery large; a late battery arrives in place.
+        let mut l = conn_list_add(None, &dev("WH-1000XM5", Headphones, None), t0);
+        assert_eq!((l.head.title.as_str(), l.head.badge.clone(), l.rows.len()), ("WH-1000XM5", None, 0));
+        assert!(device_battery(&mut l, "WH-1000XM5", 80, at(700)));
+        assert_eq!(l.head.badge.as_deref(), Some("80%"));
+        // A second one turns it into a list: a line each, the battery at the right.
+        let l = conn_list_add(Some(l), &dev("MX Master 3", Mouse, Some(64)), at(2800));
+        assert_eq!(l.head.title, devices_title(2));
+        let lines: Vec<_> = l.rows.iter().map(|r| (r.text.as_str(), r.value.as_deref(), r.icon.is_some())).collect();
+        assert_eq!(lines, [("WH-1000XM5", Some("80%"), true), ("MX Master 3", Some("64%"), true)]);
+        // A later battery fills its line in; a low one is red; a device that is not on show is not taken.
+        let mut l = l;
+        assert!(device_battery(&mut l, "MX Master 3", 18, at(3000)) && l.rows[1].low && !l.rows[0].low);
+        assert!(!device_battery(&mut l, "Tay cầm", 50, at(3100)));
+        assert!(!device_battery(&mut l, "MX Master 3", 18, at(3000 + ALERT_MS as u64 + 1)), "its banner has gone");
+        // After "Bluetooth on" the devices are lines under it, however many; at most MAX_ROWS are drawn.
+        let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0);
+        for i in 0..8u64 {
+            l = conn_list_add(Some(l), &dev(&format!("Thiết bị {i}"), Mouse, Some(50)), at(100 * i));
+        }
+        assert_eq!((l.head.icon, l.rows.len(), l.devices), (Some(render::ICON_BT), MAX_ROWS, 8));
+        // Under a Wi-Fi banner a device is not a line: it has its own banner.
+        let wifi = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0);
+        let l = conn_list_add(Some(wifi), &dev("Chuột", Mouse, Some(70)), at(200));
+        assert_eq!((l.head.title.as_str(), l.rows.len(), l.single), ("Chuột", 0, true));
     }
 
     #[test]

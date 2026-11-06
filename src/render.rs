@@ -1858,7 +1858,8 @@ impl Renderer {
         };
         // Left margin, icon and its gap, the text, the right margin.
         // A line of a checklist has its dot (and the gap to its text) in front of the text.
-        let text = rows.iter().map(|r| line(&r.text, F_BODY) + ROW_DOT_W).fold(line(title, F_TITLE).max(line(body, F_BODY)), f32::max);
+        // A device's line keeps room for its battery, which may arrive after the line does.
+        let text = rows.iter().map(|r| line(&r.text, F_BODY) + ROW_DOT_W + if r.icon.is_some() { 58.0 } else { 0.0 }).fold(line(title, F_TITLE).max(line(body, F_BODY)), f32::max);
         (18.0 + 36.0 + 12.0 + text.ceil() + 22.0).clamp(BANNER_MIN_W, 420.0)
     }
 
