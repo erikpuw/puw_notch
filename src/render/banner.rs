@@ -140,14 +140,18 @@ impl Renderer {
                             rt.DrawLine(Vector2 { X: dx, Y: dy + 9.5 * s }, Vector2 { X: dx, Y: top + (notch::ROW_H + 1.0) * s }, &self.brush(hue)?, 1.5 * s, &self.round);
                         }
                         let r = 7.5 * s;
-                        let disc = D2D1_ELLIPSE { point: Vector2 { X: dx, Y: dy }, radiusX: r * k, radiusY: r * k };
                         let ring = D2D1_ELLIPSE { point: Vector2 { X: dx, Y: dy }, radiusX: r - 0.75 * s, radiusY: r - 0.75 * s };
                         let track = self.brush(color(0.58, 0.64, 0.72, ra * if row.state == RowState::Wait { 0.3 } else { 0.35 }))?;
                         match row.state {
                             RowState::Done | RowState::Failed => {
+                                // A ring in the colour of the state, black inside, the mark in the same colour: a white mark on a
+                                // filled disc is about 2:1 against its green and sinks; this is about 10:1.
                                 let tint = if row.state == RowState::Done { GREEN } else { LOW_RED };
-                                rt.FillEllipse(&disc, &self.brush(color(tint.0, tint.1, tint.2, ra))?);
-                                let (ink, u) = (self.brush(color(1.0, 1.0, 1.0, ra))?, 0.9 * k * s);
+                                let hue = self.brush(color(tint.0, tint.1, tint.2, ra))?;
+                                let ring_k = D2D1_ELLIPSE { radiusX: ring.radiusX * k, radiusY: ring.radiusY * k, ..ring };
+                                rt.FillEllipse(&ring_k, &self.brush(color(0.0, 0.0, 0.0, ra))?);
+                                rt.DrawEllipse(&ring_k, &hue, 1.5 * s, None);
+                                let (ink, u) = (hue, 0.9 * k * s);
                                 let mark: [((f32, f32), (f32, f32)); 2] = if row.state == RowState::Done {
                                     [((-3.5, 0.2), (-1.2, 2.5)), ((-1.2, 2.5), (3.5, -2.5))]
                                 } else {
