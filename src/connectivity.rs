@@ -189,9 +189,18 @@ fn settle(net: Net, last: &Net, since: &mut Option<Instant>, now: Instant) -> Ne
 /// How long "offline" after a radio went off counts as part of it: the network goes a poll later.
 const KNOCK_ON: Duration = Duration::from_secs(4);
 
-/// Drops "offline" right after a radio went off (the radio's own event says it).
-fn drop_knock_on(events: &mut Vec<Event>, radio_off_recent: bool) {
-    events.retain(|e| !(radio_off_recent && *e == Event::Net(Net::Offline)));
+/// How long after Bluetooth came on (or airplane mode went off) its devices are left to settle: they
+/// connect, drop and connect again for a few seconds, and that is not worth a "disconnected".
+const DEVICE_SETTLE: Duration = Duration::from_secs(10);
+
+/// Drops "offline" right after a radio went off (the radio's own event says it), and a device
+/// "disconnected" while Bluetooth is still settling after it came on.
+fn drop_knock_on(events: &mut Vec<Event>, radio_off_recent: bool, bluetooth_settling: bool) {
+    events.retain(|e| match e {
+        Event::Net(Net::Offline) => !radio_off_recent,
+        Event::Device { up: false, .. } => !bluetooth_settling,
+        _ => true,
+    });
 }
 
 /// The Bluetooth devices that were connected and are to come back when Bluetooth does (or airplane mode
@@ -304,6 +313,7 @@ pub fn watch(hwnd: HWND) {
         }
         let mut quick = 0;
         let mut radio_off_at: Option<Instant> = None;
+        let mut bt_on_at: Option<Instant> = None;
         let mut limited_since: Option<Instant> = None;
         loop {
             if wait(if quick > 0 { QUICK } else { POLL }) {
@@ -320,7 +330,10 @@ pub fn watch(hwnd: HWND) {
             now.net = settled;
             let mut events = changes(&last, &now);
             last = now;
-            drop_knock_on(&mut events, radio_off_at.is_some_and(|t| t.elapsed() < KNOCK_ON));
+            if events.iter().any(|e| matches!(e, Event::Radio(RadioType::Bluetooth, true) | Event::Airplane(false))) {
+                bt_on_at = Some(Instant::now());
+            }
+            drop_knock_on(&mut events, radio_off_at.is_some_and(|t| t.elapsed() < KNOCK_ON), bt_on_at.is_some_and(|t| t.elapsed() < DEVICE_SETTLE));
             if events.iter().any(|e| matches!(e, Event::Radio(_, false))) {
                 radio_off_at = Some(Instant::now());
             }
@@ -554,11 +567,24 @@ mod tests {
         // Wi-Fi off and the network gone are one poll apart.
         let mut e = changes(&snap(false, true, false, home(), &[]), &snap(false, true, false, Net::Offline, &[]));
         assert_eq!(e, vec![Event::Net(Net::Offline)]);
-        drop_knock_on(&mut e, true);
+        drop_knock_on(&mut e, true, false);
         assert!(e.is_empty());
         let mut limited = vec![Event::Net(Net::Limited { name: "Cafe".into(), wifi: true })];
-        drop_knock_on(&mut limited, true);
+        drop_knock_on(&mut limited, true, false);
         assert_eq!(limited.len(), 1, "a network with no internet is still news");
+    }
+
+    #[test]
+    fn a_device_that_drops_while_bluetooth_settles_is_not_told() {
+        let down = Event::Device { name: "UGREEN".into(), kind: Headphones, up: false, battery: None };
+        let up = Event::Device { name: "UGREEN".into(), kind: Headphones, up: true, battery: Some(80) };
+        let mut e = vec![down.clone(), up.clone()];
+        drop_knock_on(&mut e, false, true);
+        assert_eq!(e, vec![up], "the drop is left out, the connection is still told");
+        // Later, a device that goes is told as ever.
+        let mut e = vec![down.clone()];
+        drop_knock_on(&mut e, false, false);
+        assert_eq!(e, vec![down]);
     }
 
     #[test]

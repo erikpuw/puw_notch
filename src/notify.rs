@@ -39,12 +39,19 @@ pub struct Row {
     /// The value is a low battery: drawn red.
     pub low: bool,
     pub state: RowState,
+    /// What the line is about ("wifi", "bt", "vpn"...): told again, the later state replaces it.
+    pub key: Option<&'static str>,
 }
 
 impl Row {
     /// A step of the checklist kind in `state`.
     pub fn step(text: String, state: RowState, at: std::time::Instant) -> Self {
-        Row { text, at, icon: None, value: None, low: false, state }
+        Row { text, at, icon: None, value: None, low: false, state, key: None }
+    }
+
+    pub fn keyed(mut self, key: Option<&'static str>) -> Self {
+        self.key = key;
+        self
     }
 
     /// A line that is done (a green dot with a tick).
