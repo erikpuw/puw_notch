@@ -119,11 +119,17 @@ impl Renderer {
                         let (dx, dy) = (tl + 7.5 * s, top + 10.5 * s);
                         let ra = a * alpha;
                         if let Some(glyph) = row.icon {
-                            // A device: its icon, its name, its battery at the right end (red when low).
-                            text(glyph, F_ICON, rect(tl - 1.0 * s, top + 2.0 * s, tl + 17.0 * s, top + 20.0 * s), center, grey(1.0, ra))?;
-                            let end = if row.value.is_some() { tr - 52.0 * s } else { tr };
-                            text(&row.text, F_BODY, rect(tl + ROW_DOT_W * s, top + 3.0 * s, end, top + 19.0 * s), lead, grey(0.9, ra))?;
-                            if let Some(v) = &row.value {
+                            // A device: its icon, its name, its battery at the right end (red when low). One still
+                            // to connect is grey, with a spinning ring where its battery will show.
+                            let waiting = row.state == RowState::Wait;
+                            let (icon_ink, name_ink) = if waiting { (grey(0.45, ra), color(0.58, 0.64, 0.72, ra * 0.8)) } else { (grey(1.0, ra), grey(0.9, ra)) };
+                            text(glyph, F_ICON, rect(tl - 1.0 * s, top + 2.0 * s, tl + 17.0 * s, top + 20.0 * s), center, icon_ink)?;
+                            let end = if row.value.is_some() || waiting { tr - 52.0 * s } else { tr };
+                            text(&row.text, F_BODY, rect(tl + ROW_DOT_W * s, top + 3.0 * s, end, top + 19.0 * s), lead, name_ink)?;
+                            if waiting {
+                                icon_busy = true;
+                                self.draw_spinner((tr - 9.0 * s, top + 11.0 * s), 5.5 * s, 1.5 * s, age, ra)?;
+                            } else if let Some(v) = &row.value {
                                 let ink = if row.low { color(LOW_RED.0, LOW_RED.1, LOW_RED.2, ra) } else { grey(1.0, ra) };
                                 text(v, F_TITLE, rect(tr - 50.0 * s, top + 2.0 * s, tr, top + 20.0 * s), trail, ink)?;
                             }
@@ -153,17 +159,8 @@ impl Renderer {
                             }
                             RowState::Todo => rt.DrawEllipse(&ring, &track, 1.5 * s, None),
                             RowState::Wait => {
-                                // A faint ring with a quarter of it turning (0.85 s a turn): the notch is checking.
                                 icon_busy = true;
-                                rt.DrawEllipse(&ring, &track, 1.5 * s, None);
-                                let head = age / 0.85 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-                                let arc = self.brush(color(BLUE.0, BLUE.1, BLUE.2, ra))?;
-                                let on_ring = |a: f32| Vector2 { X: dx + (r - 0.75 * s) * a.cos(), Y: dy + (r - 0.75 * s) * a.sin() };
-                                let step = std::f32::consts::FRAC_PI_2 / 6.0;
-                                for j in 0..6 {
-                                    let a0 = head + j as f32 * step;
-                                    rt.DrawLine(on_ring(a0), on_ring(a0 + step), &arc, 1.6 * s, &self.round);
-                                }
+                                self.draw_spinner((dx, dy), r - 0.75 * s, 1.5 * s, age, ra)?;
                             }
                         }
                         let ink = match row.state {
@@ -267,5 +264,25 @@ impl Renderer {
             }
         }
         Ok(icon_busy)
+    }
+}
+
+impl Renderer {
+    /// A faint ring with a quarter of it turning (0.85 s a turn): something is being waited for.
+    fn draw_spinner(&self, (x, y): (f32, f32), radius: f32, width: f32, age: f32, a: f32) -> Result<()> {
+        let rt = &self.rt;
+        let ring = D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: radius, radiusY: radius };
+        let head = age / 0.85 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+        let step = std::f32::consts::FRAC_PI_2 / 6.0;
+        let on_ring = |a: f32| Vector2 { X: x + radius * a.cos(), Y: y + radius * a.sin() };
+        unsafe {
+            rt.DrawEllipse(&ring, &self.brush(color(0.58, 0.64, 0.72, a * 0.3))?, width, None);
+            let arc = self.brush(color(BLUE.0, BLUE.1, BLUE.2, a))?;
+            for j in 0..6 {
+                let a0 = head + j as f32 * step;
+                rt.DrawLine(on_ring(a0), on_ring(a0 + step), &arc, width * 1.07, &self.round);
+            }
+        }
+        Ok(())
     }
 }

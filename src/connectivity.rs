@@ -194,6 +194,25 @@ fn drop_knock_on(events: &mut Vec<Event>, radio_off_recent: bool) {
     events.retain(|e| !(radio_off_recent && *e == Event::Net(Net::Offline)));
 }
 
+/// The Bluetooth devices that were connected and are to come back when Bluetooth does (or airplane mode
+/// goes off): the ones connected at start and since, minus the ones that went by themselves. What
+/// vanishes with Bluetooth or airplane mode is not "gone" (`changes` does not tell it), so it stays.
+static KNOWN: Mutex<Vec<(String, DeviceKind)>> = Mutex::new(Vec::new());
+
+pub fn expected_devices() -> Vec<(String, DeviceKind)> {
+    KNOWN.lock().map(|k| k.clone()).unwrap_or_default()
+}
+
+fn remember(known: &mut Vec<(String, DeviceKind)>, events: &[Event]) {
+    for e in events {
+        match e {
+            Event::Device { name, kind, up: true, .. } if !known.iter().any(|(n, _)| n == name) => known.push((name.clone(), *kind)),
+            Event::Device { name, up: false, .. } => known.retain(|(n, _)| n != name),
+            _ => {}
+        }
+    }
+}
+
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 
 pub fn take_events() -> Vec<Event> {
@@ -276,6 +295,13 @@ pub fn watch(hwnd: HWND) {
         // Class lookups are a round trip each; remember them per device id.
         let mut kinds: BTreeMap<String, DeviceKind> = BTreeMap::new();
         let mut last = snapshot(&mut kinds);
+        if let Ok(mut known) = KNOWN.lock() {
+            for (name, kind, _) in last.devices.values() {
+                if !known.iter().any(|(n, _)| n == name) {
+                    known.push((name.clone(), *kind));
+                }
+            }
+        }
         let mut quick = 0;
         let mut radio_off_at: Option<Instant> = None;
         let mut limited_since: Option<Instant> = None;
@@ -297,6 +323,9 @@ pub fn watch(hwnd: HWND) {
             drop_knock_on(&mut events, radio_off_at.is_some_and(|t| t.elapsed() < KNOCK_ON));
             if events.iter().any(|e| matches!(e, Event::Radio(_, false))) {
                 radio_off_at = Some(Instant::now());
+            }
+            if let Ok(mut known) = KNOWN.lock() {
+                remember(&mut known, &events);
             }
             if events.is_empty() {
                 continue;
@@ -530,6 +559,21 @@ mod tests {
         let mut limited = vec![Event::Net(Net::Limited { name: "Cafe".into(), wifi: true })];
         drop_knock_on(&mut limited, true);
         assert_eq!(limited.len(), 1, "a network with no internet is still news");
+    }
+
+    #[test]
+    fn devices_are_remembered_until_they_go_by_themselves() {
+        let mut known = Vec::new();
+        let up = |n: &str| Event::Device { name: n.into(), kind: Headphones, up: true, battery: None };
+        let down = |n: &str| Event::Device { name: n.into(), kind: Headphones, up: false, battery: None };
+        remember(&mut known, &[up("WH-1000XM5"), up("MX Master 3"), up("WH-1000XM5")]);
+        assert_eq!(known.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["WH-1000XM5", "MX Master 3"]);
+        // Bluetooth off or airplane mode on tells no "disconnected" (see `changes`): nothing is forgotten.
+        let a = with_vpn(snap(true, true, false, home(), &[("h", "WH-1000XM5", Headphones)]));
+        assert!(changes(&a, &snap(false, false, true, Net::Offline, &[])).iter().all(|e| !matches!(e, Event::Device { .. })));
+        // One that goes by itself is forgotten.
+        remember(&mut known, &[down("MX Master 3")]);
+        assert_eq!(known.len(), 1);
     }
 
     #[test]
