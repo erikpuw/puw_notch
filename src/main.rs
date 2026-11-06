@@ -196,6 +196,8 @@ struct App {
     conn_busy: bool,
     /// The checklist banner of the network events that came together, while it still shows.
     conn_list: Option<ConnList>,
+    /// A VPN was up and is to come back with the network (see `vpn_expected`).
+    vpn_was_up: bool,
     usage_tab: usize,
     usage_tab_chosen: bool,
     track: Option<music::Track>,
@@ -1649,7 +1651,10 @@ impl App {
                         }
                         // The airplane switch, radios, network, VPN and devices that come together are one banner.
                         _ => {
-                            let list = conn_list_add(self.conn_list.take(), &e, now);
+                            // Asked before the list takes the event: a VPN that went down with the network stays expected.
+                            let expected = vpn_expected(self.vpn_was_up, &e, self.conn_list.as_ref(), now);
+                            let list = conn_list_add(self.conn_list.take(), &e, now, self.vpn_was_up);
+                            self.vpn_was_up = expected;
                             self.show_connection_list(list_toast(&list), list.life_ms());
                             self.conn_list = Some(list);
                         }
@@ -1863,16 +1868,25 @@ struct ConnList {
     /// Wi-Fi came on (or airplane mode went off) and the connection is still to come: the banner waits
     /// for it, so "connected" and the VPN after it are lines in it and not a second banner.
     awaiting_net: bool,
+    /// The VPN that was up before is still to come back (it comes after the connection).
+    awaiting_vpn: bool,
 }
 
 impl ConnList {
     fn new(head: Toast, head_row: String, rows: Vec<Row>, at: Instant) -> Self {
-        ConnList { head, head_row, rows, at, single: false, devices_head: false, devices: 0, awaiting_net: false }
+        ConnList { head, head_row, rows, at, single: false, devices_head: false, devices: 0, awaiting_net: false, awaiting_vpn: false }
     }
 
-    /// How long its banner stays after the last line.
+    /// How long its banner stays after the last line: the full time only once everything expected has
+    /// come; while the connection or the VPN is still to come it waits (up to a limit) for it.
     fn life_ms(&self) -> u32 {
-        if self.awaiting_net { AWAIT_NET_MS } else { ALERT_MS }
+        if self.awaiting_net {
+            AWAIT_NET_MS
+        } else if self.awaiting_vpn {
+            AWAIT_VPN_MS
+        } else {
+            ALERT_MS
+        }
     }
 
     /// Whether its banner still shows.
@@ -1887,8 +1901,10 @@ impl ConnList {
     }
 }
 
-/// How long the banner of Wi-Fi coming on or airplane mode going off waits for the connection.
-const AWAIT_NET_MS: u32 = 10_000;
+/// How long the banner of Wi-Fi coming on or airplane mode going off waits for the connection, and then
+/// for the VPN that was up before, at most.
+const AWAIT_NET_MS: u32 = 15_000;
+const AWAIT_VPN_MS: u32 = 6_000;
 
 /// A list shows at most this many lines (the airplane switch, the radios, the network and the devices).
 const MAX_ROWS: usize = 6;
@@ -1981,7 +1997,7 @@ fn row_text(e: &Event) -> String {
 
 /// `prev` (the list on show, if any) with the event told. A list lasts as long as its banner shows
 /// (`ALERT_MS` after the last line); an event after that starts a new one.
-fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant) -> ConnList {
+fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, vpn_expected: bool) -> ConnList {
     let fresh = prev.filter(|l| l.fresh(now));
     if matches!(e, Event::Device { up: true, .. }) {
         return device_connected(fresh, e, now);
@@ -1995,6 +2011,9 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant) -> ConnList {
             if matches!(e, Event::Net(Net::Online { .. })) {
                 l.awaiting_net = false;
             }
+            if matches!(e, Event::Vpn(true)) {
+                l.awaiting_vpn = false;
+            }
             l.at = now;
             l
         }
@@ -2007,8 +2026,20 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant) -> ConnList {
                 .unwrap_or_default();
             let mut l = ConnList::new(connection_toast(e.clone()), row_text(e), rows, now);
             l.awaiting_net = matches!(e, Event::Airplane(false) | Event::Radio(RadioType::Wifi, true));
+            l.awaiting_vpn = l.awaiting_net && vpn_expected;
             l
         }
+    }
+}
+
+/// Whether a VPN that was up is to come back when the network does. It was up (`was`), and it stays
+/// expected when it went down with the network (in the banner of Wi-Fi off or airplane mode on), not
+/// when it was switched off by itself.
+fn vpn_expected(was: bool, e: &Event, list: Option<&ConnList>, now: Instant) -> bool {
+    match e {
+        Event::Vpn(true) => true,
+        Event::Vpn(false) => list.is_some_and(|l| l.fresh(now) && matches!(l.head.icon, Some(render::ICON_AIRPLANE | render::ICON_WIFI_OFF))) && was,
+        _ => was,
     }
 }
 
@@ -2220,6 +2251,7 @@ fn run() -> windows::core::Result<()> {
             conn_queue: Vec::new(),
             conn_busy: false,
             conn_list: None,
+            vpn_was_up: false,
             usage_tab: 0,
             usage_tab_chosen: false,
             track: None,
@@ -2335,22 +2367,22 @@ mod tests {
         let texts = |l: &ConnList| l.rows.iter().map(|r| r.text.clone()).collect::<Vec<String>>();
         let wifi_off = Event::Radio(RadioType::Wifi, false);
         // Wi-Fi off, and the VPN that was on it: the head is Wi-Fi, the VPN a line under it.
-        let l = conn_list_add(None, &wifi_off, t0);
+        let l = conn_list_add(None, &wifi_off, t0, false);
         assert_eq!((l.head.icon, l.rows.len()), (Some(render::ICON_WIFI_OFF), 0), "alone it is the banner it always was");
-        let l = conn_list_add(Some(l), &Event::Vpn(false), later(600));
+        let l = conn_list_add(Some(l), &Event::Vpn(false), later(600), false);
         assert_eq!((l.head.title.as_str(), texts(&l)), (format!("{} Wi-Fi", tr("Đã tắt", "Turned off")).as_str(), vec![tr("VPN tắt", "VPN off").to_string()]));
         // Airplane mode on: the switch is the head, each thing that went off a line, none told twice.
-        let mut l = conn_list_add(None, &Event::Airplane(true), t0);
+        let mut l = conn_list_add(None, &Event::Airplane(true), t0, false);
         for (ms, e) in [(100, wifi_off.clone()), (200, Event::Radio(RadioType::Bluetooth, false)), (300, Event::Vpn(false)), (400, wifi_off.clone())] {
-            l = conn_list_add(Some(l), &e, later(ms));
+            l = conn_list_add(Some(l), &e, later(ms), false);
         }
         assert_eq!(l.head.icon, Some(render::ICON_AIRPLANE));
         assert_eq!(texts(&l), [tr("Wi-Fi tắt", "Wi-Fi off"), tr("Bluetooth tắt", "Bluetooth off"), tr("VPN tắt", "VPN off")]);
         // Radios first, the switch after: what was told becomes the first lines under the switch.
-        let l = conn_list_add(Some(conn_list_add(None, &wifi_off, t0)), &Event::Airplane(true), later(300));
+        let l = conn_list_add(Some(conn_list_add(None, &wifi_off, t0, false)), &Event::Airplane(true), later(300), false);
         assert_eq!((l.head.icon, texts(&l)), (Some(render::ICON_AIRPLANE), vec![tr("Wi-Fi tắt", "Wi-Fi off").to_string()]));
         // The banner has gone by the time the next one comes: a new list.
-        let l = conn_list_add(Some(l), &Event::Vpn(true), later(300 + ALERT_MS as u64 + 1));
+        let l = conn_list_add(Some(l), &Event::Vpn(true), later(300 + ALERT_MS as u64 + 1), false);
         assert_eq!((l.head.title.as_str(), l.rows.len()), (tr("VPN đã kết nối", "VPN connected"), 0));
     }
 
@@ -2361,21 +2393,43 @@ mod tests {
         let online = Event::Net(Net::Online { name: "JihoonKim".into(), wifi: true });
         let texts = |l: &ConnList| l.rows.iter().map(|r| r.text.clone()).collect::<Vec<String>>();
         // Airplane mode off: the connection comes 7 s after the radios, longer than a banner stays.
-        let mut l = conn_list_add(None, &Event::Airplane(false), t0);
-        l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100));
-        l = conn_list_add(Some(l), &Event::Radio(RadioType::Bluetooth, true), at(100));
+        let mut l = conn_list_add(None, &Event::Airplane(false), t0, false);
+        l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100), false);
+        l = conn_list_add(Some(l), &Event::Radio(RadioType::Bluetooth, true), at(100), false);
         assert!(l.awaiting_net && l.fresh(at(100 + ALERT_MS as u64 + 2000)));
-        l = conn_list_add(Some(l), &online, at(7000));
-        l = conn_list_add(Some(l), &Event::Vpn(true), at(7100));
+        l = conn_list_add(Some(l), &online, at(7000), false);
+        l = conn_list_add(Some(l), &Event::Vpn(true), at(7100), false);
         assert_eq!(l.head.icon, Some(render::ICON_AIRPLANE), "one banner, not a second one");
         assert_eq!(texts(&l), [tr("Wi-Fi bật", "Wi-Fi on"), tr("Bluetooth bật", "Bluetooth on"), format!("{} JihoonKim", tr("Đã kết nối", "Connected to")).as_str(), tr("VPN kết nối", "VPN connected")]);
         // Once connected it stays as long as any banner, no longer.
         assert!(!l.awaiting_net && !l.fresh(at(7100 + ALERT_MS as u64 + 1)));
+        // A VPN that was up is waited for too, after the connection, then the full time starts.
+        let mut l = conn_list_add(None, &Event::Airplane(false), t0, true);
+        assert!(l.awaiting_net && l.awaiting_vpn);
+        l = conn_list_add(Some(l), &online, at(7000), true);
+        assert!(!l.awaiting_net && l.awaiting_vpn && l.fresh(at(7000 + AWAIT_VPN_MS as u64 - 1)) && !l.fresh(at(7000 + AWAIT_VPN_MS as u64 + 1)));
+        l = conn_list_add(Some(l), &Event::Vpn(true), at(9000), true);
+        assert!(!l.awaiting_vpn && !l.fresh(at(9000 + ALERT_MS as u64 + 1)));
         // Wi-Fi on alone waits too; a network that never comes ends it after AWAIT_NET_MS.
-        let l = conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0);
+        let l = conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0, false);
         assert!(l.fresh(at(AWAIT_NET_MS as u64 - 1)) && !l.fresh(at(AWAIT_NET_MS as u64 + 1)));
         // Wi-Fi off is not waiting for anything.
-        assert!(!conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0).awaiting_net);
+        assert!(!conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0, false).awaiting_net);
+    }
+
+    #[test]
+    fn a_vpn_is_expected_back_only_when_it_went_down_with_the_network() {
+        let t0 = Instant::now();
+        let vpn_up = Event::Vpn(true);
+        assert!(vpn_expected(false, &vpn_up, None, t0), "it came up: expected from now on");
+        // Wi-Fi off, and the VPN that was on it: still expected.
+        let wifi_off = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0, true);
+        assert!(vpn_expected(true, &Event::Vpn(false), Some(&wifi_off), t0));
+        // The VPN switched off by itself (no such banner on show): not expected.
+        assert!(!vpn_expected(true, &Event::Vpn(false), None, t0));
+        let other = conn_list_add(None, &Event::Net(Net::Offline), t0, true);
+        assert!(!vpn_expected(true, &Event::Vpn(false), Some(&other), t0));
+        assert!(vpn_expected(true, &Event::Radio(RadioType::Wifi, true), None, t0), "other events change nothing");
     }
 
     #[test]
@@ -2385,12 +2439,12 @@ mod tests {
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let dev = |name: &str, kind, battery| Event::Device { name: name.into(), kind, up: true, battery };
         // One device: the banner it always was, its battery large; a late battery arrives in place.
-        let mut l = conn_list_add(None, &dev("WH-1000XM5", Headphones, None), t0);
+        let mut l = conn_list_add(None, &dev("WH-1000XM5", Headphones, None), t0, false);
         assert_eq!((l.head.title.as_str(), l.head.badge.clone(), l.rows.len()), ("WH-1000XM5", None, 0));
         assert!(device_battery(&mut l, "WH-1000XM5", 80, at(700)));
         assert_eq!(l.head.badge.as_deref(), Some("80%"));
         // A second one turns it into a list: a line each, the battery at the right.
-        let l = conn_list_add(Some(l), &dev("MX Master 3", Mouse, Some(64)), at(2800));
+        let l = conn_list_add(Some(l), &dev("MX Master 3", Mouse, Some(64)), at(2800), false);
         assert_eq!(l.head.title, devices_title(2));
         let lines: Vec<_> = l.rows.iter().map(|r| (r.text.as_str(), r.value.as_deref(), r.icon.is_some())).collect();
         assert_eq!(lines, [("WH-1000XM5", Some("80%"), true), ("MX Master 3", Some("64%"), true)]);
@@ -2400,14 +2454,14 @@ mod tests {
         assert!(!device_battery(&mut l, "Tay cầm", 50, at(3100)));
         assert!(!device_battery(&mut l, "MX Master 3", 18, at(3000 + ALERT_MS as u64 + 1)), "its banner has gone");
         // After "Bluetooth on" the devices are lines under it, however many; at most MAX_ROWS are drawn.
-        let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0);
+        let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, false);
         for i in 0..8u64 {
-            l = conn_list_add(Some(l), &dev(&format!("Thiết bị {i}"), Mouse, Some(50)), at(100 * i));
+            l = conn_list_add(Some(l), &dev(&format!("Thiết bị {i}"), Mouse, Some(50)), at(100 * i), false);
         }
         assert_eq!((l.head.icon, l.rows.len(), l.devices), (Some(render::ICON_BT), MAX_ROWS, 8));
         // Under a Wi-Fi banner a device is not a line: it has its own banner.
-        let wifi = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0);
-        let l = conn_list_add(Some(wifi), &dev("Chuột", Mouse, Some(70)), at(200));
+        let wifi = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0, false);
+        let l = conn_list_add(Some(wifi), &dev("Chuột", Mouse, Some(70)), at(200), false);
         assert_eq!((l.head.title.as_str(), l.rows.len(), l.single), ("Chuột", 0, true));
     }
 
