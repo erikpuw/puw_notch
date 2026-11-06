@@ -813,7 +813,7 @@ impl App {
         if self.notch.mode == Mode::Alert && self.banner.as_ref().is_some_and(|b| (replaces || b.app == t.app) && b.choices.is_empty()) {
             let width = if t.badge.is_none() { self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale) } else { 0.0 };
             self.notch.set_alert_width(width);
-            self.notch.set_alert_rows(t.rows.len() as u8);
+            self.notch.set_alert_status(t.rows.len() as u8);
             self.banner = Some(t);
             unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
             self.kick();

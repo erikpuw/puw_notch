@@ -250,6 +250,13 @@ impl Notch {
         self.alert_rows = rows;
     }
 
+    /// A status banner took the place of another banner in place: it has no text lines, and none of the
+    /// height of the text banner it replaced stays.
+    pub fn set_alert_status(&mut self, rows: u8) {
+        self.alert_lines = 0;
+        self.alert_rows = rows;
+    }
+
     /// The status banner just shown is `width` wide, to fit its lines.
     pub fn set_alert_width(&mut self, width: f32) {
         self.alert_width = width;
