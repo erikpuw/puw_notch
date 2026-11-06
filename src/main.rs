@@ -2066,6 +2066,12 @@ impl ConnList {
         }
     }
 
+    /// Airplane mode went off and everything it brings back has come: a radio switched after that is the
+    /// user's own, with its own banner, not a part of this one.
+    fn done_coming_back(&self, e: &Event) -> bool {
+        matches!(e, Event::Radio(..)) && self.domain == Domain::Air && !self.pending() && self.head_row == row_text(&Event::Airplane(false))
+    }
+
     /// Whether its banner still shows.
     fn fresh(&self, now: Instant) -> bool {
         if self.pending() { now < self.deadline } else { now.saturating_duration_since(self.at) < Duration::from_millis(ALERT_MS as u64) }
@@ -2279,7 +2285,7 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
     let domain = domain_of(e);
     match fresh {
         // The airplane banner takes every event; any other list only its own kind.
-        Some(mut l) if !l.single && !matches!(e, Event::Airplane(_)) && (l.domain == Domain::Air || l.domain == domain) => {
+        Some(mut l) if !l.single && !matches!(e, Event::Airplane(_)) && (l.domain == domain || (l.domain == Domain::Air && !l.done_coming_back(e))) => {
             let key = subject(e);
             let wifi_on = matches!(e, Event::Radio(RadioType::Wifi, true));
             let bt_on = matches!(e, Event::Radio(RadioType::Bluetooth, true));
@@ -2954,6 +2960,26 @@ mod tests {
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, false), at(2000), vpn);
         assert_eq!(l.head.title, format!("{} Wi-Fi", tr("Đã tắt", "Turned off")));
         assert!(l.rows_shown().is_empty());
+    }
+
+    #[test]
+    fn a_radio_switched_after_airplane_mode_is_done_has_its_own_banner() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let vpn = Expect { vpn: true, ..Expect::default() };
+        let mut l = conn_list_add(None, &Event::Airplane(false), t0, vpn);
+        for (ms, e) in [(100, Event::Radio(RadioType::Wifi, true)), (200, Event::Radio(RadioType::Bluetooth, true)), (1000, Event::Net(Net::Online { name: "W".into(), wifi: true })), (1500, Event::Vpn(true))] {
+            l = conn_list_add(Some(l), &e, at(ms), vpn);
+        }
+        assert!(!l.pending() && l.domain == Domain::Air);
+        let w = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, false), at(2000), vpn);
+        assert_eq!((w.domain, w.head.title.clone()), (Domain::Net, format!("{} Wi-Fi", tr("Đã tắt", "Turned off"))));
+        let b = conn_list_add(Some(w), &Event::Radio(RadioType::Bluetooth, false), at(2200), vpn);
+        assert_eq!(b.domain, Domain::Bt);
+        // While it still waits, radios are part of it.
+        let l = conn_list_add(None, &Event::Airplane(false), t0, vpn);
+        let l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100), vpn);
+        assert_eq!(l.domain, Domain::Air);
     }
 
     #[test]
