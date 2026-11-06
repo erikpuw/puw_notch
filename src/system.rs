@@ -242,7 +242,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111, sun_view: false, activity: false }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b1111_1111, sun_view: false, activity: false }
     }
 }
 
@@ -267,7 +267,7 @@ fn parse_settings(text: &str) -> Settings {
                     s.unit = crate::weather::Unit::from_tag(unit);
                 } else if let Some(mask) = other.strip_prefix("pages=") {
                     // Saved before the Focus page existed (the six old bits all on): the new page comes on too.
-                    s.pages = mask.parse().ok().filter(|m: &u8| m & 0b111_1111 != 0).map_or(s.pages, |m| if m == 0b11_1111 { 0b111_1111 } else { m & 0b111_1111 });
+                    s.pages = mask.parse().ok().filter(|m: &u8| *m != 0).map_or(s.pages, |m| if m == 0b11_1111 || m == 0b111_1111 { 0b1111_1111 } else { m });
                 } else if let Some(id) = other.strip_prefix("notes_cleared=") {
                     s.notes_cleared = id.parse().unwrap_or(0);
                 }
@@ -483,10 +483,11 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b111_1111, sun_view: false, activity: false });
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b1111_1111, sun_view: false, activity: false });
         assert_eq!(parse_settings("pages=5\n").pages, 5);
-        assert_eq!(parse_settings("pages=0\n").pages, 0b111_1111, "never none");
-        assert_eq!(parse_settings("pages=63\n").pages, 0b111_1111, "a mask saved before the Focus page gets it too");
+        assert_eq!(parse_settings("pages=0\n").pages, 0b1111_1111, "never none");
+        assert_eq!(parse_settings("pages=63\n").pages, 0b1111_1111, "a mask saved before the Focus page gets it too");
+        assert_eq!(parse_settings("pages=127\n").pages, 0b1111_1111, "a mask with every page saved before the Calendar page gets it too");
         assert!(!parse_settings("approve=0\n").approve && parse_settings("minimal=0\n").approve, "on unless turned off");
         assert_eq!(parse_settings("style=pill\n").style, crate::notch::Style::Pill);
         assert_eq!(parse_settings("style=x\n").style, crate::notch::Style::Ears, "unknown: the original look");

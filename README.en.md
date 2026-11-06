@@ -37,6 +37,7 @@
 | **Notifications** | The ~30 latest Windows notifications, each with its app icon and two lines; the count on the left; click to open the app; "Clear all" hides what is there (Windows keeps it). |
 | **Health** | Water and stand-up reminders: a big figure, the day's progress as a bar, a round button to log a drink or having stood up; times and amounts under ⚙. |
 | **Weather** | Type a city once: a large icon and temperature, the next 5 slots, feels-like, humidity, wind, the day's high, °C | °F. The sun button on the city line swaps the hours for **the sun's path** (sunrise, sunset, daylight left; two rings of light round the sun fade in and out gently, a crescent moon at night). Open-Meteo data, refreshed every 30 min. |
+| **Calendar** | One month, weeks from **Monday** to Sunday (ISO 8601, the same on every PC), the day picked shown very large on the left with its weekday; click a day to look at it, ‹ › change the month. Weekday and month names follow the app's language. No holidays: each country has its own. On a PC set to Vietnam, China, Hong Kong, Macao, Taiwan or Korea, a **Solar | Lunar** choice swaps the numbers on the grid for the lunar calendar (worked out in the app, no network, the first day of a lunar month shows its month); change the region in Windows and the choice shows or hides with it, no restart. |
 | **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity (a free plan: 30 days), a tab per app (with the app's dot), only for the apps found on the PC; Claude shows two concentric rings (5 hours outside, the week inside). Codex and Antigravity show what is left, Claude what is used. A banner warns at 80 %, 95 %, or 25 % of the limit in one day. |
 
 The Limits page reads this PC only, nothing is sent:
@@ -64,6 +65,9 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 | ![Weather](assets/screenshots/en/page-weather.png)<br>**Weather**: large icon, temperature, the next 5 slots, one line of figures, °C / °F buttons | ![The sun's path by day](assets/screenshots/en/page-weather-sun.png)<br>**By day**: press the sun button, a blue arc from sunrise to sunset, the sun standing at the time now | ![The sun's path by night](assets/screenshots/en/page-weather-night.png)<br>**By night**: a crescent moon walks the arc from sunset to sunrise |
 |---|---|---|
+
+| ![Calendar](assets/screenshots/en/page-calendar.png)<br>**Calendar**: the day large, weeks from Monday, ‹ › change the month | ![Lunar calendar](assets/screenshots/en/page-calendar-lunar.png)<br>**Lunar**: the Solar \| Lunar choice swaps the grid's numbers (only where the region has one) |
+|---|---|
 
 **Limits** of Claude, Codex and Antigravity (Claude shows what is used; Codex and Antigravity show what is left, counting down like their own apps). The Codex tab names the plan of the account in use; a free plan counts 30 days:
 

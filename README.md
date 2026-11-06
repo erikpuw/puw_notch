@@ -38,6 +38,7 @@
 | **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng; số lượng ở bên trái; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy: số lớn, thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy; chỉnh giờ và mức ở ⚙. |
 | **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Nút mặt trời ở dòng thành phố đổi dải giờ thành **đường đi của mặt trời** (giờ mọc, lặn, còn bao lâu nắng; hai vòng sáng quanh mặt trời sáng dần rồi mờ dần nhẹ nhàng, ban đêm có trăng khuyết). Dữ liệu Open-Meteo, làm mới 30 phút. |
+| **Lịch** | Một tháng, tuần xếp từ **thứ Hai** đến Chủ nhật (chuẩn ISO 8601, giống nhau ở mọi máy), số ngày đang chọn thật lớn bên trái cùng thứ; bấm một ngày để xem, ‹ › để đổi tháng. Tên thứ và tháng theo ngôn ngữ của app. Không có ngày lễ: mỗi nước một khác. Ở máy đặt vùng Việt Nam, Trung Quốc, Hồng Kông, Ma Cao, Đài Loan hoặc Hàn Quốc, có thêm nút **Dương | Âm** đổi các số trên lưới sang âm lịch (tự tính trong app, không cần mạng, ngày mùng 1 ghi cả tháng); đổi vùng trong Windows thì nút hiện hay ẩn theo, không cần mở lại app. |
 | **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab (chấm màu của app), chỉ hiện app tìm thấy trên máy; Claude hiện hai vòng đồng tâm (5 giờ ngoài, tuần trong). Codex và Antigravity hiện phần còn lại, Claude phần đã dùng. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
 
 Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:
@@ -75,6 +76,9 @@ Việc quét chạy trên luồng nền, không chặn luồng vẽ notch. Tắt
 
 | ![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, một dòng số liệu, nút °C / °F | ![Đường đi của mặt trời ban ngày](assets/screenshots/page-weather-sun.png)<br>**Ban ngày**: bấm nút mặt trời, cung xanh từ lúc mọc đến lặn, mặt trời đứng đúng giờ hiện tại | ![Đường đi của mặt trời ban đêm](assets/screenshots/page-weather-night.png)<br>**Ban đêm**: trăng khuyết đi dọc cung từ lúc mặt trời lặn đến lúc mọc |
 |---|---|---|
+
+| ![Lịch](assets/screenshots/page-calendar.png)<br>**Lịch**: số ngày lớn, tuần từ thứ Hai, ‹ › đổi tháng | ![Lịch âm](assets/screenshots/page-calendar-lunar.png)<br>**Âm lịch**: nút Dương \| Âm đổi số trên lưới (chỉ ở vùng có âm lịch) |
+|---|---|
 
 **Giới hạn** của Claude, Codex và Antigravity (Claude: phần đã dùng; Codex và Antigravity: phần còn lại, đếm lùi như chính app của chúng). Tab Codex ghi gói của tài khoản đang dùng, gói free tính theo 30 ngày:
 

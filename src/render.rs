@@ -38,6 +38,7 @@ use crate::system::Battery;
 
 mod aurora;
 mod battery;
+mod calendar_page;
 mod focus_page;
 mod health_page;
 mod weather_page;
@@ -107,6 +108,8 @@ pub struct View<'a> {
     pub unit: weather::Unit,
     /// The Weather page shows the sun's path in place of the hours ahead.
     pub sun_view: bool,
+    /// The Calendar page: the month, the day picked, today and the lunar choice.
+    pub cal: crate::calendar::CalView,
 }
 
 /// Pages of the open panel, switched with the side arrows.
@@ -122,16 +125,18 @@ pub enum Page {
     Health,
     /// The city (typed here) and its current weather.
     Weather,
+    /// The month, weeks from Monday.
+    Calendar,
     /// Plan limits of the AI apps open on this PC.
     Usage,
 }
 
-pub const PAGES: [Page; 7] = [Page::Music, Page::Todo, Page::Focus, Page::Notify, Page::Health, Page::Weather, Page::Usage];
+pub const PAGES: [Page; 8] = [Page::Music, Page::Todo, Page::Focus, Page::Notify, Page::Health, Page::Weather, Page::Calendar, Page::Usage];
 
 /// Which pages (a bit each, see `Page::bit`) the user keeps: the arrows and dots only go through those.
 /// Never empty.
 static PAGES_ON: AtomicU8 = AtomicU8::new(ALL_PAGES);
-const ALL_PAGES: u8 = (1 << PAGES.len()) - 1;
+const ALL_PAGES: u8 = ((1u16 << PAGES.len()) - 1) as u8;
 
 pub fn set_pages_on(mask: u8) {
     let mask = mask & ALL_PAGES;
@@ -158,6 +163,7 @@ impl Page {
             Page::Weather => 4,
             Page::Usage => 5,
             Page::Focus => 6,
+            Page::Calendar => 7,
         }
     }
 
@@ -171,6 +177,7 @@ impl Page {
             Page::Health => tr("Sức khỏe", "Health"),
             Page::Weather => tr("Thời tiết", "Weather"),
             Page::Usage => tr("Giới hạn", "Limits"),
+            Page::Calendar => tr("Lịch", "Calendar"),
         }
     }
 }
@@ -268,6 +275,12 @@ pub enum Button {
     FocusSeg(usize),
     /// The Weather page: the sun's path in place of the hours ahead, and back.
     SunToggle,
+    /// The Calendar page: the month before / after, a cell of the grid (0 = the first Monday column of the first
+    /// row), and Solar (false) | Lunar (true).
+    CalPrev,
+    CalNext,
+    CalCell(usize),
+    CalMode(bool),
 }
 
 impl Button {
@@ -439,6 +452,7 @@ fn nav_icon(page: Page) -> &'static str {
         // The Weather page draws its own line sun (see `draw`); this is only a stand-in.
         Page::Weather => "\u{E706}",
         Page::Usage => "\u{E9D9}",
+        Page::Calendar => "\u{E787}",
     }
 }
 
@@ -584,6 +598,18 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             if rows > 0 {
                 out.push((Button::NotesClear, r(cl, CLEAR_Y, CLEAR_W, CLEAR_H)));
             }
+        }
+        Page::Calendar => {
+            out.push((Button::CalPrev, r(cl + CAL_GRID_X, CAL_TITLE_Y, CAL_COL_W, 20.0)));
+            out.push((Button::CalNext, r(cl + CAL_GRID_X + 6.0 * CAL_COL_W, CAL_TITLE_Y, CAL_COL_W, 20.0)));
+            for i in 0..42 {
+                out.push((Button::CalCell(i), r(cl + CAL_GRID_X + (i % 7) as f32 * CAL_COL_W, CAL_ROW0 + (i / 7) as f32 * CAL_ROW_H, CAL_COL_W, CAL_ROW_H)));
+            }
+            // The Solar | Lunar choice under the date (only drawn, and only taken, where the region has a lunar calendar).
+            let y = CAL_TOP + (CAL_BLOCK_H - CAL_LEFT_H - CAL_SWITCH_H) / 2.0 + 102.0;
+            let x = cl + (CAL_LEFT_W - 2.0 * CAL_SEG_W - 4.0) / 2.0 + 2.0;
+            out.push((Button::CalMode(false), r(x, y, CAL_SEG_W, 22.0)));
+            out.push((Button::CalMode(true), r(x + CAL_SEG_W, y, CAL_SEG_W, 22.0)));
         }
         Page::Usage => {
             // Only the apps found on this PC get a tab: chips side by side, from the content's left.
@@ -743,6 +769,24 @@ const F_TEMP: usize = 17;
 const F_SONG: usize = 18;
 /// The time left on the Focus page.
 const F_TIME: usize = 19;
+/// The Calendar page's big day, and its bold 12 px (today, the first of a lunar month).
+const F_DAY: usize = 20;
+const F_LABEL_BOLD: usize = 21;
+/// The Calendar page (logical px from the panel's top-left, the x from the content's left): the left column
+/// (the day, its weekday, the other date, the choice) is `CAL_LEFT_W` wide and its block centred in
+/// `CAL_BLOCK_H` from `CAL_TOP`; the grid starts at `CAL_GRID_X`, seven columns, a title row, a weekday row, six rows.
+const CAL_TOP: f32 = 34.0;
+const CAL_BLOCK_H: f32 = 128.0;
+const CAL_LEFT_W: f32 = 126.0;
+const CAL_LEFT_H: f32 = 76.0;
+const CAL_SWITCH_H: f32 = 48.0;
+const CAL_SEG_W: f32 = 52.0;
+const CAL_GRID_X: f32 = 148.0;
+const CAL_COL_W: f32 = 34.0;
+const CAL_TITLE_Y: f32 = 32.0;
+const CAL_HEAD_Y: f32 = 52.0;
+const CAL_ROW0: f32 = 68.0;
+const CAL_ROW_H: f32 = 16.0;
 /// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
 /// of the thin divider after the player's controls, its right margin and its width. The right
 /// margin equals the gap at the divider; the pages' clip gives way on that side while the lyrics
@@ -1450,6 +1494,8 @@ impl Renderer {
                 make(display, 40.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 make(display, 21.0, DWRITE_FONT_WEIGHT_BOLD)?,
                 make(display, 46.0, DWRITE_FONT_WEIGHT_MEDIUM)?,
+                make(display, 52.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make(ui, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
             ];
             self.fonts = Some((scale, set));
         }
@@ -2339,7 +2385,7 @@ mod tests {
             let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
             macro_rules! view { ($mode:expr, $banner:expr) => { View { mode: $mode, size: [520.0, 139.0, 24.0], time: "20:49", date: "T2, 26/10",
                 battery: Some(Battery { percent: 76, charging: false, saver: false }), banner: $banner, music: None, live: false, robot: None, phase: 0.0,
-                banner_age: 2.0, lyrics: false, hovered: None, page: Page::Health, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false,
+                banner_age: 2.0, lyrics: false, hovered: None, page: Page::Health, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
             // Bright pixels below the pill's own 40 rows: the page's cards and text would put some there.
@@ -2385,7 +2431,7 @@ mod tests {
             set_nav_open(true);
             macro_rules! view { ($leaving:expr) => { View { mode: Mode::Expanded, size: [480.0, ph + NAV_EXTRA, 28.0], time: "20:49", date: "T2, 26/10",
                 battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
-                leaving: $leaving, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false,
+                leaving: $leaving, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
             let cells = nav_cells(450.0, 1.0, ph);
@@ -2425,7 +2471,7 @@ mod tests {
                 updated, ..weather::State::default() };
             macro_rules! view { ($wx:expr, $h:expr) => { View { mode: Mode::Expanded, size: [480.0, $h, 28.0], time: "08:14", date: "T5, 05/11",
                 battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Weather,
-                leaving: None, todos: &[], notes: &[], weather: $wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false,
+                leaving: None, todos: &[], notes: &[], weather: $wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
             let frame = |open: bool, wx: &weather::State| {
@@ -2462,7 +2508,7 @@ mod tests {
                 sun: Some(weather::Sun { rise: 342, set: 1068 }), ..weather::State::default() };
             macro_rules! view { ($minute:expr) => { View { mode: Mode::Expanded, size: [480.0, ph, 28.0], time: "17:48", date: "T5, 05/11",
                 battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Weather,
-                leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: true,
+                leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: true, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: $minute, settings: None } } }; }
             // How many pixels in the arc's area are blue (the lit path).
@@ -2556,7 +2602,7 @@ mod tests {
             let mut view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "12:00", date: "30/10",
                 battery: None, banner: None, music: Some(&track), live: false, robot: None, phase: 0.0, banner_age: 9.0,
                 lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: std::slice::from_ref(&note),
-                weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C, sun_view: false,
+                weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             for mode in [Mode::Collapsed, Mode::Mini] {
@@ -2839,7 +2885,7 @@ mod tests {
             size[0] += LYRICS_EXTRA_W;
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
-                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false,
+                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
@@ -2880,7 +2926,7 @@ mod tests {
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10",
                 battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track),
                 live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: true, hovered: None, page: Page::Music,
-                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false,
+                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
@@ -2929,7 +2975,7 @@ mod tests {
             for (items, counts, typed) in &frames {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
                     banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
-                    leaving: None, todos: items, notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C, sun_view: false,
+                    leaving: None, todos: items, notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                     list: ListView { counts: *counts, remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
                     focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
@@ -2998,7 +3044,7 @@ mod tests {
             for (mode, music, page, st, typed, unit) in &frames {
                 let view = View { mode: *mode, size: target(*mode, *music), time: "02:05", date: "T5, 29/10", battery: Some(Battery { percent: 76, charging: false, saver: false }),
                     banner: None, music: music.then_some(&track), live: *music, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: *page,
-                    leaving: None, todos: &[], notes: &[], weather: st, page_age: 9.0, unit: *unit, sun_view: false,
+                    leaving: None, todos: &[], notes: &[], weather: st, page_age: 9.0, unit: *unit, sun_view: false, cal: Default::default(),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
                     focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..3 {
@@ -3072,7 +3118,7 @@ mod tests {
             for (toast, lines) in banners {
             let view = View { mode: Mode::Alert, size: if toast.choices.is_empty() { notch::alert_size(lines) } else { notch::alert_size_choice(lines) }, time: "20:49", date: "T2, 26/10", battery: Some(Battery { percent: 76, charging: true, saver: false }),
                 banner: Some(toast), music: None, live: false, robot: None, phase: 0.0, banner_age: 3.0, lyrics: false, hovered: None, page: Page::Music,
-                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false,
+                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -3110,7 +3156,7 @@ mod tests {
             for (i, t) in [0.0f32, 1.5, 3.0, 4.5].into_iter().enumerate() {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16", date: "T5, 29/10",
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
-                    phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false,
+                    phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 // The first frame waits for the cover and the fade-in.
@@ -3155,7 +3201,7 @@ mod tests {
                 if lyrics { size[0] += LYRICS_EXTRA_W; }
                 let view = |phase: f32| View { mode, size, time: "23:16", date: "T5, 29/10",
                     battery: Some(Battery { percent: 70, charging: true, saver: false }), banner: None, music: Some(&track), live: true, robot: None,
-                    phase, banner_age: 0.0, lyrics, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C, sun_view: false,
+                    phase, banner_age: 0.0, lyrics, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: &idle_focus, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 // Settle first: the cover loads and the Music page's glow fades in.
@@ -3254,7 +3300,7 @@ mod tests {
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
             let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
             // (file, mode, music, page, lyrics open, weather, battery, time, date)
-            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 16] = [
+            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 18] = [
                 ("page-nav", Mode::Expanded, Some(&playing), Page::Music, false, &none, charging(70), "23:16", "T7, 24/10"),
                 ("pill-idle", Mode::Collapsed, None, Page::Music, false, &none, charging(76), "20:50", ""),
                 ("robot", Mode::Collapsed, None, Page::Music, false, &none, on_battery, "20:50", ""),
@@ -3271,6 +3317,8 @@ mod tests {
                 ("page-weather", Mode::Expanded, None, Page::Weather, false, &partly_30, on_battery, "02:05", "T5, 29/10"),
                 ("page-weather-sun", Mode::Expanded, None, Page::Weather, false, &sunny, on_battery, "02:05", "T5, 29/10"),
                 ("page-weather-night", Mode::Expanded, None, Page::Weather, false, &night, on_battery, "02:05", "T5, 29/10"),
+                ("page-calendar", Mode::Expanded, None, Page::Calendar, false, &none, on_battery, "04:21", "T7, 7/11"),
+                ("page-calendar-lunar", Mode::Expanded, None, Page::Calendar, false, &none, on_battery, "04:21", "T7, 7/11"),
             ];
             let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if english { "target/readme-en" } else { "target/readme" });
             std::fs::create_dir_all(&dir).unwrap();
@@ -3295,7 +3343,7 @@ mod tests {
                 let eyes = |face, gaze: (f32, f32)| Some(Eyes { face, alpha: 1.0, gaze, curious: 0.0, open: 1.0, time: 0.4 });
                 let robot = match name { "robot" => eyes(Face::Normal, (0.5, 0.9)), "robot-happy" => eyes(Face::Happy, (0.0, 0.0)), _ => None };
                 let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: nav.then_some(Button::GoPage(Page::Todo)), page,
-                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
+                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C, cal: crate::calendar::CalView { year: 2026, month: 11, sel: 7, today: (2026, 11, 7), zone: name.starts_with("page-calendar").then_some(7.0), lunar_on: name == "page-calendar-lunar" }, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: if name.ends_with("-focus") { &running_focus } else { &Focus::default() }, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 // A fresh renderer per picture, run for a second and a half: the cover decodes, the
@@ -3376,7 +3424,7 @@ mod tests {
                     let live = music.is_some();
                     let size = match banner { Some(t) if t.choices.is_empty() => notch::alert_size(if t.icon.is_some() { 0 } else { 1 }), Some(t) => notch::alert_size_choice(if t.body.chars().count() > 60 { 2 } else { 1 }), None if mode == Mode::Expanded => { let [w, h] = panel_size(page); [w, h, target(mode, live)[2]] } None => target(mode, live) };
                     let view = View { mode, size, time: "20:50", date: en_date("T2, 26/10"), battery: charging(76), banner, music, live, robot: None, phase: 1.3, banner_age: 9.0, lyrics: false, hovered: None, page,
-                        leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C, sun_view: false,
+                        leaving: None, todos: if page == Page::Todo { &tasks } else { &[] }, notes: if page == Page::Notify { &notes } else { &[] }, weather: &none, page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                         list: ListView { counts: if page == Page::Todo { (3, 1) } else { (0, 0) }, remind_before: 15, now: crate::todo::stamp(20261029, 2, 5), draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                         focus: &Focus::default(), health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                     let mut renderer = Renderer::new().unwrap();
@@ -3415,7 +3463,7 @@ mod tests {
             for (percent, charging, saver) in states {
                 let view = View { mode: Mode::Collapsed, size: target(Mode::Collapsed, false), time: "16:00", date: "", battery: Some(Battery { percent, charging, saver }),
                     banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music,
-                    leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false,
+                    leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -3449,7 +3497,7 @@ mod tests {
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "16:00", date: "T5, 29/10",
                 battery: Some(Battery { percent: 79, charging: true, saver: false }), banner: None, music: None, live: false, robot: None,
                 phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Notify, leaving: None, todos: &[], notes: &notes,
-                weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false,
+                weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 202610291600, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
@@ -3481,7 +3529,7 @@ mod tests {
             let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:16",
                 date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
                 banner: None, music: Some(&track), live: true, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: Some(Button::PlayPause), page: Page::Music,
-                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false,
+                leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
@@ -3610,7 +3658,7 @@ mod tests {
                     hovered: (mode == Mode::Expanded && (10.0..18.2).contains(&now)).then_some(Button::PageNext), page, leaving,
                     list: ListView { counts: (3, 1), remind_before: 15, now: 202610290941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     todos: &todos, notes: &notes, focus: &Focus::default(), health: HealthView { h: &health, now: crate::todo::minutes(202610290941), minute_of_day: 9 * 60 + 41, settings: None },
-                    weather: &wx, page_age: if mode == Mode::Expanded { now - page_since } else { 0.0 }, unit: weather::Unit::C, sun_view: false };
+                    weather: &wx, page_age: if mode == Mode::Expanded { now - page_since } else { 0.0 }, unit: weather::Unit::C, sun_view: false, cal: Default::default() };
                 renderer.present(hwnd, 0, 0, w, h, scale, &view).unwrap();
                 pipe.write_all(&renderer.grabbed).unwrap();
             }

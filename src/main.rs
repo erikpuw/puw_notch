@@ -4,6 +4,7 @@ mod anim;
 mod antigravity;
 mod approve;
 mod audio;
+mod calendar;
 mod connectivity;
 mod music;
 mod foobar;
@@ -270,6 +271,14 @@ struct App {
     unit: weather::Unit,
     /// The Weather page shows the sun's path in place of the hours ahead.
     sun_view: bool,
+    /// The Calendar page: the month on show (0 = not set yet, it opens on this month), the day picked, the lunar
+    /// choice, and whether this PC's region keeps a lunar calendar (its time zone), read again every few seconds.
+    cal_year: i32,
+    cal_month: u32,
+    cal_sel: u32,
+    cal_lunar: bool,
+    cal_zone: Option<f64>,
+    cal_zone_at: Option<Instant>,
     unit_chosen: bool,
 }
 
@@ -325,6 +334,7 @@ impl App {
         let eyes = self.robot_eyes();
         let (x, y, w, h) = self.win;
         let now = system::now_stamp();
+        let cal = self.cal_view(now);
         let view = View {
             mode: self.notch.mode,
             size: self.notch.size(),
@@ -357,7 +367,7 @@ impl App {
             focus: &self.focus, health: HealthView { h: &self.health, now: todo::minutes(now), minute_of_day: minute_of_day(now), settings: self.settings_open },
             weather: &self.wx,
             page_age: self.page_since.elapsed().as_secs_f32(),
-            unit: self.unit, sun_view: self.sun_view,
+            unit: self.unit, sun_view: self.sun_view, cal,
         };
         // An icon that just changed keeps frames coming until its morph has played.
         self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
@@ -957,6 +967,22 @@ impl App {
         }
     }
 
+    /// What the Calendar page shows now: its month (this one until another is chosen), the day picked, today, and
+    /// whether the lunar choice is there (this PC's Windows region, read again every few seconds so a change in
+    /// Windows shows without a restart).
+    fn cal_view(&mut self, now: u64) -> calendar::CalView {
+        let date = (now / 10_000) as u32;
+        let today = ((date / 10_000) as i32, date / 100 % 100, date % 100);
+        if self.cal_year == 0 {
+            (self.cal_year, self.cal_month, self.cal_sel) = today;
+        }
+        if self.page == Page::Calendar && self.cal_zone_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(3)) {
+            self.cal_zone = calendar::lunar_zone(&calendar::region());
+            self.cal_zone_at = Some(Instant::now());
+        }
+        calendar::CalView { year: self.cal_year, month: self.cal_month, sel: self.cal_sel, today, zone: self.cal_zone, lunar_on: self.cal_lunar && self.cal_zone.is_some() }
+    }
+
     /// First visible row of the list page on screen.
     fn scroll(&self) -> usize {
         if self.page == Page::Notify { self.note_scroll } else { self.todo_scroll }
@@ -1093,6 +1119,23 @@ impl App {
                 self.page_since = Instant::now();
                 system::save_settings(self.settings());
             }
+            Button::CalPrev | Button::CalNext => {
+                let delta = if button == Button::CalNext { 1 } else { -1 };
+                (self.cal_year, self.cal_month) = calendar::shift_month(self.cal_year, self.cal_month, delta);
+                // The day picked follows: today when the month is this one, else its first.
+                let date = system::today();
+                let (ty, tm, td) = ((date / 10_000) as i32, date / 100 % 100, date % 100);
+                self.cal_sel = if (ty, tm) == (self.cal_year, self.cal_month) { td } else { 1 };
+            }
+            Button::CalCell(i) => {
+                let day = i as i32 - calendar::first_column(self.cal_year, self.cal_month) as i32 + 1;
+                if (1..=calendar::days_in_month(self.cal_year, self.cal_month) as i32).contains(&day) {
+                    self.cal_sel = day as u32;
+                }
+            }
+            // Only where the region keeps a lunar calendar is the choice there to take.
+            Button::CalMode(on) if self.cal_zone.is_some() => self.cal_lunar = on,
+            Button::CalMode(_) => {}
             Button::NoteOpen(i) => {
                 if let Some(target) = self.notes.get(i).and_then(|n| n.open.as_deref()) {
                     open_target(target);
@@ -2639,6 +2682,12 @@ fn run() -> windows::core::Result<()> {
             unit: settings.unit.unwrap_or_else(weather::Unit::automatic),
             unit_chosen: settings.unit.is_some(),
             sun_view: settings.sun_view,
+            cal_year: 0,
+            cal_month: 0,
+            cal_sel: 0,
+            cal_lunar: false,
+            cal_zone: None,
+            cal_zone_at: None,
         };
         app.refresh_audio();
         if let Some(r) = app.notifications.as_mut() {

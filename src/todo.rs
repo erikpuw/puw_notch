@@ -55,7 +55,7 @@ pub fn stamp(date: u32, hour: u32, minute: u32) -> u64 {
     date as u64 * 10_000 + hour as u64 * 100 + minute as u64
 }
 
-fn days_in_month(year: u32, month: u32) -> u32 {
+pub fn days_in_month(year: u32, month: u32) -> u32 {
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
     match month {
         2 if leap => 29,
