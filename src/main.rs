@@ -1913,7 +1913,10 @@ impl ConnList {
 
     fn step_event(&mut self, e: &Event, now: Instant) -> bool {
         match e {
+            Event::Net(Net::Offline) if self.net.as_ref().is_some_and(|n| n.state != RowState::Done) => true,
+            Event::Vpn(false) if self.vpn.as_ref().is_some_and(|v| v.state != RowState::Done) => true,
             Event::Net(Net::Online { .. }) if self.net.is_some() => {
+                self.rows.retain(|r| r.key != Some("net"));
                 self.net = Some(Row::line(row_text(e), now));
                 if let Some(v) = self.vpn.as_mut().filter(|v| v.state == RowState::Todo) {
                     (v.state, v.at) = (RowState::Wait, now);
@@ -1926,6 +1929,7 @@ impl ConnList {
                 true
             }
             Event::Vpn(true) if self.vpn.is_some() || self.net.is_some() => {
+                self.rows.retain(|r| r.key != Some("vpn"));
                 self.vpn = Some(Row::line(row_text(e), now));
                 true
             }
@@ -2708,6 +2712,25 @@ mod tests {
         let l = conn_list_add(None, &Event::Airplane(false), t0, vpn);
         let l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100), vpn);
         assert_eq!(l.domain, Domain::Air);
+    }
+
+    #[test]
+    fn offline_and_vpn_off_told_late_while_wifi_comes_on_leave_no_old_lines() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let vpn = Expect { vpn: true, ..Expect::default() };
+        let online = Event::Net(Net::Online { name: "W".into(), wifi: true });
+        let mut l = conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0, vpn);
+        for (ms, e) in [(100, Event::Net(Net::Offline)), (200, Event::Vpn(false)), (3000, online.clone()), (4000, Event::Vpn(true))] {
+            l = conn_list_add(Some(l), &e, at(ms), vpn);
+        }
+        let texts: Vec<String> = l.rows_shown().into_iter().map(|r| r.text).collect();
+        assert_eq!(texts, vec![row_text(&online), row_text(&Event::Vpn(true))]);
+        let mut l = conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0, vpn);
+        l = conn_list_add(Some(l), &online, at(100), vpn);
+        l = conn_list_add(Some(l), &Event::Vpn(true), at(200), vpn);
+        l = conn_list_add(Some(l), &Event::Vpn(false), at(300), vpn);
+        assert!(l.rows_shown().iter().any(|r| r.text == row_text(&Event::Vpn(false))), "a VPN that really drops after it was up is still told");
     }
 
     #[test]
