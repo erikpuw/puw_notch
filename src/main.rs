@@ -701,6 +701,7 @@ impl App {
 
     fn show_connection_list(&mut self, t: Toast, ms: u32, replaces: bool) {
         if self.approval.is_some() {
+            self.wait_for_room(t);
             return;
         }
         if self.notch.mode == Mode::Alert && self.banner.as_ref().is_some_and(|b| (replaces || b.app == t.app) && b.choices.is_empty()) {
@@ -710,9 +711,17 @@ impl App {
             self.banner = Some(t);
             unsafe { SetTimer(Some(self.hwnd), T_ALERT, ms, None) };
             self.kick();
-        } else {
-            self.show_banner(t, ms);
+        } else if !self.show_banner(t.clone(), ms) {
+            self.wait_for_room(t);
         }
+    }
+
+    fn wait_for_room(&mut self, t: Toast) {
+        if self.hidden {
+            return;
+        }
+        self.conn_queue.retain(|q| q.app != t.app);
+        self.conn_queue.push(t);
     }
 
     fn next_connection_banner(&mut self) {

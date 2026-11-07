@@ -71,11 +71,13 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
         out.push(Event::Airplane(new.airplane));
     }
     let mut radio_off = BTreeSet::new();
-    for (kind, on) in &new.radios {
-        if old.radios.get(kind).is_some_and(|was| was != on) {
-            out.push(Event::Radio(*kind, *on));
+    let kinds: BTreeSet<RadioType> = old.radios.keys().chain(new.radios.keys()).copied().collect();
+    for kind in kinds {
+        let (was, on) = (old.radios.get(&kind).copied().unwrap_or(false), new.radios.get(&kind).copied().unwrap_or(false));
+        if was != on {
+            out.push(Event::Radio(kind, on));
             if !on {
-                radio_off.insert(*kind);
+                radio_off.insert(kind);
             }
         }
     }
@@ -272,7 +274,8 @@ pub fn watch(hwnd: HWND) {
         loop {
             let nudged = wait(if quick > 0 { QUICK } else { POLL });
             quick = if nudged { QUICK_POLLS } else { quick.saturating_sub(1) };
-            let mut now = Snapshot { radios: radios(), airplane: airplane(), net: Net::Offline, vpn: false, devices: last.devices.clone() };
+            let read = radios();
+            let mut now = Snapshot { radios: if read.is_empty() { last.radios.clone() } else { read }, airplane: airplane(), net: Net::Offline, vpn: false, devices: last.devices.clone() };
             let profiles = profiles();
             (now.net, now.vpn) = (net_of(&profiles), vpn_of(&profiles));
             let bt_off = now.airplane || now.radios.get(&RadioType::Bluetooth) == Some(&false);
@@ -545,6 +548,15 @@ mod tests {
         let mut e = vec![down.clone()];
         drop_knock_on(&mut e, false, false);
         assert_eq!(e, vec![down]);
+    }
+
+    #[test]
+    fn a_wifi_adapter_that_vanishes_and_returns_is_told_off_then_on() {
+        let on = snap(true, true, false, home(), &[]);
+        let gone = Snapshot { radios: [(RadioType::Bluetooth, true)].into_iter().collect(), net: Net::Offline, ..on.clone() };
+        assert_eq!(changes(&on, &gone), vec![Event::Radio(RadioType::Wifi, false)]);
+        let back = Snapshot { net: home(), ..on.clone() };
+        assert_eq!(changes(&gone, &back), vec![Event::Radio(RadioType::Wifi, true), Event::Net(home())]);
     }
 
     #[test]
