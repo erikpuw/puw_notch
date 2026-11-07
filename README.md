@@ -7,7 +7,7 @@
 <p align="center"><b>Chiếc notch sống ngay trên Windows của bạn.</b></p>
 
 <p align="center">
-  Nhạc, việc, thông báo, thời tiết và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
+  Nhạc, việc, thông báo, thời tiết, lịch và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
   Rust + Direct2D vẽ trên GPU qua DirectComposition, exe ~794 KB, không WebView.
 </p>
 
@@ -19,91 +19,94 @@
 
 | Tính năng | Làm gì |
 |---|---|
-| **Notch** | Giờ, vòng pin (xanh khi sạc, vàng khi tiết kiệm pin, đỏ từ 20%), sóng nhạc. Rê chuột để mở bảng. Hai kiểu chọn ở tray: tai thỏ hoặc viên thuốc nổi. |
-| **Tự né** | Thu mini khi đè lên chữ bên dưới (nhiều tab như Edge, Terminal), ẩn khi chơi game hoặc xem phim toàn màn hình. Nó hỏi thẳng cửa sổ phía dưới (chỗ trống của thanh tiêu đề hay tab, nút) chứ không chụp màn hình, nên không phải giấu mình khỏi chụp: vẫn hiện khi quay, chia sẻ màn hình và điều khiển từ xa. |
-| **Banner** | Thông báo Windows (icon của chính app, giờ nhận, nút × tắt sớm, ảnh chụp có ảnh thu nhỏ), âm lượng, độ sáng, mic, Caps/Num Lock, pin, tiết kiệm pin, USB, và Wi-Fi, Bluetooth, máy bay (xem **Banner mạng**). Thiết bị ngắt kết nối và cảnh báo pin yếu là banner riêng, xếp hàng nối tiếp. |
-| **Tác vụ trực tiếp** | Banner sao chép, di chuyển, xóa tệp trong Explorer kèm phần trăm và thanh tiến trình; tải file hiện dung lượng đã tải và tốc độ; giữ theo dõi lệnh build trong terminal. Bật / tắt ở tray → Tính năng khác → Tác vụ nền trực tiếp. |
-| **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity (xin quyền dùng công cụ, câu hỏi chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt; banner tự đóng sau 20 giây (app hỏi lại như thường) và đóng ngay khi bạn trả lời trong app, tắt hẳn ở tray. Cách thiết lập ở [dưới](#thiết-lập-cho-claude-code-tuỳ-chọn). |
-| **Robot** | 30 giây không đụng máy thì mặt LED (chỉ có đôi mắt) thay đồng hồ: nhìn quanh, thỉnh thoảng liếc sang bên, mừng một lần (mắt `> <` xanh, hai ngôi sao) khi pin vừa đầy, buồn (mắt đỏ, phích cắm nhấp nháy) khi pin từ 20% trở xuống mà chưa sạc. Động chuột lại thì `^ ^` và liếc theo chuột; 5 phút thì ngủ. Bật / tắt ở tray. |
-| **Nhẹ** | Chỉ tải phần đang hiện: lời bài hát khi mở trang Nhạc, icon khi mở trang Thông báo; ẩn toàn màn hình thì ngừng tải. Khi nghỉ chỉ chừng 7 MB RAM và 0% CPU, đang phát nhạc ở dạng pill chừng 14 MB, mở trang Nhạc có aurora chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
-| **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị (chỉ giữ trang bạn dùng; trang ẩn thì hoàn toàn ngừng: không nhắc việc, uống nước, đứng dậy, không đếm Pomodoro, không đọc nhạc, thời tiết, hạn mức, thông báo), Tính năng khác (Duyệt ngay trên notch, Ẩn bảng âm lượng Windows: mặc định tắt), Khởi động cùng Windows (hỏi quyền quản trị một lần để tạo tác vụ `PuwNotch` trong Task Scheduler; từ đó notch tự chạy với quyền quản trị 15 giây sau khi đăng nhập, không hỏi lại, đọc được cả cửa sổ chạy admin; bỏ tick thì tác vụ bị xóa), Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát. |
+| **Notch** | Giờ, vòng pin (xanh khi sạc, vàng khi tiết kiệm pin, đỏ từ 20%) và sóng nhạc. Rê chuột để mở bảng. Hai kiểu, chọn ở tray: tai thỏ hoặc viên thuốc nổi. |
+| **Tự né** | Thu mini khi đè lên chữ bên dưới (tab của Edge, Terminal), ẩn khi chơi game hoặc xem phim toàn màn hình. Nó hỏi thẳng cửa sổ phía dưới thay vì chụp màn hình, nên vẫn hiện khi quay, chia sẻ màn hình hay điều khiển từ xa. |
+| **Banner** | Thông báo Windows (icon của app, giờ nhận, nút × tắt sớm, ảnh thu nhỏ cho ảnh chụp màn hình), âm lượng, độ sáng, mic, Caps/Num Lock, pin, tiết kiệm pin, USB, Wi-Fi, Bluetooth, máy bay. Nhiều thông báo đến cùng lúc thì hiện lần lượt theo thứ tự đến. |
+| **Banner mạng** | Wi-Fi, Bluetooth và máy bay mỗi thứ một banner riêng; máy bay gom các thứ đi kèm. Khi Wi-Fi bật hoặc máy bay tắt, banner là danh sách các bước (kết nối mạng, VPN đã chạy trước đó, Bluetooth và thiết bị đã nối): tích xanh khi xong, vòng quay khi đang chờ, vòng rỗng khi chưa tới lượt, dấu chéo đỏ khi quá 15 giây không được. Một thiết bị Bluetooth là banner riêng có pin lớn, từ hai thiết bị là danh sách có pin nhỏ. Bật tắt nhanh chỉ để lại trạng thái cuối. |
+| **Tác vụ trực tiếp** | Banner tiến trình cho sao chép, di chuyển, xóa tệp trong Explorer, tải file và lệnh build trong terminal. Mặc định tắt, [chi tiết](#tác-vụ-nền-trực-tiếp). |
+| **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity (xin quyền, chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt. Banner đóng sau 20 giây (app hỏi lại như thường) hoặc ngay khi bạn trả lời trong app. [Cách thiết lập](#thiết-lập-cho-claude-code-tuỳ-chọn). |
+| **Robot** | 30 giây không đụng máy thì mặt LED (chỉ có đôi mắt) thay đồng hồ: nhìn quanh, mừng khi pin vừa đầy, buồn khi pin từ 20% trở xuống mà chưa sạc. Động chuột thì liếc theo chuột; 5 phút thì ngủ. Bật / tắt ở tray. |
+| **Nhẹ** | Chỉ tải phần đang hiện, ẩn toàn màn hình thì ngừng tải. Khi nghỉ chừng 7 MB RAM và 0% CPU, phát nhạc dạng pill chừng 14 MB, mở trang Nhạc có aurora chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
+| **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị, Tính năng khác (Duyệt ngay trên notch, Tác vụ nền trực tiếp, Ẩn bảng âm lượng Windows), Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát. |
 
-**6 trang** (chuyển bằng ‹ ›, hoặc rê chuột vào chấm trang: chấm mở thành hàng biểu tượng để chọn thẳng một trang, rời ra thì trả về chấm):
+Trang ẩn ở tray thì ngừng hẳn: không nhắc việc, uống nước hay đứng dậy, không đếm Pomodoro, không đọc nhạc, thời tiết, hạn mức hay thông báo.
+
+**Khởi động cùng Windows** hỏi quyền quản trị một lần để tạo tác vụ `PuwNotch` trong Task Scheduler. Từ đó notch tự chạy với quyền quản trị 15 giây sau khi đăng nhập, không hỏi lại, và đọc được cả cửa sổ chạy admin. Bỏ tick thì tác vụ bị xóa.
+
+**8 trang**, chuyển bằng ‹ › hoặc rê chuột vào chấm trang: chấm mở thành hàng biểu tượng để chọn thẳng một trang.
 
 | Trang | Làm gì |
 |---|---|
-| **Nhạc** | Ảnh bìa, lời đồng bộ (LRCLIB), ⏮ ⏯ ⏭, trộn bài và lặp (tắt, tất cả, một bài: xanh lá khi đang bật; chỉ khi trình phát có: iTunes có, foobar2000 thì để mờ), kéo thanh để tua (Windows media controls, iTunes, foobar2000). Nút lời mở rộng bảng; nền và đường aurora theo màu bìa. |
-| **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách, vòng tiến độ cho biết còn bao nhiêu. Gõ "Họp 20:00", "Khám răng 28/10 14:30", "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0–60 phút; nút sửa và xóa hiện khi rê chuột. |
-| **Tập trung** | Pomodoro: cả chu kỳ (4 vòng tập trung 25 phút, nghỉ ngắn 5, nghỉ dài 15) là một thanh chia đoạn, số giờ lớn, ba chip chọn chế độ, nút đặt lại / bắt đầu / sang đoạn kế. Hết đoạn thì banner báo và đoạn kế tự chạy tiếp (sau nghỉ dài thì dừng chờ chu kỳ mới); khi đang chạy, pill có một vạch mỏng ở đáy. |
-| **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng; số lượng ở bên trái; bấm để mở app; "Xóa hết" ẩn những cái đã có (Windows vẫn giữ). |
-| **Sức khỏe** | Nhắc uống nước và đứng dậy: số lớn, thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy; chỉnh giờ và mức ở ⚙. |
-| **Thời tiết** | Gõ tên thành phố một lần: icon và nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C | °F. Nút mặt trời ở dòng thành phố đổi dải giờ thành **đường đi của mặt trời** (giờ mọc, lặn, còn bao lâu nắng; hai vòng sáng quanh mặt trời sáng dần rồi mờ dần nhẹ nhàng, ban đêm có trăng khuyết). Dữ liệu Open-Meteo, làm mới 30 phút. |
-| **Lịch** | Một tháng, tuần xếp từ **thứ Hai** đến Chủ nhật (chuẩn ISO 8601, giống nhau ở mọi máy), số ngày đang chọn thật lớn bên trái cùng thứ; bấm một ngày để xem, ‹ › để đổi tháng. Tên thứ và tháng theo ngôn ngữ của app. Không có ngày lễ: mỗi nước một khác. Ở máy đặt vùng Việt Nam, Trung Quốc, Hồng Kông, Ma Cao, Đài Loan hoặc Hàn Quốc, có thêm nút **Dương | Âm** đổi các số trên lưới sang âm lịch (tự tính trong app, không cần mạng, ngày mùng 1 ghi cả tháng); đổi vùng trong Windows thì nút hiện hay ẩn theo, không cần mở lại app. |
-| **Banner mạng** | Wi-Fi, Bluetooth và máy bay mỗi thứ một banner riêng; máy bay gom các thứ đi kèm. Khi Wi-Fi bật hoặc máy bay tắt, banner là **danh sách các bước** (kết nối mạng, VPN đã chạy trước đó, Bluetooth và thiết bị đã nối): tích xanh khi xong, vòng quay khi đang chờ, vòng rỗng khi chưa tới lượt, dấu chéo đỏ khi quá 15 giây không được; xong hết thì tắt sau 5 giây. Một thiết bị Bluetooth là banner riêng có pin lớn, từ hai thiết bị là danh sách có pin nhỏ. Bật tắt nhanh chỉ để lại trạng thái cuối. |
-| **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab (chấm màu của app), chỉ hiện app tìm thấy trên máy; Claude hiện hai vòng đồng tâm (5 giờ ngoài, tuần trong). Codex và Antigravity hiện phần còn lại, Claude phần đã dùng. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
+| **Nhạc** | Ảnh bìa, lời đồng bộ (LRCLIB), ⏮ ⏯ ⏭, trộn bài, lặp, kéo thanh để tua (Windows media controls, iTunes, foobar2000; nút nào trình phát không có thì để mờ). Nút lời mở rộng bảng; nền và đường aurora theo màu bìa. |
+| **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách, vòng tiến độ cho biết còn bao nhiêu. Gõ "Họp 20:00", "Khám răng 28/10 14:30" hay "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0 đến 60 phút. |
+| **Tập trung** | Pomodoro: cả chu kỳ (4 vòng tập trung 25 phút, nghỉ ngắn 5, nghỉ dài 15) là một thanh chia đoạn. Hết đoạn thì banner báo và đoạn kế tự chạy (sau nghỉ dài thì chờ chu kỳ mới). Khi đang chạy, pill có một vạch mỏng ở đáy. |
+| **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng. Bấm để mở app; "Xóa hết" chỉ ẩn trong notch, Windows vẫn giữ. |
+| **Sức khỏe** | Nhắc uống nước và đứng dậy: thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy, chỉnh giờ và mức ở ⚙. |
+| **Thời tiết** | Gõ tên thành phố một lần: nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C \| °F. Nút mặt trời đổi dải giờ thành **đường đi của mặt trời** (giờ mọc, lặn, còn bao lâu nắng; ban đêm có trăng khuyết). Dữ liệu Open-Meteo, làm mới 30 phút. |
+| **Lịch** | Một tháng, tuần xếp từ thứ Hai đến Chủ nhật (ISO 8601), ngày đang chọn hiện lớn bên trái cùng thứ. Bấm một ngày để xem, ‹ › để đổi tháng. Không có ngày lễ vì mỗi nước một khác. Ở máy đặt vùng Việt Nam, Trung Quốc, Hồng Kông, Ma Cao, Đài Loan hoặc Hàn Quốc, nút **Dương \| Âm** đổi các số trên lưới sang âm lịch (tự tính, không cần mạng). Đổi vùng trong Windows thì nút hiện hay ẩn theo. |
+| **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab, chỉ hiện app tìm thấy trên máy. Claude hiện phần đã dùng (hai vòng đồng tâm: 5 giờ ngoài, tuần trong); Codex và Antigravity hiện phần còn lại. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
 
 Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:
 
 | App | Lấy từ |
 |---|---|
-| **Claude** | `plan-usage-history.json` do app desktop tự ghi (mỗi ~15 phút khi app đang lấy số, không có giờ làm mới; tìm trong `%APPDATA%\Claude`, `Claude-Data` và thư mục gói của app; số cũ vẫn hiện kèm tuổi, mở khung giới hạn trong app để làm mới); Claude Code ở terminal qua `statusLine` |
-| **Codex** | Log phiên `~/.codex`, cập nhật sau mỗi lượt agent; số quá 10 phút ghi "Số cũ"; đổi tài khoản thì chờ lượt chạy đầu |
-| **Antigravity** | Máy chủ cục bộ của chính app, chỉ khi app đang mở |
+| **Claude** | `plan-usage-history.json` do app desktop tự ghi (tìm trong `%APPDATA%\Claude`, `Claude-Data` và thư mục gói của app; số cũ vẫn hiện kèm tuổi, mở khung giới hạn trong app để làm mới). Claude Code ở terminal qua `statusLine`. |
+| **Codex** | Log phiên `~/.codex`, cập nhật sau mỗi lượt agent. Số quá 10 phút ghi "Số cũ"; đổi tài khoản thì chờ lượt chạy đầu. |
+| **Antigravity** | Máy chủ cục bộ của chính app, chỉ khi app đang mở. |
 
 Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY 4.0), icon thời tiết và pin [Lucide](https://lucide.dev) (ISC), icon banner [Tabler Icons](https://tabler.io/icons) (MIT).
 
 ## Tác vụ nền trực tiếp
 
-Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặc định tắt; lựa chọn được lưu).
+Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặc định tắt, lựa chọn được lưu). Việc quét chạy trên luồng nền, không chặn luồng vẽ.
 
-- **Explorer:** đọc cửa sổ tiến trình sao chép, di chuyển, xóa/chuyển vào thùng rác và giải nén. Banner có tên thao tác, phần trăm và thanh tiến trình (xóa hiện thùng rác, di chuyển hiện thư mục có mũi tên, sao chép hiện biểu tượng sao chép). Phần trăm đọc từ tiêu đề cửa sổ; chỉ lần đầu của mỗi hộp thoại mới đọc chữ trong hộp qua UI Automation để biết đó là sao chép, di chuyển hay xóa, nên mỗi lần lấy mẫu gần như không tốn CPU; khi Explorer đang chuẩn bị hoặc đếm tệp mà chưa có phần trăm, chỉ hiện trạng thái đang xử lý. Không bắt được thao tác quá nhanh, không mở cửa sổ tiến trình, hoặc công cụ quản lý file khác.
-- **Download:** theo dõi file tạm .crdownload, .part, .opdownload trong thư mục **Downloads do Windows cấu hình** (kể cả thư mục đã chuyển sang ổ khác) và thư mục tải riêng của **Edge, Chrome, Brave** (mọi profile, đọc lại mỗi 30 giây). Dung lượng đọc trực tiếp từ file nên MB/s bám sát trình duyệt. Banner ghi **Đang tải xuống: <tên file>** kèm MB đã tải và MB/s. Khi Chromium để tên tạm "Chưa xác nhận 12345", tên thật được đọc từ lịch sử tải của trình duyệt (chỉ đọc, không khóa file); trong InPrivate trình duyệt không ghi lịch sử nên chỉ hiện **Đang tải xuống**. Khi file tạm biến mất và file hoàn chỉnh có trong thư mục, banner chuyển thành **Tải xuống hoàn tất** với dấu tích trong vòng tròn xanh (mũi tên thu lại, dấu tích nảy lên) kèm tên file thật và dung lượng, giữ 5 giây; không thấy file thì ghi **Đã dừng tải xuống**; bỏ qua file tạm không tăng dung lượng trong 30 giây (tải bị hủy hoặc tạm dừng lâu sẽ nhường lượt tải mới). Không suy đoán phần trăm vì file tạm không cho biết tổng dung lượng; chưa hỗ trợ thư mục tải của Firefox hay khi trình duyệt hỏi nơi lưu từng file.
-- **Banner:** hiện một tác vụ mỗi lần, ưu tiên Explorer, rồi download, rồi build terminal có sẵn. Còn tác vụ khác đang chạy thì cuối tiêu đề có **· +N**; tác vụ bị che vẫn được theo dõi và báo khi xong (sau khi tác vụ đang hiện kết thúc). Tự cập nhật khi tác vụ chạy, nhường thông báo khác và câu hỏi duyệt. Khi tải xong, **bấm banner** để mở thư mục chứa file với file đã được chọn sẵn. **Build** (cargo, msbuild, dotnet, make, cmake, ninja, go chạy từ terminal) kết thúc báo **hoàn tất** (dấu tích xanh) hoặc **thất bại** (dấu ✕ đỏ) theo mã thoát của tiến trình, chỉ khi notch mở được tiến trình đó (build chạy bằng quyền khác thì chỉ có dòng **Đã kết thúc**). Dòng **Đã kết thúc** chỉ có nghĩa tác vụ không còn được phát hiện, có thể do hoàn tất, hủy hoặc lỗi.
-
-Việc quét chạy trên luồng nền, không chặn luồng vẽ notch. Tắt tính năng sẽ dừng luồng theo dõi và bỏ trạng thái cũ.
+- **Explorer:** đọc cửa sổ tiến trình sao chép, di chuyển, xóa và giải nén. Banner có tên thao tác, phần trăm (đọc từ tiêu đề cửa sổ) và thanh tiến trình. Không bắt được thao tác quá nhanh, không mở cửa sổ tiến trình, hoặc công cụ quản lý file khác.
+- **Tải file:** theo dõi file tạm `.crdownload`, `.part`, `.opdownload` trong thư mục Downloads do Windows cấu hình và thư mục tải riêng của Edge, Chrome, Brave (mọi profile). Banner ghi tên file, MB đã tải và MB/s. Chromium đặt tên tạm "Chưa xác nhận 12345" thì tên thật đọc từ lịch sử tải của trình duyệt (chỉ đọc; InPrivate không có lịch sử nên chỉ hiện "Đang tải xuống"). Tải xong banner chuyển thành "Tải xuống hoàn tất" với dấu tích xanh trong 5 giây, bấm vào để mở thư mục với file đã chọn sẵn. Không có phần trăm vì file tạm không cho biết tổng dung lượng. Chưa hỗ trợ Firefox hay trình duyệt hỏi nơi lưu từng file.
+- **Build:** cargo, msbuild, dotnet, make, cmake, ninja, go chạy từ terminal. Kết thúc báo hoàn tất (dấu tích xanh) hoặc thất bại (dấu ✕ đỏ) theo mã thoát, nếu notch mở được tiến trình đó; không thì chỉ có "Đã kết thúc".
+- **Hiển thị:** mỗi lần một tác vụ, ưu tiên Explorer, rồi tải file, rồi build. Còn tác vụ khác thì tiêu đề có thêm **+N**; tác vụ bị che vẫn được theo dõi và báo khi xong. Banner nhường thông báo khác và câu hỏi duyệt.
 
 ## Ảnh chụp
 
 | Ảnh chụp | Ảnh chụp |
 |---|---|
-| ![Nhạc](assets/screenshots/page-music.png)<br>**Nhạc**: ảnh bìa, tên bài, lời, nền và đường aurora theo màu ảnh bìa | ![Nhạc khi không phát](assets/screenshots/page-music-empty.png)<br>**Nhạc** khi chưa phát gì |
+| ![Nhạc](assets/screenshots/page-music.png)<br>**Nhạc**: ảnh bìa, tên bài, lời, nền và đường aurora theo màu bìa | ![Nhạc khi không phát](assets/screenshots/page-music-empty.png)<br>**Nhạc** khi chưa phát gì |
 | ![Ghi chú](assets/screenshots/page-tasks.png)<br>**Ghi chú**: ghi chú và lịch hẹn trong một danh sách | ![Thông báo](assets/screenshots/page-notifications.png)<br>**Thông báo**: kèm icon của từng app |
-| ![Tập trung](assets/screenshots/page-focus.png)<br>**Tập trung**: cả chu kỳ Pomodoro trên một thanh | ![Pill đang đếm giờ](assets/screenshots/pill-focus.png)<br>**Pill** khi đang đếm: một vạch mỏng ở đáy, không chiếm chỗ của nhạc hay thời tiết |
+| ![Tập trung](assets/screenshots/page-focus.png)<br>**Tập trung**: cả chu kỳ Pomodoro trên một thanh | ![Pill đang đếm giờ](assets/screenshots/pill-focus.png)<br>**Pill** khi đang đếm: một vạch mỏng ở đáy |
 | ![Sức khỏe](assets/screenshots/page-health.png)<br>**Sức khỏe**: nhắc uống nước, đứng dậy | ![Banner](assets/screenshots/banner.png)<br>**Banner** thông báo |
 
 ![Nhạc với lời](assets/screenshots/page-music-lyrics.png)<br>**Nhạc** với lời bài hát: bảng giãn ngang, dòng đang hát sáng ở giữa, đường aurora lượn dọc đáy bảng
 
-![Chọn trang nhanh](assets/screenshots/page-nav.png)<br>**Chọn trang nhanh**: rê chuột vào chấm trang, chấm mở thành hàng biểu tượng, bấm một biểu tượng để sang thẳng trang đó, ô sáng trượt từ trang cũ sang trang mới (rời chuột thì trả về chấm)
+![Chọn trang nhanh](assets/screenshots/page-nav.png)<br>**Chọn trang nhanh**: rê chuột vào chấm trang, chấm mở thành hàng biểu tượng, bấm một biểu tượng để sang thẳng trang đó
 
-| ![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, một dòng số liệu, nút °C / °F | ![Đường đi của mặt trời ban ngày](assets/screenshots/page-weather-sun.png)<br>**Ban ngày**: bấm nút mặt trời, cung xanh từ lúc mọc đến lặn, mặt trời đứng đúng giờ hiện tại | ![Đường đi của mặt trời ban đêm](assets/screenshots/page-weather-night.png)<br>**Ban đêm**: trăng khuyết đi dọc cung từ lúc mặt trời lặn đến lúc mọc |
+| ![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, nút °C / °F | ![Đường đi của mặt trời ban ngày](assets/screenshots/page-weather-sun.png)<br>**Ban ngày**: cung xanh từ lúc mọc đến lặn, mặt trời đứng đúng giờ hiện tại | ![Đường đi của mặt trời ban đêm](assets/screenshots/page-weather-night.png)<br>**Ban đêm**: trăng khuyết đi dọc cung từ lúc lặn đến lúc mọc |
 |---|---|---|
 
-| ![Lịch](assets/screenshots/page-calendar.png)<br>**Lịch**: số ngày lớn, tuần từ thứ Hai, ‹ › đổi tháng | ![Lịch âm](assets/screenshots/page-calendar-lunar.png)<br>**Âm lịch**: nút Dương \| Âm đổi số trên lưới (chỉ ở vùng có âm lịch) |
+| ![Lịch](assets/screenshots/page-calendar.png)<br>**Lịch**: ngày lớn, tuần từ thứ Hai, ‹ › đổi tháng | ![Lịch âm](assets/screenshots/page-calendar-lunar.png)<br>**Âm lịch**: nút Dương \| Âm đổi số trên lưới (chỉ ở vùng có âm lịch) |
 |---|---|
 
 | ![Bật Wi-Fi](assets/screenshots/banner-wifi.png)<br>**Bật Wi-Fi**: kết nối mạng, rồi VPN đã chạy trước đó | ![Tắt chế độ máy bay](assets/screenshots/banner-airplane-off.png)<br>**Tắt chế độ máy bay**: các bước hiện sẵn, tích dần khi xong |
 |---|---|
-| ![Bật chế độ máy bay](assets/screenshots/banner-airplane-on.png)<br>**Bật chế độ máy bay**: gom Wi-Fi, Bluetooth, VPN tắt theo | ![Hai thiết bị Bluetooth](assets/screenshots/banner-bluetooth.png)<br>**Bluetooth**: hai thiết bị trở lên, mỗi thiết bị một dòng kèm pin |
+| ![Bật chế độ máy bay](assets/screenshots/banner-airplane-on.png)<br>**Bật chế độ máy bay**: Wi-Fi, Bluetooth, VPN tắt theo | ![Hai thiết bị Bluetooth](assets/screenshots/banner-bluetooth.png)<br>**Bluetooth**: hai thiết bị trở lên, mỗi thiết bị một dòng kèm pin |
 
-**Giới hạn** của Claude, Codex và Antigravity (Claude: phần đã dùng; Codex và Antigravity: phần còn lại, đếm lùi như chính app của chúng). Tab Codex ghi gói của tài khoản đang dùng, gói free tính theo 30 ngày:
+**Giới hạn** của Claude, Codex và Antigravity. Tab Codex ghi gói của tài khoản đang dùng, gói free tính theo 30 ngày:
 
 | Claude | Codex (gói free, 30 ngày) | Antigravity |
 |---|---|---|
 | ![](assets/screenshots/page-usage-claude.png) | ![](assets/screenshots/page-usage-codex.png) | ![](assets/screenshots/page-usage-antigravity.png) |
 
-**Nhắc uống nước và đứng dậy**: banner chỉ báo (nút × để đóng); ghi nhận uống nước hay đã đứng dậy thì bấm nút tròn ở trang Sức khỏe (có sẵn "Để sau 10 phút"):
+**Nhắc uống nước và đứng dậy**: banner chỉ báo (nút × để đóng). Để ghi nhận thì bấm nút tròn ở trang Sức khỏe (có sẵn "Để sau 10 phút"):
 
 | Đến giờ uống | Đạt mục tiêu | Ngồi lâu |
 |---|---|---|
 | ![](assets/screenshots/banner-water.png) | ![](assets/screenshots/banner-water-goal.png) | ![](assets/screenshots/banner-standup.png) |
 
-**Duyệt ngay trên notch**: câu hỏi của Claude, Codex và Antigravity hiện thành banner, bấm là trả lời:
+**Duyệt ngay trên notch**: bấm là trả lời.
 
 | Claude (câu hỏi chọn) | Antigravity (xin quyền dùng công cụ) |
 |---|---|
 | ![](assets/screenshots/banner-approve-claude.png) | ![](assets/screenshots/banner-approve-antigravity.png) |
 
-**Kiểu viên thuốc** (tray, Kiểu notch): nổi cách mép trên màn hình, bo tròn đủ bốn góc; mặc định vẫn là tai thỏ.
+**Kiểu viên thuốc** (tray, Kiểu notch): nổi cách mép trên màn hình, bo tròn đủ bốn góc. Mặc định vẫn là tai thỏ.
 
 | Thu gọn | Đang phát nhạc | Trang mở rộng |
 |---|---|---|
@@ -150,9 +153,9 @@ cargo build --release
 target/release/puw_notch.exe
 ```
 
-Bản release dùng `opt-level = "z"` (ưu tiên nhỏ gọn: exe ~794 KB thay vì ~810 KB, thời gian vẽ mỗi khung hình đo được không đổi). `build.rs` gắn icon và thông tin phiên bản (VERSIONINFO: tên, công ty, version lấy từ `Cargo.toml`) vào exe, xem ở Properties → Details. Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`. App ghi lúc khởi động, thoát, lỗi, lúc tự ẩn, lúc panel mở/đóng, khung hình trễ, nhịp chậm và GPU đang dùng để vẽ vào `%APPDATA%\PuwNotch\notch.log` (tối đa 64 KB, bắt đầu lại khi đổi phiên bản), để biết vì sao app không chạy khi khởi động cùng Windows.
+Bản release dùng `opt-level = "z"` (exe ~794 KB thay vì ~810 KB, thời gian vẽ mỗi khung hình không đổi). `build.rs` gắn icon và thông tin phiên bản (lấy từ `Cargo.toml`) vào exe, xem ở Properties → Details. Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`. App ghi lúc khởi động, thoát, lỗi, tự ẩn, panel mở/đóng, khung hình trễ và GPU đang dùng vào `%APPDATA%\PuwNotch\notch.log` (tối đa 64 KB, bắt đầu lại khi đổi phiên bản), để biết vì sao app không chạy khi khởi động cùng Windows.
 
-Thông báo đọc từ trung tâm thông báo Windows, nên **thông báo Windows phải đang bật**. Muốn chỉ thấy thông báo trên notch, không hiện banner ở góc phải màn hình: bật **Không làm phiền** của Windows (Cài đặt → Hệ thống → Thông báo). Windows vẫn giữ thông báo trong trung tâm thông báo nên notch vẫn đọc và hiện banner như bình thường. Windows chưa cho app khác tự tắt banner của từng app đang chạy, nên việc này do bạn bật.
+Thông báo đọc từ trung tâm thông báo Windows, nên **thông báo Windows phải đang bật**. Muốn chỉ thấy thông báo trên notch, không hiện banner ở góc phải màn hình, hãy bật **Không làm phiền** (Cài đặt → Hệ thống → Thông báo). Windows vẫn giữ thông báo trong trung tâm nên notch vẫn đọc và hiện banner như thường. Windows chưa cho app khác tắt banner của từng app, nên việc này do bạn bật.
 
 ## Thiết lập cho Claude Code (tuỳ chọn)
 
@@ -169,11 +172,11 @@ Phần duyệt ngay trên notch và số giới hạn của Claude Code ở term
 
 - `puw-notch-approve.ps1` (hook): gửi yêu cầu duyệt tới notch qua ống cục bộ. Notch không chạy, không bấm trong 50 giây hoặc bấm **Trong app** thì Claude hỏi như bình thường. Không có tự duyệt.
 - `puw-notch-statusline.ps1` (statusLine): chỉ cần nếu bạn dùng Claude Code ở terminal; app Claude desktop thì notch đọc thẳng file của app.
-- Antigravity không cần thiết lập gì: notch đọc từ máy chủ cục bộ của Antigravity (khi app mở). Codex: hạn mức không cần thiết lập, duyệt lệnh xem phần dưới.
+- Antigravity không cần thiết lập: notch đọc từ máy chủ cục bộ của nó (khi app mở). Codex: hạn mức không cần thiết lập, duyệt lệnh xem phần dưới.
 
 ## Thiết lập cho Codex (tuỳ chọn)
 
-Hạn mức của Codex notch đọc thẳng từ `~/.codex`, không cần thiết lập. **Duyệt lệnh của Codex ngay trên notch** dùng chung script `puw-notch-approve.ps1` với Claude Code: chép nó vào `~/.claude/` (hoặc chỗ bạn thích) rồi thêm một mục `PermissionRequest` vào `~/.codex/hooks.json` (thay `<tên>` bằng tên người dùng Windows):
+Hạn mức của Codex notch đọc thẳng từ `~/.codex`, không cần thiết lập. Để **duyệt lệnh của Codex ngay trên notch**, dùng chung script `puw-notch-approve.ps1` với Claude Code: chép nó vào `~/.claude/` (hoặc chỗ bạn thích) rồi thêm một mục `PermissionRequest` vào `~/.codex/hooks.json` (thay `<tên>` bằng tên người dùng Windows):
 
 ```json
 {
@@ -187,7 +190,7 @@ Hạn mức của Codex notch đọc thẳng từ `~/.codex`, không cần thi�
 
 - Nếu `hooks.json` đã có mục `PermissionRequest`, thêm nhóm trên vào **cuối** mảng để không đổi vị trí các hook cũ (Codex lưu mã tin cậy theo vị trí).
 - Codex chỉ chạy hook đã được tin cậy: mở Codex, gõ `/hooks` và tin cậy hook mới.
-- Từ đó khi Codex xin quyền, banner **Codex** hiện trên notch với lệnh cần chạy; bấm **Đồng ý** hoặc **Không**. Notch không chạy hoặc không bấm trong 50 giây thì Codex hỏi như bình thường. Không có tự duyệt.
+- Từ đó khi Codex xin quyền, banner **Codex** hiện trên notch với lệnh cần chạy; bấm **Đồng ý** hoặc **Không**. Notch không chạy hoặc không bấm trong 50 giây thì Codex hỏi như bình thường.
 - `-App` là tên hiện trên banner. `-Log` (thêm vào cuối lệnh) ghi những gì hook nhận vào `%TEMP%\puw-notch-hook.log`, chỉ để xem một app gửi gì; đừng để bật thường xuyên vì nó lưu cả lệnh.
 
 ## Ủng hộ
