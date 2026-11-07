@@ -427,11 +427,28 @@ fn devices(kinds: &mut BTreeMap<String, DeviceKind>) -> BTreeMap<String, (String
                 let (major, minor) = class_of(&id);
                 device_kind(major, minor, &name)
             });
-            let battery = container_of(&d).and_then(battery_of);
+            let battery = cached_battery(&id, || container_of(&d).and_then(battery_of));
             out.insert(id, (name, kind, battery));
         }
     }
     out
+}
+
+static BATTERIES: Mutex<BTreeMap<String, (Instant, Option<u8>)>> = Mutex::new(BTreeMap::new());
+const BATTERY_KEPT: Duration = Duration::from_secs(10);
+const BATTERY_MISSING_KEPT: Duration = Duration::from_millis(1500);
+
+fn cached_battery(id: &str, read: impl FnOnce() -> Option<u8>) -> Option<u8> {
+    if let Some(&(at, value)) = BATTERIES.lock().ok().and_then(|m| m.get(id).copied()).as_ref() {
+        if at.elapsed() < if value.is_some() { BATTERY_KEPT } else { BATTERY_MISSING_KEPT } {
+            return value;
+        }
+    }
+    let value = read();
+    if let Ok(mut m) = BATTERIES.lock() {
+        m.insert(id.to_string(), (Instant::now(), value));
+    }
+    value
 }
 
 const CONTAINER_KEY: &str = "System.Devices.Aep.ContainerId";

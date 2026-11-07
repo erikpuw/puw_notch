@@ -1523,16 +1523,15 @@ impl App {
             }
             WM_CONN => {
                 self.weather.refresh();
+                let mut shown_at = None;
+                let mut replaces = None;
                 for e in connectivity::take_events() {
                     let now = Instant::now();
                     match &e {
                         Event::Device { up: false, .. } => self.conn_queue.push(connection_toast(e)),
                         Event::DeviceBattery { name, percent, .. } => {
                             if self.conn_list.as_mut().is_some_and(|l| device_battery(l, name, *percent, now)) {
-                                let t = self.conn_list.as_ref().map(|l| (list_toast(l), l.life_ms(now)));
-                                if let Some((t, ms)) = t {
-                                    self.show_connection_list(t, ms, false);
-                                }
+                                shown_at = Some(now);
                             } else {
                                 self.conn_queue.push(connection_toast(e));
                             }
@@ -1543,12 +1542,18 @@ impl App {
                                 self.vpn_lost = Some(now);
                             }
                             let devices = connectivity::expected_devices();
-                            let replaces = self.conn_list.as_ref().is_some_and(|l| l.fresh(now));
+                            replaces.get_or_insert(self.conn_list.as_ref().is_some_and(|l| l.fresh(now)));
                             let list = conn_list_add(self.conn_list.take(), &e, now, Expect { vpn: self.vpn_was_up, devices: &devices });
                             self.vpn_was_up = expected;
-                            self.show_connection_list(list_toast(&list), list.life_ms(now), replaces);
                             self.conn_list = Some(list);
+                            shown_at = Some(now);
                         }
+                    }
+                }
+                if let Some(now) = shown_at {
+                    let t = self.conn_list.as_ref().map(|l| (list_toast(l), l.life_ms(now)));
+                    if let Some((t, ms)) = t {
+                        self.show_connection_list(t, ms, replaces.unwrap_or(false));
                     }
                 }
                 if !self.conn_busy && !self.conn_queue.is_empty() {
