@@ -300,6 +300,7 @@ pub fn watch(hwnd: HWND) {
             if nudged {
                 coalesce();
             }
+            let fast_started = Instant::now();
             quick = if nudged { QUICK_POLLS } else { quick.saturating_sub(1) };
             let read = radios();
             let mut now = Snapshot { radios: if read.is_empty() { last.radios.clone() } else { read }, airplane: airplane(), net: Net::Offline, vpn: false, devices: last.devices.clone() };
@@ -312,6 +313,7 @@ pub fn watch(hwnd: HWND) {
             if pump.step(&mut last, now, target) {
                 quick = quick.max(2);
             }
+            let fast_ms = fast_started.elapsed().as_millis();
             let due = devices_at.elapsed();
             let dirty = DEVICES_DIRTY.load(std::sync::atomic::Ordering::Relaxed);
             if !bt_off && (due >= DEVICES_EVERY || (due >= DEVICES_MIN && dirty)) {
@@ -319,7 +321,13 @@ pub fn watch(hwnd: HWND) {
                 devices_at = Instant::now();
                 let mut now = last.clone();
                 now.devices = devices(&mut kinds);
+                let devices_ms = devices_at.elapsed().as_millis();
+                if devices_ms >= 40 || fast_ms >= 40 {
+                    crate::system::log(&format!("watcher: radios, airplane and network {fast_ms} ms, {} devices read in {devices_ms} ms", now.devices.len()));
+                }
                 pump.step(&mut last, now, target);
+            } else if fast_ms >= 40 {
+                crate::system::log(&format!("watcher: radios, airplane and network {fast_ms} ms"));
             }
         }
     });
@@ -352,6 +360,7 @@ impl Pump {
             remember(&mut known, &events);
         }
         if !events.is_empty() {
+            crate::system::log(&format!("connectivity: {events:?}"));
             if let Ok(mut q) = EVENTS.lock() {
                 q.extend(events);
             }

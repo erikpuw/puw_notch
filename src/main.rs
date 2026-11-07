@@ -191,6 +191,7 @@ struct App {
     rested: u32,
     logged_open: bool,
     last_gap_log: Option<Instant>,
+    alert_frames: (u32, u32, f32),
     last_slow_tick: Option<Instant>,
     nav_open: bool,
     page: Page,
@@ -389,6 +390,15 @@ impl App {
         if gap > limit && self.animating && self.last_gap_log.is_none_or(|t| t.elapsed().as_secs() >= 10) {
             self.last_gap_log = Some(now);
             system::log(&format!("late frame: {:.0} ms (mode {:?}, page {})", gap * 1000.0, self.notch.mode, self.page.name()));
+        }
+        if self.notch.mode == Mode::Alert {
+            let (frames, over, worst) = self.alert_frames;
+            self.alert_frames = (frames + 1, over + u32::from(gap > 0.025), worst.max(gap));
+        } else if self.alert_frames.0 > 0 {
+            let (frames, over, worst) = std::mem::take(&mut self.alert_frames);
+            if over > 0 {
+                system::log(&format!("banner frames: {frames}, over 25 ms: {over}, worst {:.0} ms", worst * 1000.0));
+            }
         }
         if self.notch.mode != Mode::Expanded {
             self.lyrics_open = false;
@@ -1522,6 +1532,7 @@ impl App {
                 }
             }
             WM_CONN => {
+                let started = Instant::now();
                 self.weather.refresh();
                 let mut shown_at = None;
                 let mut replaces = None;
@@ -1558,6 +1569,10 @@ impl App {
                 }
                 if !self.conn_busy && !self.conn_queue.is_empty() {
                     self.next_connection_banner();
+                }
+                let took = started.elapsed().as_millis();
+                if took >= 8 {
+                    system::log(&format!("connectivity events handled in {took} ms"));
                 }
             }
             approve::WM_APPROVE => {
@@ -2361,6 +2376,7 @@ fn run() -> windows::core::Result<()> {
             rested: 0,
             logged_open: false,
             last_gap_log: None,
+            alert_frames: (0, 0, 0.0),
             last_slow_tick: None,
             nav_open: false,
             page: Page::Music,
