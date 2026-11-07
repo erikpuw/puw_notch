@@ -8,7 +8,7 @@
 
 <p align="center">
   Nhạc, việc, thông báo, thời tiết, lịch và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
-  Rust + Direct2D vẽ trên GPU qua DirectComposition, exe ~794 KB, không WebView.
+  Viết bằng Rust, exe ~794 KB, không WebView.
 </p>
 
 <p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a></p>
@@ -19,40 +19,34 @@
 
 | Tính năng | Làm gì |
 |---|---|
-| **Notch** | Giờ, vòng pin (xanh khi sạc, vàng khi tiết kiệm pin, đỏ từ 20%) và sóng nhạc. Rê chuột để mở bảng. Hai kiểu, chọn ở tray: tai thỏ hoặc viên thuốc nổi. |
-| **Tự né** | Thu mini khi đè lên chữ bên dưới (tab của Edge, Terminal), ẩn khi chơi game hoặc xem phim toàn màn hình. Nó hỏi thẳng cửa sổ phía dưới thay vì chụp màn hình, nên vẫn hiện khi quay, chia sẻ màn hình hay điều khiển từ xa. |
-| **Banner** | Thông báo Windows (icon của app, giờ nhận, nút × tắt sớm, ảnh thu nhỏ cho ảnh chụp màn hình), âm lượng, độ sáng, mic, Caps/Num Lock, pin, tiết kiệm pin, USB, Wi-Fi, Bluetooth, máy bay. Nhiều thông báo đến cùng lúc thì hiện lần lượt theo thứ tự đến. |
-| **Banner mạng** | Wi-Fi, Bluetooth và máy bay mỗi thứ một banner riêng; máy bay gom các thứ đi kèm. Khi Wi-Fi bật hoặc máy bay tắt, banner là danh sách các bước (kết nối mạng, VPN đã chạy trước đó, Bluetooth và thiết bị đã nối): tích xanh khi xong, vòng quay khi đang chờ, vòng rỗng khi chưa tới lượt, dấu chéo đỏ khi quá 15 giây không được. Một thiết bị Bluetooth là banner riêng có pin lớn, từ hai thiết bị là danh sách có pin nhỏ. Bật tắt nhanh chỉ để lại trạng thái cuối. |
-| **Tác vụ trực tiếp** | Banner tiến trình cho sao chép, di chuyển, xóa tệp trong Explorer, tải file và lệnh build trong terminal. Mặc định tắt, [chi tiết](#tác-vụ-nền-trực-tiếp). |
-| **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity (xin quyền, chọn đáp án) hiện thành banner; bấm **Đồng ý** / **Không** hoặc chọn đáp án. Không tự duyệt. Banner đóng sau 20 giây (app hỏi lại như thường) hoặc ngay khi bạn trả lời trong app. [Cách thiết lập](#thiết-lập-cho-claude-code-tuỳ-chọn). |
-| **Robot** | 30 giây không đụng máy thì mặt LED (chỉ có đôi mắt) thay đồng hồ: nhìn quanh, mừng khi pin vừa đầy, buồn khi pin từ 20% trở xuống mà chưa sạc. Động chuột thì liếc theo chuột; 5 phút thì ngủ. Bật / tắt ở tray. |
-| **Nhẹ** | Chỉ tải phần đang hiện, ẩn toàn màn hình thì ngừng tải. Khi nghỉ chừng 7 MB RAM và 0% CPU, phát nhạc dạng pill chừng 14 MB, mở trang Nhạc có aurora chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
-| **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị, Tính năng khác (Duyệt ngay trên notch, Tác vụ nền trực tiếp, Ẩn bảng âm lượng Windows), Khởi động cùng Windows, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát. |
+| **Notch** | Giờ, vòng pin và sóng nhạc. Rê chuột để mở bảng. Hai kiểu, chọn ở tray: tai thỏ hoặc viên thuốc nổi. |
+| **Tự né** | Thu mini khi đè lên chữ bên dưới, ẩn khi chơi game hoặc xem phim toàn màn hình. Vẫn hiện khi quay hoặc chia sẻ màn hình. |
+| **Banner** | Thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, pin, USB, Wi-Fi, Bluetooth, máy bay. Nhiều thông báo đến cùng lúc thì hiện lần lượt. |
+| **Banner mạng** | Wi-Fi, Bluetooth và máy bay mỗi thứ một banner. Wi-Fi bật hoặc máy bay tắt thì banner liệt kê từng bước (kết nối mạng, VPN, thiết bị Bluetooth), tích xanh khi xong. Bật tắt nhanh chỉ giữ trạng thái cuối. |
+| **Tác vụ trực tiếp** | Tiến trình sao chép, xóa tệp, tải file và build hiện thành banner. Mặc định tắt, [chi tiết](#tác-vụ-nền-trực-tiếp). |
+| **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity hiện thành banner, bấm **Đồng ý** / **Không**. Không tự duyệt. [Cách thiết lập](#thiết-lập-cho-claude-code-tuỳ-chọn). |
+| **Robot** | 30 giây không đụng máy thì mặt robot thay đồng hồ: mừng khi pin đầy, buồn khi pin yếu. Bật / tắt ở tray. |
+| **Nhẹ** | Khi nghỉ chừng 7 MB RAM và 0% CPU, phát nhạc chừng 14 MB, mở trang Nhạc chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
+| **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị, Tính năng khác, Khởi động cùng Windows, Ngôn ngữ, Giới thiệu, Thoát. |
 
-Trang ẩn ở tray thì ngừng hẳn: không nhắc việc, uống nước hay đứng dậy, không đếm Pomodoro, không đọc nhạc, thời tiết, hạn mức hay thông báo.
+Trang ẩn ở tray thì ngừng hẳn.
 
-**Khởi động cùng Windows** hỏi quyền quản trị một lần để tạo tác vụ `PuwNotch` trong Task Scheduler. Từ đó notch tự chạy với quyền quản trị 15 giây sau khi đăng nhập, không hỏi lại, và đọc được cả cửa sổ chạy admin. Bỏ tick thì tác vụ bị xóa.
+**Khởi động cùng Windows** hỏi quyền quản trị một lần. Từ đó notch tự chạy sau khi đăng nhập, kể cả với cửa sổ chạy quyền quản trị. Bỏ tick thì tắt.
 
 **8 trang**, chuyển bằng ‹ › hoặc rê chuột vào chấm trang: chấm mở thành hàng biểu tượng để chọn thẳng một trang.
 
 | Trang | Làm gì |
 |---|---|
-| **Nhạc** | Ảnh bìa, lời đồng bộ (LRCLIB), ⏮ ⏯ ⏭, trộn bài, lặp, kéo thanh để tua (Windows media controls, iTunes, foobar2000; nút nào trình phát không có thì để mờ). Nút lời mở rộng bảng; nền và đường aurora theo màu bìa. |
-| **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách, vòng tiến độ cho biết còn bao nhiêu. Gõ "Họp 20:00", "Khám răng 28/10 14:30" hay "Gọi mẹ mai 9h". Quá giờ tô đỏ "Trễ"; ⚙ chọn nhắc trước 0 đến 60 phút. |
-| **Tập trung** | Pomodoro: cả chu kỳ (4 vòng tập trung 25 phút, nghỉ ngắn 5, nghỉ dài 15) là một thanh chia đoạn. Hết đoạn thì banner báo và đoạn kế tự chạy (sau nghỉ dài thì chờ chu kỳ mới). Khi đang chạy, pill có một vạch mỏng ở đáy. |
-| **Thông báo** | ~30 thông báo Windows gần nhất, mỗi tin có icon app và hai dòng. Bấm để mở app; "Xóa hết" chỉ ẩn trong notch, Windows vẫn giữ. |
-| **Sức khỏe** | Nhắc uống nước và đứng dậy: thanh tiến độ trong ngày, nút tròn để ghi một lần uống hoặc đã đứng dậy, chỉnh giờ và mức ở ⚙. |
-| **Thời tiết** | Gõ tên thành phố một lần: nhiệt độ lớn, 5 mốc giờ tới, cảm giác, độ ẩm, gió, nhiệt độ cao nhất, °C \| °F. Nút mặt trời đổi dải giờ thành **đường đi của mặt trời** (giờ mọc, lặn, còn bao lâu nắng; ban đêm có trăng khuyết). Dữ liệu Open-Meteo, làm mới 30 phút. |
-| **Lịch** | Một tháng, tuần xếp từ thứ Hai đến Chủ nhật (ISO 8601), ngày đang chọn hiện lớn bên trái cùng thứ. Bấm một ngày để xem, ‹ › để đổi tháng. Không có ngày lễ vì mỗi nước một khác. Ở máy đặt vùng Việt Nam, Trung Quốc, Hồng Kông, Ma Cao, Đài Loan hoặc Hàn Quốc, nút **Dương \| Âm** đổi các số trên lưới sang âm lịch (tự tính, không cần mạng). Đổi vùng trong Windows thì nút hiện hay ẩn theo. |
-| **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity (gói free: 30 ngày), mỗi app một tab, chỉ hiện app tìm thấy trên máy. Claude hiện phần đã dùng (hai vòng đồng tâm: 5 giờ ngoài, tuần trong); Codex và Antigravity hiện phần còn lại. Banner báo khi qua 80%, 95% hoặc dùng từ 25% trong một ngày. |
+| **Nhạc** | Ảnh bìa, lời đồng bộ, điều khiển phát, kéo thanh để tua (Windows, iTunes, foobar2000). Nút lời mở rộng bảng; nền theo màu bìa. |
+| **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách. Gõ "Họp 20:00" hay "Khám răng 28/10 14:30". Quá giờ tô đỏ; ⚙ chọn nhắc trước. |
+| **Tập trung** | Pomodoro: cả chu kỳ (4 vòng 25 phút, nghỉ 5 và 15) trên một thanh. Hết đoạn thì banner báo và đoạn kế tự chạy. |
+| **Thông báo** | ~30 thông báo Windows gần nhất, bấm để mở app. "Xóa hết" chỉ ẩn trong notch. |
+| **Sức khỏe** | Nhắc uống nước và đứng dậy, nút tròn để ghi nhận, chỉnh ở ⚙. |
+| **Thời tiết** | Gõ tên thành phố một lần: nhiệt độ, 5 mốc giờ tới, độ ẩm, gió, °C \| °F. Nút mặt trời đổi sang đường đi của mặt trời. Dữ liệu Open-Meteo. |
+| **Lịch** | Một tháng, tuần từ thứ Hai, ngày chọn hiện lớn bên trái. Không có ngày lễ. Ở máy đặt vùng Việt Nam, Trung Quốc, Hồng Kông, Ma Cao, Đài Loan hoặc Hàn Quốc có nút **Dương \| Âm** để xem âm lịch. |
+| **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity, mỗi app một tab, chỉ hiện app có trên máy. Banner báo khi qua 80% và 95%. |
 
-Trang Giới hạn chỉ đọc trên máy, không gửi đi đâu:
-
-| App | Lấy từ |
-|---|---|
-| **Claude** | `plan-usage-history.json` do app desktop tự ghi (tìm trong `%APPDATA%\Claude`, `Claude-Data` và thư mục gói của app; số cũ vẫn hiện kèm tuổi, mở khung giới hạn trong app để làm mới). Claude Code ở terminal qua `statusLine`. |
-| **Codex** | Log phiên `~/.codex`, cập nhật sau mỗi lượt agent. Số quá 10 phút ghi "Số cũ"; đổi tài khoản thì chờ lượt chạy đầu. |
-| **Antigravity** | Máy chủ cục bộ của chính app, chỉ khi app đang mở. |
+Trang Giới hạn chỉ đọc dữ liệu trên máy, không gửi đi đâu: Claude đọc file do app desktop ghi (Claude Code ở terminal qua `statusLine`), Codex đọc log phiên trong `~/.codex`, Antigravity hỏi chính app khi nó đang mở.
 
 Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY 4.0), icon thời tiết và pin [Lucide](https://lucide.dev) (ISC), icon banner [Tabler Icons](https://tabler.io/icons) (MIT).
 
@@ -143,7 +137,7 @@ Tải `puw_notch.exe` ở mục [Releases](https://github.com/erikpuw/puw_notch/
 
 - **SmartScreen** ("Windows protected your PC"): bấm **More info** → **Run anyway**.
 - **File bị đánh dấu tải từ mạng**: chuột phải vào file → **Properties** → tick **Unblock** → OK.
-- **Smart App Control** (Windows 11, hiện "App blocked" và không có nút chạy tiếp): tắt ở Settings → Privacy & security → Windows Security → App & browser control → Smart App Control settings → **Off**. Tắt rồi không bật lại được nếu không cài lại Windows, nên cân nhắc. Cách khác là tự build từ mã nguồn (mục dưới), bản build trên máy mình thường chạy được.
+- **Smart App Control** (Windows 11, hiện "App blocked" và không có nút chạy tiếp): tắt ở Settings → Privacy & security → Windows Security → App & browser control → Smart App Control settings → **Off**. Tắt rồi không bật lại được nếu không cài lại Windows. Cách khác là tự build từ mã nguồn.
 
 ## Build
 
@@ -152,9 +146,9 @@ cargo build --release
 target/release/puw_notch.exe
 ```
 
-Bản release dùng `opt-level = "z"` (exe ~794 KB thay vì ~810 KB, thời gian vẽ mỗi khung hình không đổi). `build.rs` gắn icon và thông tin phiên bản (lấy từ `Cargo.toml`) vào exe, xem ở Properties → Details. Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`. App ghi lúc khởi động, thoát, lỗi, tự ẩn, panel mở/đóng, khung hình trễ và GPU đang dùng vào `%APPDATA%\PuwNotch\notch.log` (tối đa 64 KB, bắt đầu lại khi đổi phiên bản), để biết vì sao app không chạy khi khởi động cùng Windows.
+Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`, nhật ký ở `notch.log` cùng thư mục.
 
-Thông báo đọc từ trung tâm thông báo Windows, nên **thông báo Windows phải đang bật**. Muốn chỉ thấy thông báo trên notch, không hiện banner ở góc phải màn hình, hãy bật **Không làm phiền** (Cài đặt → Hệ thống → Thông báo). Windows vẫn giữ thông báo trong trung tâm nên notch vẫn đọc và hiện banner như thường. Windows chưa cho app khác tắt banner của từng app, nên việc này do bạn bật.
+Thông báo đọc từ trung tâm thông báo Windows, nên phải bật thông báo Windows. Muốn không hiện banner ở góc phải màn hình, bật **Không làm phiền** (Cài đặt → Hệ thống → Thông báo): notch vẫn hiện như thường.
 
 ## Thiết lập cho Claude Code (tuỳ chọn)
 
@@ -169,9 +163,9 @@ Phần duyệt ngay trên notch và số giới hạn của Claude Code ở term
 }
 ```
 
-- `puw-notch-approve.ps1` (hook): gửi yêu cầu duyệt tới notch qua ống cục bộ. Notch không chạy, không bấm trong 50 giây hoặc bấm **Trong app** thì Claude hỏi như bình thường. Không có tự duyệt.
-- `puw-notch-statusline.ps1` (statusLine): chỉ cần nếu bạn dùng Claude Code ở terminal; app Claude desktop thì notch đọc thẳng file của app.
-- Antigravity không cần thiết lập: notch đọc từ máy chủ cục bộ của nó (khi app mở). Codex: hạn mức không cần thiết lập, duyệt lệnh xem phần dưới.
+- `puw-notch-approve.ps1` (hook): gửi yêu cầu duyệt tới notch. Notch không chạy, không bấm trong 50 giây hoặc bấm **Trong app** thì Claude hỏi như bình thường.
+- `puw-notch-statusline.ps1` (statusLine): chỉ cần khi dùng Claude Code ở terminal.
+- Antigravity và hạn mức của Codex không cần thiết lập. Duyệt lệnh Codex xem phần dưới.
 
 ## Thiết lập cho Codex (tuỳ chọn)
 
@@ -187,10 +181,10 @@ Hạn mức của Codex notch đọc thẳng từ `~/.codex`, không cần thi�
 }
 ```
 
-- Nếu `hooks.json` đã có mục `PermissionRequest`, thêm nhóm trên vào **cuối** mảng để không đổi vị trí các hook cũ (Codex lưu mã tin cậy theo vị trí).
+- Nếu `hooks.json` đã có mục `PermissionRequest`, thêm nhóm trên vào **cuối** mảng để không đổi vị trí các hook cũ.
 - Codex chỉ chạy hook đã được tin cậy: mở Codex, gõ `/hooks` và tin cậy hook mới.
-- Từ đó khi Codex xin quyền, banner **Codex** hiện trên notch với lệnh cần chạy; bấm **Đồng ý** hoặc **Không**. Notch không chạy hoặc không bấm trong 50 giây thì Codex hỏi như bình thường.
-- `-App` là tên hiện trên banner. `-Log` (thêm vào cuối lệnh) ghi những gì hook nhận vào `%TEMP%\puw-notch-hook.log`, chỉ để xem một app gửi gì; đừng để bật thường xuyên vì nó lưu cả lệnh.
+- Từ đó khi Codex xin quyền, banner **Codex** hiện trên notch; bấm **Đồng ý** hoặc **Không**. Notch không chạy hoặc không bấm trong 50 giây thì Codex hỏi như bình thường.
+- `-App` là tên hiện trên banner. `-Log` ghi những gì hook nhận vào `%TEMP%\puw-notch-hook.log` để xem một app gửi gì; đừng để bật thường xuyên vì nó lưu cả lệnh.
 
 ## Ủng hộ
 

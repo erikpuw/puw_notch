@@ -8,7 +8,7 @@
 
 <p align="center">
   Music, tasks, notifications, weather, a calendar and a tiny robot, tucked into the top edge of your screen, Dynamic Island style.<br>
-  Rust + Direct2D drawn on the GPU through DirectComposition, ~794 KB exe, no WebView.
+  Written in Rust, ~794 KB exe, no WebView.
 </p>
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b></p>
@@ -19,40 +19,34 @@
 
 | Feature | What it does |
 |---|---|
-| **Notch** | Clock, battery ring (green while charging, yellow in battery saver, red at 20 %) and music waves. Hover to open the panel. Two looks, chosen in the tray: ears or a floating pill. |
-| **Stays clear** | Shrinks when it would cover text underneath (tabs in Edge or Terminal), hides during fullscreen games and videos. It asks the window beneath it instead of capturing the screen, so it still shows in recordings, screen shares and remote desktop. |
-| **Banners** | Windows notifications (the app's icon, the time received, an × to close early, a thumbnail for screenshots), volume, brightness, mic, Caps/Num Lock, battery, battery saver, USB, Wi-Fi, Bluetooth, airplane mode. Notifications that arrive together show one after another, in the order they came. |
-| **Network banners** | Wi-Fi, Bluetooth and airplane mode each have their own banner; airplane mode gathers what goes with it. When Wi-Fi comes on or airplane mode goes off, the banner is a list of steps (the network connection, the VPN that was up before, Bluetooth and the devices that were connected): a green tick when done, a spinner while waited for, an empty ring when not yet its turn, a red cross after 15 s without success. One Bluetooth device is its own banner with the battery large; two or more are a list with small batteries. Switching off and on quickly leaves only the last state. |
-| **Live tasks** | Progress banners for copying, moving and deleting files in Explorer, downloads and terminal builds. Off by default, [details](#live-tasks). |
-| **Approve on the notch** | Questions from Claude Code, Codex and Antigravity (permission to use a tool, multiple-choice questions) show as banners; click **Allow** / **Deny** or pick an answer. No auto-approve. The banner closes after 20 s (the app asks as usual) or as soon as you answer in the app. Setup [below](#setting-up-claude-code-optional). |
-| **Robot** | After 30 s without input an LED face (just a pair of eyes) replaces the clock: it looks around, cheers when the battery has just filled up, and is sad at 20 % or less while not charging. Move the mouse and it glances at the cursor; after 5 min it sleeps. Toggle in the tray. |
-| **Light** | Loads only what is visible and pauses while hidden for fullscreen. About 7 MB of RAM and 0 % CPU at rest, about 14 MB while music plays in the pill, about 22 MB with the Music page open and its aurora ([Task Manager pictures](#light-and-the-tray-menu)). |
-| **Tray** | Minimal notch, Idle robot, Notch style, Pages shown, More features (Approve on the notch, Live tasks, Hide Windows volume popup), Start with Windows, Language (Tiếng Việt / English), About, Quit. |
+| **Notch** | Clock, battery ring and music waves. Hover to open the panel. Two looks, chosen in the tray: ears or a floating pill. |
+| **Stays clear** | Shrinks when it would cover text underneath, hides during fullscreen games and videos. It still shows in recordings and screen shares. |
+| **Banners** | Windows notifications, volume, brightness, mic, Caps/Num Lock, battery, USB, Wi-Fi, Bluetooth, airplane mode. Notifications that arrive together show one after another. |
+| **Network banners** | Wi-Fi, Bluetooth and airplane mode each have their own banner. When Wi-Fi comes on or airplane mode goes off, the banner lists each step (the connection, the VPN, Bluetooth devices) with a green tick when done. Switching off and on quickly keeps only the last state. |
+| **Live tasks** | Progress of copying, deleting files, downloads and builds shows as a banner. Off by default, [details](#live-tasks). |
+| **Approve on the notch** | Questions from Claude Code, Codex and Antigravity show as banners, click **Allow** / **Deny**. No auto-approve. Setup [below](#setting-up-claude-code-optional). |
+| **Robot** | After 30 s without input a robot face replaces the clock: it cheers when the battery is full and is sad when it is low. Toggle in the tray. |
+| **Light** | About 7 MB of RAM and 0 % CPU at rest, about 14 MB while music plays, about 22 MB with the Music page open ([Task Manager pictures](#light-and-the-tray-menu)). |
+| **Tray** | Minimal notch, Idle robot, Notch style, Pages shown, More features, Start with Windows, Language, About, Quit. |
 
-A page hidden in the tray stops completely: no task, water or stand-up reminders, no Pomodoro, and no music, weather, limits or notifications are read.
+A page hidden in the tray stops completely.
 
-**Start with Windows** asks for administrator permission once to create a `PuwNotch` task in Task Scheduler. From then on the notch starts with administrator rights 15 s after you sign in, with no prompt, and can read administrator windows too. Untick it and the task is removed.
+**Start with Windows** asks for administrator permission once. From then on the notch starts after you sign in, administrator windows included. Untick it to turn it off.
 
 **8 pages**, switched with ‹ › or by putting the mouse on the page dots: they open into a row of icons to pick a page at once.
 
 | Page | What it does |
 |---|---|
-| **Music** | Cover, synced lyrics (LRCLIB), ⏮ ⏯ ⏭, shuffle, repeat, drag the bar to seek (Windows media controls, iTunes, foobar2000; a button the player lacks stays dim). The lyrics button widens the panel; background and aurora follow the cover. |
-| **Notes** | Notes and appointments in one list, a progress ring says how many are left. Type "Call 20:00", "Dentist 28/10 14:30" or "Call mom tomorrow 9h". Overdue shows red "Late"; ⚙ picks a reminder 0 to 60 min ahead. |
-| **Focus** | Pomodoro: the whole cycle (4 focus rounds of 25 min, short breaks of 5, a long one of 15) is one segmented strip. When a segment ends a banner says so and the next one starts by itself (after the long break it waits for a new cycle). While it runs the pill has a thin line along its bottom. |
-| **Notifications** | The ~30 latest Windows notifications, each with its app icon and two lines. Click to open the app; "Clear all" only hides them in the notch, Windows keeps them. |
-| **Health** | Water and stand-up reminders: the day's progress as a bar, a round button to log a drink or having stood up, times and amounts under ⚙. |
-| **Weather** | Type a city once: a large temperature, the next 5 slots, feels-like, humidity, wind, the day's high, °C \| °F. The sun button swaps the hours for **the sun's path** (sunrise, sunset, daylight left; a crescent moon at night). Open-Meteo data, refreshed every 30 min. |
-| **Calendar** | One month, weeks from Monday to Sunday (ISO 8601), the day picked shown large on the left with its weekday. Click a day to look at it, ‹ › change the month. No holidays, since each country has its own. On a PC set to Vietnam, China, Hong Kong, Macao, Taiwan or Korea, a **Solar \| Lunar** choice swaps the grid's numbers for the lunar calendar (worked out in the app, no network). Change the region in Windows and the choice shows or hides with it. |
-| **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity (a free plan: 30 days), a tab per app, only for the apps found on the PC. Claude shows what is used (two concentric rings: 5 hours outside, the week inside); Codex and Antigravity show what is left. A banner warns at 80 %, 95 %, or 25 % of the limit in one day. |
+| **Music** | Cover, synced lyrics, playback controls, drag the bar to seek (Windows, iTunes, foobar2000). The lyrics button widens the panel; the background follows the cover. |
+| **Notes** | Notes and appointments in one list. Type "Call 20:00" or "Dentist 28/10 14:30". Overdue shows red; ⚙ picks a reminder. |
+| **Focus** | Pomodoro: the whole cycle (4 rounds of 25 min, breaks of 5 and 15) on one strip. When a segment ends a banner says so and the next one starts by itself. |
+| **Notifications** | The ~30 latest Windows notifications, click to open the app. "Clear all" only hides them in the notch. |
+| **Health** | Water and stand-up reminders, a round button to log them, settings under ⚙. |
+| **Weather** | Type a city once: temperature, the next 5 slots, humidity, wind, °C \| °F. The sun button switches to the sun's path. Open-Meteo data. |
+| **Calendar** | One month, weeks from Monday, the picked day large on the left. No holidays. On a PC set to Vietnam, China, Hong Kong, Macao, Taiwan or Korea, a **Solar \| Lunar** choice shows the lunar calendar. |
+| **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity, a tab per app, only for the apps on the PC. A banner warns at 80 % and 95 %. |
 
-The Limits page reads this PC only, nothing is sent:
-
-| App | Read from |
-|---|---|
-| **Claude** | `plan-usage-history.json` that the desktop app writes itself (looked for in `%APPDATA%\Claude`, `Claude-Data` and the app's package folder; an old reading still shows with its age, open the usage popup in the app to refresh it). Claude Code in a terminal through `statusLine`. |
-| **Codex** | Session logs in `~/.codex`, updated after each agent turn. A reading over 10 min old says "Old"; after switching accounts it waits for the first turn. |
-| **Antigravity** | The app's own local server, only while it is open. |
+The Limits page reads this PC only and sends nothing: Claude from the file its desktop app writes (Claude Code in a terminal through `statusLine`), Codex from the session logs in `~/.codex`, Antigravity from the app itself while it is open.
 
 Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather and battery icons [Lucide](https://lucide.dev) (ISC), banner icons [Tabler Icons](https://tabler.io/icons) (MIT).
 
@@ -143,7 +137,7 @@ Get `puw_notch.exe` from [Releases](https://github.com/erikpuw/puw_notch/release
 
 - **SmartScreen** ("Windows protected your PC"): click **More info** → **Run anyway**.
 - **File marked as downloaded**: right-click the file → **Properties** → tick **Unblock** → OK.
-- **Smart App Control** (Windows 11, shows "App blocked" with no way to continue): turn it off in Settings → Privacy & security → Windows Security → App & browser control → Smart App Control settings → **Off**. Once off it cannot be turned back on without reinstalling Windows, so think first. The alternative is to build from source (next section); a build made on your own machine usually runs.
+- **Smart App Control** (Windows 11, shows "App blocked" with no way to continue): turn it off in Settings → Privacy & security → Windows Security → App & browser control → Smart App Control settings → **Off**. Once off it cannot be turned back on without reinstalling Windows. The alternative is to build from source.
 
 ## Build
 
@@ -152,9 +146,9 @@ cargo build --release
 target/release/puw_notch.exe
 ```
 
-The release build uses `opt-level = "z"` (an exe of ~794 KB instead of ~810 KB, with no change in the time to draw a frame). `build.rs` embeds the icon and version info (taken from `Cargo.toml`) in the exe, shown under Properties → Details. Tests: `cargo test`. Settings live in `%APPDATA%\PuwNotch\`. Starts, exits, failures, self-hiding, the panel opening and closing, late frames and the GPU drawing the notch are logged to `%APPDATA%\PuwNotch\notch.log` (64 KB at most, started over when the version changes), to tell why a start with Windows did not come up.
+Tests: `cargo test`. Settings live in `%APPDATA%\PuwNotch\`, with a log in `notch.log` beside them.
 
-Notifications are read from the Windows notification centre, so **Windows notifications must be on**. To see them only on the notch, with no banner in the screen corner, turn on Windows **Do not disturb** (Settings → System → Notifications). Windows still keeps the notifications in the notification centre, so the notch reads and shows them as usual. Windows does not let another app switch off per-app banners, so this is yours to turn on.
+Notifications are read from the Windows notification centre, so Windows notifications must be on. To hide the banner in the screen corner, turn on **Do not disturb** (Settings → System → Notifications): the notch still shows them.
 
 ## Setting up Claude Code (optional)
 
@@ -169,9 +163,9 @@ Approving on the notch and the limits of Claude Code in a terminal need two smal
 }
 ```
 
-- `puw-notch-approve.ps1` (hook): sends the permission request to the notch over a local pipe. If the notch is not running, nobody clicks within 50 seconds, or you press **In the app**, Claude asks as usual. There is no auto-approve.
-- `puw-notch-statusline.ps1` (statusLine): only needed for Claude Code in a terminal; for the Claude desktop app the notch reads the app's own file.
-- Antigravity needs no setup: the notch reads its local server (while it is open). Codex: the limits need no setup, approving commands is in the next section.
+- `puw-notch-approve.ps1` (hook): sends the permission request to the notch. If the notch is not running, nobody clicks within 50 seconds, or you press **In the app**, Claude asks as usual.
+- `puw-notch-statusline.ps1` (statusLine): only needed for Claude Code in a terminal.
+- Antigravity and Codex's limits need no setup. Approving Codex commands is in the next section.
 
 ## Setting up Codex (optional)
 
@@ -187,10 +181,10 @@ The notch reads Codex's limits straight from `~/.codex`, no setup. To **approve 
 }
 ```
 
-- If `hooks.json` already has a `PermissionRequest` entry, add the group above at the **end** of its array so the older hooks keep their positions (Codex stores its trust hash by position).
+- If `hooks.json` already has a `PermissionRequest` entry, add the group above at the **end** of its array so the older hooks keep their positions.
 - Codex only runs hooks it trusts: open Codex, type `/hooks` and trust the new hook.
-- From then on, when Codex asks for permission, a **Codex** banner with the command shows on the notch; click **Allow** or **Deny**. If the notch is not running, or nobody clicks within 50 seconds, Codex asks as usual.
-- `-App` is the name on the banner. `-Log` (added at the end of the command) writes what the hook receives to `%TEMP%\puw-notch-hook.log`, only to see what an app sends; do not leave it on, as it stores the commands too.
+- From then on, when Codex asks for permission, a **Codex** banner shows on the notch; click **Allow** or **Deny**. If the notch is not running, or nobody clicks within 50 seconds, Codex asks as usual.
+- `-App` is the name on the banner. `-Log` writes what the hook receives to `%TEMP%\puw-notch-hook.log` to see what an app sends; do not leave it on, as it stores the commands too.
 
 ## Support
 
