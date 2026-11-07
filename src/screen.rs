@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use windows::core::w;
 use windows::Win32::Foundation::{GetLastError, ERROR_ACCESS_DENIED, HWND, LPARAM, RECT, WPARAM};
@@ -15,8 +15,17 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _:
     let _ = PostMessageW(Some(HWND(HOOK_TARGET.load(Ordering::Relaxed) as _)), WM_SCREENEVENT, WPARAM(0), LPARAM(0));
 }
 
+static SHELL_FULLSCREEN: AtomicBool = AtomicBool::new(false);
+
 pub fn watch(hwnd: HWND) {
     HOOK_TARGET.store(hwnd.0 as isize, Ordering::Relaxed);
+    crate::system::spawn("shell-state", || {
+        unsafe { let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED); }
+        loop {
+            SHELL_FULLSCREEN.store(ask_shell_fullscreen(), Ordering::Relaxed);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
     for event in [0x0003, 0x000B] {
         unsafe { SetWinEventHook(event, event, None, Some(on_event), 0, 0, 2) };
     }
@@ -103,8 +112,12 @@ pub fn class_name(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n])
 }
 
-fn shell_says_fullscreen() -> bool {
+fn ask_shell_fullscreen() -> bool {
     unsafe { SHQueryUserNotificationState() }.is_ok_and(|s| s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE)
+}
+
+fn shell_says_fullscreen() -> bool {
+    SHELL_FULLSCREEN.load(Ordering::Relaxed)
 }
 
 pub fn check(own: HWND, center_x: i32, monitor: RECT, scale: f32, pill_w: f32, sample: bool, last: &mut Option<(isize, RECT)>) -> Check {
