@@ -71,6 +71,10 @@ const T_SETTLE: usize = 7;
 /// Network banners queue: each stays at least this long before the next one in line replaces it.
 const T_CONN: usize = 8;
 const CONN_MS: u32 = 1500;
+/// A Windows notification stays this long before the next one in line replaces it.
+const NOTE_MS: u32 = 3000;
+/// The line of banners waiting holds at most this many (the oldest go first).
+const QUEUE_MAX: usize = 8;
 const SETTLE_MS: u32 = 120;
 /// Page switch morph length.
 /// Notifications kept on the Notifications page.
@@ -747,9 +751,15 @@ impl App {
         }
         let current = self.activity.poll(Instant::now(), self.hwnd.0 as isize);
         self.activity_banner(current);
-        if let Some(t) = new.into_iter().last() {
-            // A newer one restarts the 5 s from the start (show_banner re-arms the timer).
-            self.show_banner(t, ALERT_MS);
+        // Every new notification gets its banner, in the order they arrived (only the last used to: the ones before
+        // it in the same look were lost), each read for `NOTE_MS` before the next replaces it.
+        self.conn_queue.extend(new);
+        if self.conn_queue.len() > QUEUE_MAX {
+            let extra = self.conn_queue.len() - QUEUE_MAX;
+            self.conn_queue.drain(..extra);
+        }
+        if !self.conn_busy && !self.conn_queue.is_empty() {
+            self.next_connection_banner();
         }
 
         mark(5, &mut lap);
@@ -841,9 +851,19 @@ impl App {
             return;
         }
         let t = self.conn_queue.remove(0);
-        self.show_banner(t, ALERT_MS);
+        // A notification (no status icon) is read for longer than a status line before the next one replaces it.
+        let spacing = if t.icon.is_none() { NOTE_MS } else { CONN_MS };
+        if !self.show_banner(t.clone(), ALERT_MS) {
+            // While the panel is open or a question waits it cannot show: it waits at the head of the line and is tried
+            // again at the next tick. In a game (hidden) it is dropped, it would be old news after.
+            if !self.hidden {
+                self.conn_queue.insert(0, t);
+            }
+            self.conn_busy = false;
+            return;
+        }
         self.conn_busy = true;
-        unsafe { SetTimer(Some(self.hwnd), T_CONN, CONN_MS, None) };
+        unsafe { SetTimer(Some(self.hwnd), T_CONN, spacing, None) };
     }
 
     /// The live activity's banner: it stays while the activity runs (each tick renews it and updates its
