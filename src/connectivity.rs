@@ -198,11 +198,18 @@ static NUDGE: (Mutex<bool>, std::sync::Condvar) = (Mutex::new(false), std::sync:
 const QUICK: Duration = Duration::from_millis(500);
 const QUICK_POLLS: u32 = 6;
 
-pub fn nudge() {
+static DEVICES_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn wake() {
     if let Ok(mut n) = NUDGE.0.lock() {
         *n = true;
         NUDGE.1.notify_one();
     }
+}
+
+pub fn nudge() {
+    DEVICES_DIRTY.store(true, std::sync::atomic::Ordering::Relaxed);
+    wake();
 }
 
 fn wait(period: Duration) -> bool {
@@ -214,7 +221,7 @@ fn wait(period: Duration) -> bool {
 }
 
 const COALESCE: Duration = Duration::from_millis(300);
-const DEVICES_MIN: Duration = Duration::from_secs(1);
+const DEVICES_MIN: Duration = Duration::from_millis(1500);
 
 fn coalesce() {
     std::thread::sleep(COALESCE);
@@ -225,13 +232,16 @@ fn coalesce() {
 
 fn subscribe() -> (Vec<Radio>, Vec<DeviceWatcher>) {
     let _ = NetworkInformation::NetworkStatusChanged(&NetworkStatusChangedEventHandler::new(|_| {
-        nudge();
+        wake();
         Ok(())
     }));
     let radios: Vec<Radio> = Radio::GetRadiosAsync().and_then(|op| op.get()).map(|list| list.into_iter().collect()).unwrap_or_default();
     for r in &radios {
-        let _ = r.StateChanged(&TypedEventHandler::<Radio, IInspectable>::new(|_, _| {
-            nudge();
+        let _ = r.StateChanged(&TypedEventHandler::<Radio, IInspectable>::new(|radio, _| {
+            match radio.as_ref().and_then(|r| r.Kind().ok()) {
+                Some(RadioKind::Bluetooth) => nudge(),
+                _ => wake(),
+            }
             Ok(())
         }));
     }
@@ -303,7 +313,9 @@ pub fn watch(hwnd: HWND) {
                 quick = quick.max(2);
             }
             let due = devices_at.elapsed();
-            if !bt_off && (due >= DEVICES_EVERY || (due >= DEVICES_MIN && (nudged || quick > 0))) {
+            let dirty = DEVICES_DIRTY.load(std::sync::atomic::Ordering::Relaxed);
+            if !bt_off && (due >= DEVICES_EVERY || (due >= DEVICES_MIN && dirty)) {
+                DEVICES_DIRTY.store(false, std::sync::atomic::Ordering::Relaxed);
                 devices_at = Instant::now();
                 let mut now = last.clone();
                 now.devices = devices(&mut kinds);
