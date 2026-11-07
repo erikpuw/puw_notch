@@ -11,6 +11,7 @@ use windows::Devices::Radios::{Radio, RadioKind, RadioState};
 use windows::Networking::Connectivity::{NetworkConnectivityLevel, NetworkInformation, NetworkStatusChangedEventHandler};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
+use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
@@ -212,6 +213,16 @@ fn wait(period: Duration) -> bool {
     NUDGE.1.wait_timeout_while(guard, period, |n| !*n).map_or(false, |(mut n, _)| std::mem::take(&mut *n))
 }
 
+const COALESCE: Duration = Duration::from_millis(300);
+const DEVICES_MIN: Duration = Duration::from_secs(1);
+
+fn coalesce() {
+    std::thread::sleep(COALESCE);
+    if let Ok(mut n) = NUDGE.0.lock() {
+        *n = false;
+    }
+}
+
 fn subscribe() -> (Vec<Radio>, Vec<DeviceWatcher>) {
     let _ = NetworkInformation::NetworkStatusChanged(&NetworkStatusChangedEventHandler::new(|_| {
         nudge();
@@ -256,7 +267,10 @@ fn for_update(w: &DeviceWatcher) {
 pub fn watch(hwnd: HWND) {
     let target = hwnd.0 as isize;
     crate::system::spawn("connectivity", move || {
-        unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
+        unsafe {
+            let _ = RoInitialize(RO_INIT_MULTITHREADED);
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        }
         let _ = Radio::RequestAccessAsync().and_then(|op| op.get());
         let _keep = subscribe();
         let mut kinds: BTreeMap<String, DeviceKind> = BTreeMap::new();
@@ -273,6 +287,9 @@ pub fn watch(hwnd: HWND) {
         let mut devices_at = Instant::now();
         loop {
             let nudged = wait(if quick > 0 { QUICK } else { POLL });
+            if nudged {
+                coalesce();
+            }
             quick = if nudged { QUICK_POLLS } else { quick.saturating_sub(1) };
             let read = radios();
             let mut now = Snapshot { radios: if read.is_empty() { last.radios.clone() } else { read }, airplane: airplane(), net: Net::Offline, vpn: false, devices: last.devices.clone() };
@@ -285,7 +302,8 @@ pub fn watch(hwnd: HWND) {
             if pump.step(&mut last, now, target) {
                 quick = quick.max(2);
             }
-            if !bt_off && (nudged || quick > 0 || devices_at.elapsed() >= DEVICES_EVERY) {
+            let due = devices_at.elapsed();
+            if !bt_off && (due >= DEVICES_EVERY || (due >= DEVICES_MIN && (nudged || quick > 0))) {
                 devices_at = Instant::now();
                 let mut now = last.clone();
                 now.devices = devices(&mut kinds);
