@@ -301,9 +301,14 @@ pub fn watch(hwnd: HWND) {
                 coalesce();
             }
             let fast_started = Instant::now();
+            let switch = airplane();
+            if switch != last.airplane {
+                let early = Snapshot { airplane: switch, ..last.clone() };
+                pump.step(&mut last, early, target);
+            }
             quick = if nudged { QUICK_POLLS } else { quick.saturating_sub(1) };
             let read = radios();
-            let mut now = Snapshot { radios: if read.is_empty() { last.radios.clone() } else { read }, airplane: airplane(), net: Net::Offline, vpn: false, devices: last.devices.clone() };
+            let mut now = Snapshot { radios: if read.is_empty() { last.radios.clone() } else { read }, airplane: switch, net: Net::Offline, vpn: false, devices: last.devices.clone() };
             let profiles = profiles();
             (now.net, now.vpn) = (net_of(&profiles), vpn_of(&profiles));
             let bt_off = now.airplane || now.radios.get(&RadioType::Bluetooth) == Some(&false);
