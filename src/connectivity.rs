@@ -1,9 +1,3 @@
-//! Connectivity watcher: Wi-Fi / Bluetooth / mobile radios on-off, airplane mode, the network in use
-//! (and whether it reaches the internet) and Bluetooth devices connecting. WinRT calls block, so a
-//! worker takes a snapshot, diffs it against the last and queues events for the notch window. It looks
-//! when Windows says something changed (`subscribe`), and every 30 s for what Windows does not say
-//! (a device's battery).
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -20,10 +14,7 @@ use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
-/// Posted when events are queued; read them with `take_events`.
 pub const WM_CONN: u32 = WM_APP + 6;
-/// The watcher looks this often when nothing wakes it (Windows tells most changes, but a radio that was
-/// re-created after airplane mode may stop telling, so this is the safety net).
 const POLL: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -37,9 +28,7 @@ pub enum RadioType {
 pub enum Net {
     #[default]
     Offline,
-    /// Reaches the internet. `name` = Wi-Fi SSID or the connection name (e.g. "Ethernet").
     Online { name: String, wifi: bool },
-    /// Connected to a network that has no internet.
     Limited { name: String, wifi: bool },
 }
 
@@ -59,9 +48,7 @@ pub struct Snapshot {
     pub radios: BTreeMap<RadioType, bool>,
     pub airplane: bool,
     pub net: Net,
-    /// A VPN's own network (Tailscale and the like) is up. Only counts with a network under it, see `changes`.
     pub vpn: bool,
-    /// Connected Bluetooth devices: id -> (name, kind, battery percent if the device reports one).
     pub devices: BTreeMap<String, (String, DeviceKind, Option<u8>)>,
 }
 
@@ -70,21 +57,13 @@ pub enum Event {
     Radio(RadioType, bool),
     Airplane(bool),
     Net(Net),
-    /// A VPN came up (a network is under it) or went down (the network went, or the VPN did).
     Vpn(bool),
-    /// Connected (with its battery when known) or disconnected.
     Device { name: String, kind: DeviceKind, up: bool, battery: Option<u8> },
-    /// A connected device's battery: reported after it connected, or just dropped to `LOW_BATTERY`.
     DeviceBattery { name: String, kind: DeviceKind, percent: u8 },
 }
 
-/// A Bluetooth device at or under this percent gets a low-battery banner.
 pub const LOW_BATTERY: u8 = 20;
 
-/// What changed between two snapshots, in the order it should be told: the airplane switch, the
-/// radios, the network, the VPN, then devices. A banner groups what comes together (see main.rs);
-/// here only the knock-on noise is left out: "offline" and "headphones disconnected" after a radio
-/// or the airplane switch went off.
 pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
     let mut out = Vec::new();
     let airplane_flip = old.airplane != new.airplane;
@@ -104,13 +83,10 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
     if old.net != new.net && !(new.net == Net::Offline && quiet_offline) {
         out.push(Event::Net(new.net.clone()));
     }
-    // A VPN lives on a network that reaches the internet: it is "up" only with one under it, so it is
-    // told after that network came back, and told down when the network goes (not told alone then).
     let vpn_up = |s: &Snapshot| s.vpn && matches!(s.net, Net::Online { .. });
     if vpn_up(old) != vpn_up(new) {
         out.push(Event::Vpn(vpn_up(new)));
     }
-    // Devices, by name (a headset can show up over classic and LE at once, one of them with the battery).
     let names = |s: &Snapshot| {
         let mut m: BTreeMap<String, (DeviceKind, Option<u8>)> = BTreeMap::new();
         for (n, k, b) in s.devices.values() {
@@ -143,14 +119,11 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Vec<Event> {
     out
 }
 
-/// Kind from the Bluetooth class of device (major/minor numbers, 0 = unknown, e.g. LE devices)
-/// and, where the class says nothing useful (keyboards and mice share one class), the name.
 pub fn device_kind(major: i32, minor: i32, name: &str) -> DeviceKind {
     use DeviceKind::*;
     let n = name.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
     match major {
-        // AudioVideo: loudspeaker, hi-fi, display+speaker -> speaker; the rest is worn
         4 => return if matches!(minor, 5 | 10 | 15) { Speaker } else { Headphones },
         2 => return Phone,
         5 if matches!(minor, 1 | 2) => return Gamepad,
@@ -173,12 +146,8 @@ pub fn device_kind(major: i32, minor: i32, name: &str) -> DeviceKind {
     }
 }
 
-/// A network that reaches nothing right after it connects is still being checked by Windows ("no
-/// internet" for a few seconds, then online): it is told only when it stays so this long.
 const LIMITED_AFTER: Duration = Duration::from_secs(8);
 
-/// `net` as it is to be told: a limited network that has not stayed limited for `LIMITED_AFTER` is
-/// still what the network was (`last`). `since` is when it became limited.
 fn settle(net: Net, last: &Net, since: &mut Option<Instant>, now: Instant) -> Net {
     if !matches!(net, Net::Limited { .. }) {
         *since = None;
@@ -188,15 +157,10 @@ fn settle(net: Net, last: &Net, since: &mut Option<Instant>, now: Instant) -> Ne
     if now.saturating_duration_since(start) >= LIMITED_AFTER { net } else { last.clone() }
 }
 
-/// How long "offline" after a radio went off counts as part of it: the network goes a poll later.
 const KNOCK_ON: Duration = Duration::from_secs(4);
 
-/// How long after Bluetooth came on (or airplane mode went off) its devices are left to settle: they
-/// connect, drop and connect again for a few seconds, and that is not worth a "disconnected".
 const DEVICE_SETTLE: Duration = Duration::from_secs(10);
 
-/// Drops "offline" right after a radio went off (the radio's own event says it), and a device
-/// "disconnected" while Bluetooth is still settling after it came on.
 fn drop_knock_on(events: &mut Vec<Event>, radio_off_recent: bool, bluetooth_settling: bool) {
     events.retain(|e| match e {
         Event::Net(Net::Offline) => !radio_off_recent,
@@ -205,9 +169,6 @@ fn drop_knock_on(events: &mut Vec<Event>, radio_off_recent: bool, bluetooth_sett
     });
 }
 
-/// The Bluetooth devices that were connected and are to come back when Bluetooth does (or airplane mode
-/// goes off): the ones connected at start and since, minus the ones that went by themselves. What
-/// vanishes with Bluetooth or airplane mode is not "gone" (`changes` does not tell it), so it stays.
 static KNOWN: Mutex<Vec<(String, DeviceKind)>> = Mutex::new(Vec::new());
 
 pub fn expected_devices() -> Vec<(String, DeviceKind)> {
@@ -230,9 +191,6 @@ pub fn take_events() -> Vec<Event> {
     EVENTS.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
 }
 
-/// Start the watcher. What is already on / connected at start is not announced.
-/// Wakes the watcher before its next poll: the default speaker changed, which is what a headset
-/// connecting or leaving does first. The watcher then looks again for a few seconds, quickly.
 static NUDGE: (Mutex<bool>, std::sync::Condvar) = (Mutex::new(false), std::sync::Condvar::new());
 const QUICK: Duration = Duration::from_millis(500);
 const QUICK_POLLS: u32 = 6;
@@ -244,7 +202,6 @@ pub fn nudge() {
     }
 }
 
-/// Sleep until the next poll, or until nudged; true when nudged.
 fn wait(period: Duration) -> bool {
     let Ok(guard) = NUDGE.0.lock() else {
         std::thread::sleep(period);
@@ -253,8 +210,6 @@ fn wait(period: Duration) -> bool {
     NUDGE.1.wait_timeout_while(guard, period, |n| !*n).map_or(false, |(mut n, _)| std::mem::take(&mut *n))
 }
 
-/// Windows says when the network changes, a radio is switched, or a Bluetooth device connects or goes:
-/// each wakes the watcher (`nudge`). The returned radios and watchers must stay alive.
 fn subscribe() -> (Vec<Radio>, Vec<DeviceWatcher>) {
     let _ = NetworkInformation::NetworkStatusChanged(&NetworkStatusChangedEventHandler::new(|_| {
         nudge();
@@ -285,7 +240,6 @@ fn subscribe() -> (Vec<Radio>, Vec<DeviceWatcher>) {
     (radios, watchers)
 }
 
-/// Updated and Removed carry a `DeviceInformationUpdate`.
 fn for_update(w: &DeviceWatcher) {
     let _ = w.Updated(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(|_, _| {
         nudge();
@@ -303,7 +257,6 @@ pub fn watch(hwnd: HWND) {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
         let _ = Radio::RequestAccessAsync().and_then(|op| op.get());
         let _keep = subscribe();
-        // Class lookups are a round trip each; remember them per device id.
         let mut kinds: BTreeMap<String, DeviceKind> = BTreeMap::new();
         let mut last = snapshot(&mut kinds);
         if let Ok(mut known) = KNOWN.lock() {
@@ -319,9 +272,6 @@ pub fn watch(hwnd: HWND) {
         loop {
             let nudged = wait(if quick > 0 { QUICK } else { POLL });
             quick = if nudged { QUICK_POLLS } else { quick.saturating_sub(1) };
-            // The radios, the airplane switch, the network and the VPN are cheap to read and are told first. The
-            // devices (a lookup of each one's battery, seconds while Bluetooth is coming up) are read after, so a slow
-            // one never holds back what was already known.
             let mut now = Snapshot { radios: radios(), airplane: airplane(), net: Net::Offline, vpn: false, devices: last.devices.clone() };
             let profiles = profiles();
             (now.net, now.vpn) = (net_of(&profiles), vpn_of(&profiles));
@@ -342,11 +292,8 @@ pub fn watch(hwnd: HWND) {
     });
 }
 
-/// How often the devices are read when nothing woke the watcher: each costs lookups of its battery.
 const DEVICES_EVERY: Duration = Duration::from_secs(30);
 
-/// What the watcher remembers between two looks: when a radio went off and when Bluetooth came on (the
-/// knock-on noise that follows is left out), and since when the network has been limited.
 #[derive(Default)]
 struct Pump {
     radio_off_at: Option<Instant>,
@@ -355,8 +302,6 @@ struct Pump {
 }
 
 impl Pump {
-    /// Tells what changed from `last` to `now` (and `last` becomes `now`): the events are queued and the window
-    /// woken. True when a limited network is being waited on, so the next look should come soon.
     fn step(&mut self, last: &mut Snapshot, mut now: Snapshot, target: isize) -> bool {
         let settled = settle(now.net.clone(), &last.net, &mut self.limited_since, Instant::now());
         let waiting = settled != now.net;
@@ -405,7 +350,6 @@ fn radios() -> BTreeMap<RadioType, bool> {
     out
 }
 
-/// Windows keeps the airplane switch here: 1 = on.
 fn airplane() -> bool {
     let mut value = 0u32;
     let mut size = 4u32;
@@ -423,10 +367,8 @@ fn airplane() -> bool {
     r == ERROR_SUCCESS && value == 1
 }
 
-/// A connection profile, as far as the network and the VPN are told from it.
 struct Profile {
     name: String,
-    /// IANA interface type: 6 Ethernet, 71 Wi-Fi, 243/244 mobile broadband; a VPN's is something else (Tailscale: 53).
     iftype: u32,
     wlan: bool,
     level: NetworkConnectivityLevel,
@@ -452,9 +394,6 @@ fn profiles() -> Vec<Profile> {
     }).collect()
 }
 
-/// The network the PC is on: the first Wi-Fi / Ethernet / mobile one that reaches the internet, else
-/// a Wi-Fi one without internet. A VPN's own network (it has "local access" only) never counts: with
-/// Wi-Fi off it used to be what was left, and the banner said "no internet, Tailscale".
 fn net_of(profiles: &[Profile]) -> Net {
     if let Some(p) = profiles.iter().find(|p| p.physical() && p.level == NetworkConnectivityLevel::InternetAccess) {
         return Net::Online { name: p.name.clone(), wifi: p.wlan };
@@ -498,8 +437,6 @@ fn container_of(d: &DeviceInformation) -> Option<GUID> {
     d.Properties().ok()?.Lookup(&HSTRING::from(CONTAINER_KEY)).ok()?.cast::<IReference<GUID>>().ok()?.Value().ok()
 }
 
-/// Battery percent Windows knows for the Bluetooth device in this container (what Settings shows:
-/// hands-free or LE battery reports). None when the device reports none.
 fn battery_of(container: GUID) -> Option<u8> {
     let aqs = HSTRING::from(format!("System.Devices.ContainerId:=\"{{{container:?}}}\""));
     let props = IIterable::<HSTRING>::from(vec![HSTRING::from(BATTERY_KEY)]);
@@ -507,10 +444,8 @@ fn battery_of(container: GUID) -> Option<u8> {
     found.into_iter().find_map(|d| d.Properties().ok()?.Lookup(&HSTRING::from(BATTERY_KEY)).ok()?.cast::<IReference<u8>>().ok()?.Value().ok())
 }
 
-/// DEVPKEY_Bluetooth_Battery: the battery percent as a byte.
 const BATTERY_KEY: &str = "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2";
 
-/// Class of device for a classic Bluetooth id; LE ids and failures give (0, 0).
 fn class_of(id: &str) -> (i32, i32) {
     let Ok(dev) = BluetoothDevice::FromIdAsync(&id.into()).and_then(|op| op.get()) else { return (0, 0) };
     let Ok(c) = dev.ClassOfDevice() else { return (0, 0) };
@@ -551,7 +486,6 @@ mod tests {
         let a = snap(true, true, false, home(), &[]);
         let b = snap(false, true, false, Net::Offline, &[]);
         assert_eq!(changes(&a, &b), vec![Event::Radio(RadioType::Wifi, false)]);
-        // and back on, then the network comes up a poll later
         let c = snap(true, true, false, Net::Offline, &[]);
         assert_eq!(changes(&b, &c), vec![Event::Radio(RadioType::Wifi, true)]);
         assert_eq!(changes(&c, &a), vec![Event::Net(home())]);
@@ -577,7 +511,6 @@ mod tests {
         let on = with_vpn(snap(false, false, true, Net::Offline, &[]));
         let radios = snap(true, true, false, Net::Offline, &[]);
         assert_eq!(changes(&on, &with_vpn(radios.clone())), vec![Event::Airplane(false), Event::Radio(RadioType::Wifi, true), Event::Radio(RadioType::Bluetooth, true)]);
-        // the VPN is not up while there is no network under it; it comes with the network
         let online = with_vpn(snap(true, true, false, home(), &[]));
         assert_eq!(changes(&with_vpn(radios), &online), vec![Event::Net(home()), Event::Vpn(true)]);
     }
@@ -585,18 +518,14 @@ mod tests {
     #[test]
     fn a_vpn_goes_down_with_its_network_and_comes_up_after_it() {
         let a = with_vpn(snap(true, true, false, home(), &[]));
-        // Wi-Fi off: the radio, and the VPN that was on it; "offline" is the radio's doing
         assert_eq!(changes(&a, &with_vpn(snap(false, true, false, Net::Offline, &[]))), vec![Event::Radio(RadioType::Wifi, false), Event::Vpn(false)]);
-        // the VPN switched off by itself, the network stays
         assert_eq!(changes(&a, &snap(true, true, false, home(), &[])), vec![Event::Vpn(false)]);
-        // a VPN adapter alone, with no network, is not "connected"
         let lonely = with_vpn(snap(true, true, false, Net::Offline, &[]));
         assert!(changes(&snap(true, true, false, Net::Offline, &[]), &lonely).is_empty());
     }
 
     #[test]
     fn offline_after_a_radio_went_off_is_not_a_second_story() {
-        // Wi-Fi off and the network gone are one poll apart.
         let mut e = changes(&snap(false, true, false, home(), &[]), &snap(false, true, false, Net::Offline, &[]));
         assert_eq!(e, vec![Event::Net(Net::Offline)]);
         drop_knock_on(&mut e, true, false);
@@ -613,7 +542,6 @@ mod tests {
         let mut e = vec![down.clone(), up.clone()];
         drop_knock_on(&mut e, false, true);
         assert_eq!(e, vec![up], "the drop is left out, the connection is still told");
-        // Later, a device that goes is told as ever.
         let mut e = vec![down.clone()];
         drop_knock_on(&mut e, false, false);
         assert_eq!(e, vec![down]);
@@ -621,8 +549,6 @@ mod tests {
 
     #[test]
     fn a_radio_is_told_before_the_devices_are_read() {
-        // The first look carries the radios and the network only (the devices as they were), the second the devices:
-        // a slow device lookup does not hold back that Wi-Fi went off.
         let mut last = snap(true, true, false, home(), &[("h", "UGREEN", Headphones)]);
         let mut pump = Pump::default();
         EVENTS.lock().unwrap().clear();
@@ -642,10 +568,8 @@ mod tests {
         let down = |n: &str| Event::Device { name: n.into(), kind: Headphones, up: false, battery: None };
         remember(&mut known, &[up("WH-1000XM5"), up("MX Master 3"), up("WH-1000XM5")]);
         assert_eq!(known.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["WH-1000XM5", "MX Master 3"]);
-        // Bluetooth off or airplane mode on tells no "disconnected" (see `changes`): nothing is forgotten.
         let a = with_vpn(snap(true, true, false, home(), &[("h", "WH-1000XM5", Headphones)]));
         assert!(changes(&a, &snap(false, false, true, Net::Offline, &[])).iter().all(|e| !matches!(e, Event::Device { .. })));
-        // One that goes by itself is forgotten.
         remember(&mut known, &[down("MX Master 3")]);
         assert_eq!(known.len(), 1);
     }
@@ -653,7 +577,6 @@ mod tests {
     #[test]
     fn a_vpn_waits_for_a_network_with_internet() {
         let limited = Net::Limited { name: "JihoonKim".into(), wifi: true };
-        // Wi-Fi joined without internet yet, the VPN already there: not "connected" until the network is
         let vpn_first = with_vpn(snap(true, true, false, limited, &[]));
         assert!(changes(&snap(true, true, false, Net::Offline, &[]), &vpn_first).iter().all(|e| !matches!(e, Event::Vpn(_))));
         let online = with_vpn(snap(true, true, false, home(), &[]));
@@ -665,13 +588,10 @@ mod tests {
         let t0 = Instant::now();
         let limited = || Net::Limited { name: "JihoonKim".into(), wifi: true };
         let mut since = None;
-        // just joined: still the network it was
         assert_eq!(settle(limited(), &Net::Offline, &mut since, t0), Net::Offline);
         assert_eq!(settle(limited(), &Net::Offline, &mut since, t0 + Duration::from_secs(7)), Net::Offline);
-        // online in time: the limited state never was
         assert_eq!(settle(home(), &Net::Offline, &mut since, t0 + Duration::from_secs(7)), home());
         assert!(since.is_none());
-        // it stayed limited: told
         let mut since = None;
         settle(limited(), &Net::Offline, &mut since, t0);
         assert_eq!(settle(limited(), &Net::Offline, &mut since, t0 + LIMITED_AFTER), limited());
@@ -681,14 +601,11 @@ mod tests {
     fn the_network_is_wifi_or_ethernet_never_the_vpn() {
         let p = |name: &str, iftype, wlan, level| Profile { name: name.into(), iftype, wlan, level };
         use NetworkConnectivityLevel as L;
-        // what this PC reports (Wi-Fi up, Tailscale up, the rest down)
         let now = [p("Ethernet", 6, false, L::None), p("Tailscale", 53, false, L::LocalAccess), p("JihoonKim", 71, true, L::InternetAccess)];
         assert_eq!(net_of(&now), Net::Online { name: "JihoonKim".into(), wifi: true });
         assert!(vpn_of(&now));
-        // Wi-Fi off: only the VPN's own network is left, which is neither a network nor "limited"
         let off = [p("Ethernet", 6, false, L::None), p("Tailscale", 53, false, L::LocalAccess), p("JihoonKim", 71, true, L::None)];
         assert_eq!(net_of(&off), Net::Offline);
-        // a Wi-Fi without internet is limited; a VPN down is not there
         let cafe = [p("Cafe", 71, true, L::LocalAccess), p("Tailscale", 53, false, L::None)];
         assert_eq!(net_of(&cafe), Net::Limited { name: "Cafe".into(), wifi: true });
         assert!(!vpn_of(&cafe));
@@ -706,7 +623,6 @@ mod tests {
     #[test]
     fn devices_by_name() {
         let a = snap(true, true, false, home(), &[("m", "MX Master", Mouse), ("hc", "WH-1000", Headphones)]);
-        // headset also over LE: same device, nothing new
         let same = snap(true, true, false, home(), &[("m", "MX Master", Mouse), ("hc", "WH-1000", Headphones), ("hl", "WH-1000", Headphones)]);
         assert!(changes(&a, &same).is_empty());
         let b = snap(true, true, false, home(), &[("hl", "WH-1000", Headphones), ("j", "Loa JBL", Speaker)]);
@@ -714,12 +630,10 @@ mod tests {
             changes(&a, &b),
             vec![Event::Device { name: "Loa JBL".into(), kind: Speaker, up: true, battery: None }, Event::Device { name: "MX Master".into(), kind: Mouse, up: false, battery: None }]
         );
-        // Bluetooth switched off: one event, devices dropping with it are not listed
         let off = snap(true, false, false, home(), &[]);
         assert_eq!(changes(&a, &off), vec![Event::Radio(RadioType::Bluetooth, false)]);
     }
 
-    /// Read-only look at this machine: `cargo test snapshot_live -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn snapshot_live() {
@@ -733,16 +647,13 @@ mod tests {
         let none = snap_b(true, true, false, home(), &[]);
         let at = |b: Option<u8>| snap_b(true, true, false, home(), &[("hc", "WH-1000", Headphones, None), ("hl", "WH-1000", Headphones, b)]);
         let ev = |percent| Event::DeviceBattery { name: "WH-1000".into(), kind: Headphones, percent };
-        // connecting: the battery rides on the connect banner (from whichever id reports it)
         assert_eq!(changes(&none, &at(Some(80))), vec![Event::Device { name: "WH-1000".into(), kind: Headphones, up: true, battery: Some(80) }]);
-        // reported a poll after connecting: its own banner, once
         assert_eq!(changes(&at(None), &at(Some(80))), vec![ev(80)]);
         assert!(changes(&at(Some(80)), &at(Some(79))).is_empty(), "small drops are quiet");
         assert_eq!(changes(&at(Some(21)), &at(Some(20))), vec![ev(20)], "low");
         assert!(changes(&at(Some(20)), &at(Some(19))).is_empty(), "low is said once");
     }
 
-    /// Battery of each connected device: `cargo test battery_live -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn battery_live() {

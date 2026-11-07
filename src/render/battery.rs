@@ -1,7 +1,3 @@
-//! The battery as a ring, the way iOS shows it: a thick track, an arc of the charge from the top
-//! clockwise with round ends, and a bolt in the middle while charging.
-//! Green normally and while charging, yellow in battery saver, red at 20 % or less.
-
 use super::*;
 
 const GREEN_RING: (f32, f32, f32) = (0.2, 0.84, 0.29);
@@ -19,13 +15,10 @@ fn ring_colour(b: &Battery) -> (f32, f32, f32) {
 }
 
 impl Renderer {
-    /// A ring of diameter `d` (px) centred on `(x, y)` with a stroke of `width`: a grey track and
-    /// an arc of `fraction` (0..1) from the top clockwise with round ends, in `accent`.
     pub(super) fn draw_ring(&self, centre: (f32, f32), d: f32, width: f32, fraction: f32, accent: (f32, f32, f32), a: f32) -> Result<()> {
         self.draw_ring_on(centre, d, width, fraction, accent, grey(0.3, a), a)
     }
 
-    /// The same ring on a track of the given colour (a card's own tint, say).
     pub(super) fn draw_ring_on(&self, (x, y): (f32, f32), d: f32, width: f32, fraction: f32, accent: (f32, f32, f32), track: D2D1_COLOR_F, a: f32) -> Result<()> {
         let rt = &self.rt;
         let radius = (d - width) / 2.0;
@@ -57,11 +50,9 @@ impl Renderer {
         Ok(())
     }
 
-    /// The battery ring of diameter `d` (px) centred on `(x, y)`, filled to `b.percent`, at opacity `a`.
     pub(super) fn draw_battery_ring(&self, (x, y): (f32, f32), d: f32, b: &Battery, a: f32) -> Result<()> {
         let rt = &self.rt;
         self.draw_ring((x, y), d, d * 0.16, b.percent as f32 / 100.0, ring_colour(b), a)?;
-        // Everything in the middle is drawn on a grid where the ring is 22 across.
         let k = d / 22.0;
         let at = |px: f32, py: f32| Vector2 { X: x + px * k, Y: y + py * k };
         unsafe {

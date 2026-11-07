@@ -1,5 +1,3 @@
-//! The Health page: a card each for water and sitting, with a figure, a bar and a round button; the gear opens the card's settings.
-
 use super::*;
 
 impl Renderer {
@@ -23,17 +21,14 @@ impl Renderer {
         let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
         unsafe {
             let h = hv.h;
-            // The two cards share the content's width and end above the panel's bottom.
             let card_w = ((cr - cl) / s - CARD_GAP) / 2.0;
             let bottom = card_bottom(panel_size(Page::Health)[1]);
             for card in [Card::Water, Card::Sit] {
                 let x = if card == Card::Water { cl } else { cl + (card_w + CARD_GAP) * s };
                 let cb = rect(x, CARD_TOP * s, x + card_w * s, bottom * s);
                 let accent = if card == Card::Water { BLUE } else { ORANGE };
-                // A neutral tile with a hairline of light along its top edge.
                 rt.FillRoundedRectangle(&rounded(cb, 14.0 * s), &self.brush(grey(0.067, a))?);
                 rt.FillRectangle(&rect(cb.left + 12.0 * s, cb.top, cb.right - 12.0 * s, cb.top + 1.0 * s), &self.brush(grey(1.0, a * 0.08))?);
-                // Title row: icon, name, gear.
                 let ty = (CARD_TOP + 4.0) * s;
                 let title = if card == Card::Water { tr("Uống nước", "Water") } else { tr("Đứng dậy", "Stand up") };
                 text(title, F_TITLE, rect(x + 14.0 * s, ty, x + card_w * s - 34.0 * s, ty + 22.0 * s), lead, grey(1.0, a))?;
@@ -79,9 +74,6 @@ impl Renderer {
                                     let hot = hovered == Some(Button::Step(set, dir));
                                     let c = D2D1_ELLIPSE { point: Vector2 { X: (bb.left + bb.right) / 2.0, Y: (bb.top + bb.bottom) / 2.0 }, radiusX: 8.0 * s, radiusY: 8.0 * s };
                                     rt.FillEllipse(&c, &self.brush(grey(if hot { 0.32 } else { 0.2 }, a))?);
-                                    // The sign is drawn as lines, so it sits exactly in the circle's middle (the
-                                    // icon font's minus rides about a pixel high). Whole-pixel stroke, centred on a
-                                    // pixel edge (even width) or a pixel's middle (odd), so it stays crisp.
                                     let w = (1.75 * s).round().max(1.0);
                                     let snap = |v: f32| if w % 2.0 == 0.0 { v.round() } else { v.floor() + 0.5 };
                                     let (mx, my, k) = (snap(c.point.X), snap(c.point.Y), 3.0 * s);
@@ -101,7 +93,6 @@ impl Renderer {
                     }
                     continue;
                 }
-                // The figure, the share of the day done, and the status line.
                 let (big, frac, status) = if card == Card::Water {
                     let status = if !h.water_on { String::new() }
                         else if h.taken_ml >= h.goal_ml { tr("đạt mục tiêu", "goal reached").to_string() }
@@ -120,7 +111,6 @@ impl Renderer {
                         else { format!("{} {} {}", tr("nhắc sau", "reminder in"), (h.sit_every_min as i64 - sat).max(0), tr("phút", "min")) };
                     (sat.to_string(), sat as f32 / h.sit_every_min.max(1) as f32, status)
                 };
-                // The card's own picture, big and faint in its bottom right corner, cut by the tile.
                 rt.PushAxisAlignedClip(&cb, D2D1_ANTIALIAS_MODE_ALIASED);
                 if card == Card::Water {
                     let g = self.water_drop(cb.right - 16.0 * s, cb.bottom - 10.0 * s, 96.0 * s)?;
@@ -129,10 +119,7 @@ impl Renderer {
                     text(ICON_WALK, F_MARK, rect(cb.right - 84.0 * s, cb.bottom - 90.0 * s, cb.right + 30.0 * s, cb.bottom + 24.0 * s), center, solid(accent, a * 0.08))?;
                 }
                 rt.PopAxisAlignedClip();
-                // The figure large; under it what it is of and when the next reminder is.
                 let (bx, by) = (x + 14.0 * s, (CARD_TOP + 30.0) * s);
-                // Two short lines: what the figure is of, then the status; a switched-off tile
-                // leaves the second empty and says so under its gear.
                 let off = status.is_empty();
                 let (unit_inline, line1) = if card == Card::Water {
                     (String::new(), format!("{} {} ml", tr("trên", "of"), h.goal_ml))
@@ -147,20 +134,15 @@ impl Renderer {
                 let line_r = x + (card_w - 54.0) * s;
                 text(&line1, F_LABEL, rect(bx, by + 38.0 * s, line_r, by + 54.0 * s), lead, grey(0.6, a))?;
                 text(&status, F_LABEL, rect(bx, by + 54.0 * s, line_r, by + 70.0 * s), lead, grey(0.75, a))?;
-                // The day's progress as a thin bar along the tile's bottom, in its colour.
                 let (track_l, track_r, track_y) = (bx, x + (card_w - 64.0) * s, (bottom - 16.0) * s);
                 let track = |right: f32| rounded(rect(track_l, track_y, right, track_y + 4.0 * s), 2.0 * s);
                 rt.FillRoundedRectangle(&track(track_r), &self.brush(color(accent.0 * 0.22, accent.1 * 0.22, accent.2 * 0.22, a))?);
                 rt.FillRoundedRectangle(&track(track_l + (track_r - track_l) * frac.clamp(0.0, 1.0)), &self.brush(solid(accent, a))?);
-                // The round action button: + for a drink, a tick for having stood up.
                 let ab = if card == Card::Water { Button::Drink } else { Button::Stood };
                 if let Some(pb) = rect_of(ab) {
                     let k = (if hovered == Some(ab) { 1.0 } else { 0.9 }) * if off { 0.6 } else { 1.0 };
                     let c = D2D1_ELLIPSE { point: Vector2 { X: (pb.left + pb.right) / 2.0, Y: (pb.top + pb.bottom) / 2.0 }, radiusX: (pb.right - pb.left) / 2.0, radiusY: (pb.bottom - pb.top) / 2.0 };
                     rt.FillEllipse(&c, &self.brush(color(accent.0 * k, accent.1 * k, accent.2 * k, a))?);
-                    // Dark on both: white on the orange is only 3.1:1. The sign is drawn as strokes of
-                    // whole pixels (2 px at 100%) so it is bold, centred and crisp; the icon font's
-                    // glyph was one thin pixel and half a pixel off.
                     let w = (2.0 * s).round().max(2.0);
                     let snap = |v: f32| if w % 2.0 == 0.0 { v.round() } else { v.floor() + 0.5 };
                     let (mx, my) = (snap(c.point.X), snap(c.point.Y));
@@ -174,7 +156,6 @@ impl Renderer {
                         rt.DrawLine(at(-2.0, 4.5), at(6.5, -4.5), &ink, w, &self.round);
                     }
                 }
-                // Under the gear: "Later" for a water reminder, or that the tile is off.
                 let under = rect(x + (card_w - 72.0) * s, (CARD_TOP + 28.0) * s, x + (card_w - 12.0) * s, (CARD_TOP + 46.0) * s);
                 if off {
                     text(tr("Đang tắt", "Off"), F_LABEL, under, trail, grey(0.55, a))?;

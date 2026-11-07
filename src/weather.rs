@@ -1,9 +1,3 @@
-//! Weather from Open-Meteo: free, no key, under 10,000 calls a day per IP for non-commercial use,
-//! data under CC BY 4.0 (credited on the Weather page and in the README). The city is typed once
-//! and looked up to coordinates (unaccented: the geocoder matches "Da Nang" and answers "Đà Nẵng");
-//! the current conditions are fetched on a worker thread every REFRESH, and again when the network
-//! comes back or the PC wakes.
-
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -16,27 +10,19 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use crate::i18n::tr;
 use crate::music::{http_get, url_encode};
 
-/// Posted when the place or the conditions change.
 pub const WM_WEATHER: u32 = WM_APP + 9;
 
-/// Open-Meteo's data moves by the hour here (its 15-minute models cover North America and
-/// Central Europe only): every half hour is fresh enough, ~48 calls a day.
 const REFRESH: Duration = Duration::from_secs(30 * 60);
-/// A network or wake-up refresh sooner than this after the last fetch is skipped.
 const MIN_GAP: Duration = Duration::from_secs(2 * 60);
-/// Try again after this when a fetch failed: no hammering (Open-Meteo blocks a client that does), the next
-/// half hour comes and the network or wake-up refreshes wait for it too.
 const RETRY: Duration = REFRESH;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Place {
-    /// As the geocoder spells it, with its marks ("Đà Nẵng").
     pub name: String,
     pub lat: f64,
     pub lon: f64,
 }
 
-/// How temperatures are shown. The data is always in °C.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Unit {
     C,
@@ -44,8 +30,6 @@ pub enum Unit {
 }
 
 impl Unit {
-    /// What the PC's region setting says: Fahrenheit where Windows counts in US units (the US and
-    /// a few others), Celsius everywhere else.
     pub fn automatic() -> Unit {
         if crate::system::us_measurement() { Unit::F } else { Unit::C }
     }
@@ -57,9 +41,6 @@ impl Unit {
         }
     }
 
-    /// `celsius` as a whole number in this unit ("82"). Rounded before it is written, so -0.4 is
-    /// "0", never "-0"; below zero it starts with a real minus sign (U+2212: as wide as a plus and
-    /// level with the digits, which a hyphen is not).
     pub fn number(self, celsius: f32) -> String {
         let v = match self {
             Unit::C => celsius,
@@ -69,7 +50,6 @@ impl Unit {
         if n < 0 { format!("\u{2212}{}", -n) } else { n.to_string() }
     }
 
-    /// The settings file's word for it.
     pub fn tag(self) -> &'static str {
         match self {
             Unit::C => "c",
@@ -86,7 +66,6 @@ impl Unit {
     }
 }
 
-/// What the sky is doing, from the WMO weather code.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Sky {
     Clear,
@@ -100,32 +79,24 @@ pub enum Sky {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Now {
-    /// °C.
     pub temp: f32,
     pub feels: f32,
-    /// %.
     pub humidity: f32,
-    /// km/h.
     pub wind: f32,
     pub sky: Sky,
     pub day: bool,
 }
 
-/// Today's sunrise and sunset, minutes of the local day.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sun {
     pub rise: u16,
     pub set: u16,
 }
 
-/// Where the sun is on its path at a minute of the day.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SunPos {
-    /// Before sunrise.
     Dawn,
-    /// Up: how far along its path, 0..1.
     Day(f32),
-    /// After sunset.
     Dusk,
 }
 
@@ -141,8 +112,6 @@ impl Sun {
         }
     }
 
-    /// How far the moon is on its way at `minute`, 0..1: it rises where the sun set and sets where the sun rises, so the night is
-    /// the day's path walked again, from sunset (0) to the next sunrise (1).
     pub fn night_progress(self, minute: u32) -> f32 {
         let (rise, set) = (self.rise as u32, self.set as u32);
         let night = (1440 + rise).saturating_sub(set).max(1);
@@ -150,41 +119,30 @@ impl Sun {
         (since as f32 / night as f32).clamp(0.0, 1.0)
     }
 
-    /// Minutes of daylight left at `minute` (0 once it has set).
     pub fn daylight_left(self, minute: u32) -> u32 {
         (self.set as u32).saturating_sub(minute)
     }
 }
 
-/// "2026-11-05T05:42" -> minutes of that day (342).
 pub fn parse_clock(stamp: &str) -> Option<u16> {
     let (h, m) = stamp.get(11..16)?.split_once(':')?;
     let (h, m): (u16, u16) = (h.parse().ok()?, m.parse().ok()?);
     (h < 24 && m < 60).then_some(h * 60 + m)
 }
 
-/// One hour of the forecast.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hour {
-    /// Local hour of day, 0..23.
     pub hour: u8,
-    /// °C.
     pub temp: f32,
-    /// Chance of rain, %.
     pub rain: u8,
-    /// km/h.
     pub wind: f32,
     pub sky: Sky,
     pub day: bool,
 }
 
-/// Rain at or above this chance (%) is told as coming.
 const RAIN_LIKELY: u8 = 50;
-/// Wind at or above this (km/h) is told as strong.
 const WIND_STRONG: f32 = 30.0;
 
-/// The hours worth telling in the next 24: the first with rain likely, the hottest by day, the
-/// windiest once strong.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Outlook {
     pub rain: Option<Hour>,
@@ -200,27 +158,20 @@ pub fn outlook(hours: &[Hour]) -> Outlook {
     }
 }
 
-/// Conditions older than this (minutes) are shown as old: a failed fetch keeps the last ones.
 pub const STALE_MIN: i64 = 90;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     pub place: Option<Place>,
     pub now: Option<Now>,
-    /// The next 24 hours from this one, fetched with `now`.
     pub hours: Vec<Hour>,
-    /// Today's sunrise and sunset there (None: not known, or the sun does not rise and set).
     pub sun: Option<Sun>,
-    /// When `now` was fetched, local yyyymmddHHMM.
     pub updated: Option<u64>,
-    /// A lookup is running.
     pub looking: bool,
-    /// The last city typed that the geocoder did not know.
     pub not_found: Option<String>,
 }
 
 impl State {
-    /// The conditions are older than STALE_MIN at `now` (local yyyymmddHHMM).
     pub fn is_stale(&self, now: u64) -> bool {
         self.updated.is_some_and(|u| crate::todo::minutes(now) - crate::todo::minutes(u) > STALE_MIN)
     }
@@ -245,10 +196,7 @@ impl Weather {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             let notify = || unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_WEATHER, WPARAM(0), LPARAM(0)); };
             let mut last: Option<Instant> = None;
-            // How long after `last` a network or wake-up refresh is skipped: MIN_GAP after a good fetch, a whole
-            // REFRESH after a failed one.
             let mut gap = MIN_GAP;
-            // Fetched at once, then every REFRESH; a failed fetch (no network yet) waits for the next one.
             let mut job = Some(Job::Refresh);
             let mut wait = REFRESH;
             loop {
@@ -272,19 +220,16 @@ impl Weather {
                             continue;
                         }
                     }
-                    // The Weather page switched off: no network.
                     Some(Job::Refresh) if !crate::render::page_shown(crate::render::Page::Weather) => wait = REFRESH,
                     Some(Job::Refresh) if last.is_none_or(|t| t.elapsed() >= gap) => {
                         let place = shared.lock().ok().and_then(|s| s.place.clone());
                         wait = REFRESH;
                         if let Some(p) = place {
-                            // Every try counts, good or not, so a flapping network cannot repeat it.
                             last = Some(Instant::now());
                             match current(&p) {
                                 Some((now, hours, sun)) => {
                                     gap = MIN_GAP;
                                     if let Ok(mut s) = shared.lock() {
-                                        // The city may have been switched or switched off while this was fetched.
                                         if s.place.as_ref() == Some(&p) {
                                             (s.now, s.hours, s.sun, s.updated) = (Some(now), hours, sun, Some(crate::system::now_stamp()));
                                         }
@@ -310,7 +255,6 @@ impl Weather {
         Weather { state, jobs }
     }
 
-    /// Look `city` up (as typed: marks and all) and switch to it when found.
     pub fn find(&self, city: &str) {
         let city = city.trim();
         if city.is_empty() {
@@ -322,14 +266,12 @@ impl Weather {
         let _ = self.jobs.send(Job::Find(city.to_string()));
     }
 
-    /// Switch the weather off: no city, nothing shown.
     pub fn clear(&self) {
         if let Ok(mut s) = self.state.lock() {
             *s = State::default();
         }
     }
 
-    /// Fetch again now (network back, PC awake), unless it was just done.
     pub fn refresh(&self) {
         let _ = self.jobs.send(Job::Refresh);
     }
@@ -339,7 +281,6 @@ impl Weather {
     }
 }
 
-/// Vietnamese letters without their marks: "Đà Nẵng" -> "Da Nang". Other text is kept.
 pub fn strip_marks(s: &str) -> String {
     const GROUPS: [(&str, char); 12] = [
         ("àáạảãâầấậẩẫăằắặẳẵ", 'a'), ("ÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴ", 'A'),
@@ -358,8 +299,6 @@ pub fn strip_marks(s: &str) -> String {
         .collect()
 }
 
-/// What to ask the geocoder for a typed city: unaccented, without "TP" / "Thành phố" / "Tỉnh" in
-/// front or "Việt Nam" behind, and the usual short names spelled out (it does not know "HCM").
 pub fn query_name(typed: &str) -> String {
     let plain = strip_marks(typed).replace(['.', ','], " ");
     let mut words: Vec<&str> = plain.split_whitespace().collect();
@@ -381,13 +320,6 @@ pub fn query_name(typed: &str) -> String {
     }
 }
 
-/// GET `url` and return its body. WinINet first: it builds certificate chains the way the rest of
-/// Windows does (curl, .NET, the browsers), and Open-Meteo's API hosts, on Let's Encrypt's newest
-/// roots, make WinHTTP (behind the WinRT HttpClient) fail with 0x80072F8F on a PC whose root list is
-/// not up to date, measured on this one. Certificate checks stay fully on. The WinRT client is the
-/// fallback (it follows the WinHTTP proxy setting, WinINet the user's).
-/// One request when the server answers (even with an error: asking again at once would be the hammering);
-/// the second way only when the first could not reach it at all.
 fn fetch(url: &str) -> Option<String> {
     match wininet_get(url) {
         Ok(body) => Some(body),
@@ -396,14 +328,11 @@ fn fetch(url: &str) -> Option<String> {
     }
 }
 
-/// The body, or `Err(answered)`: whether the server answered (with an error status) or was not reached.
 fn wininet_get(url: &str) -> Result<String, bool> {
     use std::ffi::c_void;
     use windows::core::{w, PCWSTR};
     use windows::Win32::Networking::WinInet::*;
-    /// Biggest answer read (these are a few hundred bytes).
     const MAX: usize = 256 * 1024;
-    /// A WinINet handle, closed when it goes out of scope.
     struct Handle(*mut c_void);
     impl Drop for Handle {
         fn drop(&mut self) {
@@ -416,7 +345,6 @@ fn wininet_get(url: &str) -> Result<String, bool> {
             return Err(false);
         }
         let session = Handle(session);
-        // 15 s to connect and to receive, so a dead network does not hold the worker for minutes.
         let timeout = 15_000u32.to_ne_bytes();
         for option in [INTERNET_OPTION_CONNECT_TIMEOUT, INTERNET_OPTION_RECEIVE_TIMEOUT] {
             let _ = InternetSetOptionW(Some(session.0), option, Some(timeout.as_ptr() as *const c_void), timeout.len() as u32);
@@ -447,7 +375,6 @@ fn wininet_get(url: &str) -> Result<String, bool> {
     }
 }
 
-/// The sky for a WMO weather code (Open-Meteo's `weather_code`).
 pub fn sky(code: u32) -> Sky {
     match code {
         0 | 1 => Sky::Clear,
@@ -461,7 +388,6 @@ pub fn sky(code: u32) -> Sky {
     }
 }
 
-/// The sky in words.
 pub fn describe(sky: Sky) -> &'static str {
     match sky {
         Sky::Clear => tr("Trời quang", "Clear"),
@@ -474,8 +400,6 @@ pub fn describe(sky: Sky) -> &'static str {
     }
 }
 
-/// Colours of the big icon on the Weather page: (the cloud, moon or sun itself, what comes with
-/// it: rays, drops, snow, the bolt).
 pub fn tints(sky: Sky, day: bool) -> ((f32, f32, f32), (f32, f32, f32)) {
     const SUN: (f32, f32, f32) = (1.0, 0.8, 0.25);
     const MOON: (f32, f32, f32) = (0.78, 0.84, 1.0);
@@ -489,12 +413,10 @@ pub fn tints(sky: Sky, day: bool) -> ((f32, f32, f32), (f32, f32, f32)) {
         Sky::Fog => (CLOUD, (0.62, 0.66, 0.74)),
         Sky::Rain => (CLOUD, (0.4, 0.7, 1.0)),
         Sky::Snow => (CLOUD, (0.88, 0.95, 1.0)),
-        // A darker slate cloud under the bolt, not purple.
         Sky::Storm => ((0.58, 0.64, 0.76), (1.0, 0.85, 0.2)),
     }
 }
 
-/// The geocoder's best place for a typed city: one in Vietnam if there is any, else its first.
 fn find_place(typed: &str) -> Option<Place> {
     let name = query_name(typed);
     if name.is_empty() {
@@ -516,7 +438,6 @@ fn find_place(typed: &str) -> Option<Place> {
     places.into_iter().nth(pick).map(|(p, _)| p)
 }
 
-/// The conditions now, the next 24 hours and today's sun, in one request.
 fn current(p: &Place) -> Option<(Now, Vec<Hour>, Option<Sun>)> {
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day&hourly=temperature_2m,precipitation_probability,wind_speed_10m,weather_code,is_day&daily=sunrise,sunset&forecast_hours=24&timezone=auto",
@@ -536,7 +457,6 @@ fn current(p: &Place) -> Option<(Now, Vec<Hour>, Option<Sun>)> {
     Some((now, hourly(&body).unwrap_or_default(), daily_sun(&body)))
 }
 
-/// Today's sunrise and sunset from Open-Meteo's `daily` columns (the first row is today).
 fn daily_sun(body: &JsonObject) -> Option<Sun> {
     let d = body.GetNamedObject(&HSTRING::from("daily")).ok()?;
     let first = |k: &str| d.GetNamedArray(&HSTRING::from(k)).ok()?.GetStringAt(0).ok().map(|s| s.to_string());
@@ -544,7 +464,6 @@ fn daily_sun(body: &JsonObject) -> Option<Sun> {
     (rise < set).then_some(Sun { rise, set })
 }
 
-/// Open-Meteo's `hourly` columns as rows. A missing rain chance (null) counts as 0.
 fn hourly(body: &JsonObject) -> Option<Vec<Hour>> {
     let h = body.GetNamedObject(&HSTRING::from("hourly")).ok()?;
     let col = |k: &str| h.GetNamedArray(&HSTRING::from(k)).ok();
@@ -563,7 +482,6 @@ fn hourly(body: &JsonObject) -> Option<Vec<Hour>> {
     }).collect()
 }
 
-/// The place as one settings line: "lat,lon,name".
 pub fn place_line(p: &Place) -> String {
     format!("{:.5},{:.5},{}", p.lat, p.lon, p.name)
 }
@@ -651,7 +569,6 @@ mod tests {
         assert!(!st(Some(at(1, 0))).is_stale(at(2, 30)), "exactly 90 minutes is still fresh");
         assert!(st(Some(at(1, 0))).is_stale(at(2, 31)));
         assert!(!st(None).is_stale(at(23, 0)), "never fetched: not 'old', just absent");
-        // Across midnight.
         assert!(st(Some(crate::todo::stamp(20261028, 23, 0))).is_stale(at(1, 0)));
         assert!(!st(Some(crate::todo::stamp(20261028, 23, 30))).is_stale(at(0, 40)));
     }
@@ -711,7 +628,6 @@ mod tests {
         assert_eq!(sun.pos(705), SunPos::Day(0.5));
         assert_eq!(sun.pos(1068), SunPos::Dusk);
         assert_eq!((sun.daylight_left(1000), sun.daylight_left(1068), sun.daylight_left(1300)), (68, 0, 0));
-        // The night is 24 h - 12 h 06 = 11 h 54 long (714 min): the moon is at the start at sunset, the end at sunrise.
         assert_eq!(sun.night_progress(1068), 0.0);
         assert!((sun.night_progress(1068 + 357) - 0.5).abs() < 1e-6, "half way at the middle of the night (midnight is 372 min in)");
         assert!((sun.night_progress(341) - (1.0 - 1.0 / 714.0)).abs() < 1e-4, "a minute before sunrise it is nearly at the end");

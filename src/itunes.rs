@@ -1,5 +1,3 @@
-//! iTunes COM media source.
-
 use crate::music::{Cmd, Repeat, Track};
 use std::{
     fs,
@@ -121,7 +119,7 @@ fn invoke(dispatch: &IDispatch, member: &str, flags: DISPATCH_FLAGS, args: &mut 
         let iid_null = GUID::zeroed();
         dispatch.GetIDsOfNames(&iid_null, &name, 1, 0, &mut id).ok()?;
         let mut result = Variant::default();
-        let mut property_put = -3i32; // DISPID_PROPERTYPUT
+        let mut property_put = -3i32;
         let params = DISPPARAMS {
             rgvarg: if args.is_empty() { std::ptr::null_mut() } else { args.as_mut_ptr().cast() },
             rgdispidNamedArgs: if flags == DISPATCH_PROPERTYPUT { &mut property_put } else { std::ptr::null_mut() },
@@ -143,13 +141,11 @@ fn dispatch_property(dispatch: &IDispatch, member: &str) -> Option<IDispatch> {
 
 fn app() -> Option<IDispatch> {
     unsafe {
-        // Only activate the COM server after confirming its verified iTunes window exists.
         FindWindowW(None, w!("iTunes")).ok()?;
         CoCreateInstance::<_, IDispatch>(&ITUNES_CLSID, None, CLSCTX_LOCAL_SERVER).ok()
     }
 }
 
-/// `IITPlaylist.SongRepeat` (ITPlaylistRepeatMode): 0 off, 1 one song, 2 all.
 fn repeat_from(code: i32) -> Repeat {
     match code {
         1 => Repeat::One,
@@ -183,7 +179,6 @@ pub fn read() -> Option<Track> {
     let duration_ms = property(&current, "Duration")?.as_seconds().map(seconds_to_ms)?;
     let position_ms = property(&app, "PlayerPosition")?.as_seconds().map(seconds_to_ms)?;
     let playing = property(&app, "PlayerState")?.as_i32()? == 1;
-    // Shuffle and repeat belong to the playlist that is playing.
     let playlist = dispatch_property(&app, "CurrentPlaylist");
     let shuffle = playlist.as_ref().and_then(|p| property(p, "Shuffle")?.as_bool()).unwrap_or(false);
     let repeat = playlist.as_ref().and_then(|p| property(p, "SongRepeat")?.as_i32()).map_or(Repeat::Off, repeat_from);

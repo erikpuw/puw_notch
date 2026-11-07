@@ -1,15 +1,6 @@
-//! Line icons of the status banners and Bluetooth devices, and how they move.
-//!
-//! Each icon is a few SVG paths on a square grid, stroked with round caps. The shapes come from
-//! Tabler Icons (MIT) (the weather ones are Lucide, ISC) and, for Bluetooth, the plug, the plane and the charging battery, from the
-//! animated set on itshover.com; the motion is written here. Parts that move on their own sit in
-//! a group (0..3, each with an origin to turn and scale about); a group also carries an opacity.
-
 use crate::anim::{self, bump, ease_out, ease_out_back, lerp_in};
 use crate::render::*;
 
-/// One path of an icon: `g` = the group that moves it, `a` = the group whose opacity fades it
-/// (NONE = none).
 pub struct Part {
     pub d: &'static str,
     pub g: u8,
@@ -28,7 +19,6 @@ const fn fades(d: &'static str, a: u8) -> Part {
     Part { d, g: NONE, a }
 }
 
-/// How an icon moves in the first moments of its banner.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Anim {
     Bluetooth,
@@ -55,29 +45,21 @@ pub enum Anim {
     Gamepad,
     UsbIn,
     UsbOut,
-    /// Weather: the cloud sways (and the fog's line under it, the other way).
     Drift,
-    /// Weather: rain drops or snow fall into place.
     Fall,
-    /// Weather: the lightning bolt flashes twice.
     Flash,
 }
 
 pub struct Icon {
-    /// Side of the square grid the paths are on.
     pub vb: f32,
-    /// Stroke width on that grid.
     pub sw: f32,
     pub parts: &'static [Part],
-    /// Where each group turns and scales from.
     pub origins: [(f32, f32); 4],
     pub anim: Anim,
 }
 
 const MID: [(f32, f32); 4] = [(12.0, 12.0); 4];
 
-/// The Music page's player controls (Tabler Icons, MIT): previous, next, shuffle, repeat all and repeat one. They do not
-/// move (`anim` is only a placeholder), they are drawn like the banner icons so every line icon has the same stroke.
 pub static PLAYER_PREV: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M20 5v14l-12 -7z"), p("M4 5l0 14")] };
 pub static PLAYER_NEXT: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M4 5v14l12 -7z"), p("M20 5l0 14")] };
 pub static FOCUS_RESET: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M19.95 11a8 8 0 1 0 -.5 4"), p("M20 20v-5h-5")] };
@@ -92,7 +74,6 @@ pub static PLAYER_REPEAT: Icon = Icon {
 pub static PLAYER_REPEAT_ONE: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
     parts: &[p("M4 12v-3a3 3 0 0 1 3 -3h13m-3 -3l3 3l-3 3"), p("M20 12v3a3 3 0 0 1 -3 3h-13m3 3l-3 -3l3 -3"),
-        // The "1": bigger than Tabler's (7 units tall, not 4) and its stem drawn twice, 0.8 apart, so it reads at 17 px.
         p("M10.2 10.2l2.1 -1.4v7.2"), p("M13.1 9.2v6.8")],
 };
 
@@ -104,7 +85,6 @@ static SUN: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Sun, origins: MID,
     parts: &[moves("M12 12m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", 0), moves("M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7", 1)],
 };
-/// The charging battery of itshover: its four bars fill one by one.
 static CHARGING: Icon = Icon {
     vb: 48.0, sw: 3.6, anim: Anim::Charging, origins: MID,
     parts: &[
@@ -113,7 +93,6 @@ static CHARGING: Icon = Icon {
         p("M37 10H8C5.2386 10 3 12.2386 3 15V33C3 35.7614 5.2386 38 8 38H37C39.7614 38 42 35.7614 42 33V15C42 12.2386 39.7614 10 37 10Z"),
     ],
 };
-/// The plug of itshover, its two halves pulling apart.
 static PLUG: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Unplug, origins: MID,
     parts: &[
@@ -180,7 +159,6 @@ static WIFI_OFF: Icon = Icon {
         moves("M3 3l18 18", 0),
     ],
 };
-/// "No Internet": the globe with a slash.
 static NO_INTERNET: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::WifiOff, origins: MID,
     parts: &[
@@ -262,14 +240,9 @@ const USB_PARTS: &[Part] = &[
     moves("M7 9m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0", 0),
     moves("M10 5.5h4l-2 -2.5z", 0),
 ];
-/// A USB device plugged in: the whole plug slides up into its socket.
 static USB: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::UsbIn, origins: MID, parts: USB_PARTS };
-/// A USB device pulled out: the same symbol shaking and dimming.
 static USB_OUT: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::UsbOut, origins: MID, parts: USB_PARTS };
 
-// Weather icons come from Lucide (ISC), cloud-sun and cloud-moon included. Each lists its body first
-// (the cloud, the moon, the sun) and then what comes with it (rays, drops, snow, the bolt): the
-// Weather page colours the first path as the body and the rest as the accent (`weather::tints`).
 const WX_CLOUD_PLAIN: &str = "M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z";
 const WX_CLOUD_TOP: &str = "M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242";
 static WX_SUN: Icon = Icon {
@@ -319,7 +292,6 @@ static WX_STORM: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Flash, origins: MID,
     parts: &[p("M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973"), moves("m13 12-3 5h4l-3 5", 1)],
 };
-/// The weather icon for `sky`, by day or night.
 pub fn weather(sky: crate::weather::Sky, day: bool) -> &'static Icon {
     use crate::weather::Sky;
     match (sky, day) {
@@ -335,7 +307,6 @@ pub fn weather(sky: crate::weather::Sky, day: bool) -> &'static Icon {
     }
 }
 
-/// The line icon drawn in place of a banner glyph, if it has one.
 pub fn lookup(glyph: &str) -> Option<&'static Icon> {
     Some(match glyph {
         ICON_BT => &BLUETOOTH,
@@ -367,10 +338,6 @@ pub fn lookup(glyph: &str) -> Option<&'static Icon> {
     })
 }
 
-// ---- motion ----------------------------------------------------------------------------------
-
-/// How one group is moved: turn (degrees) and scale about the group's origin, then shift (grid
-/// units), and its opacity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Motion {
     pub rot: f32,
@@ -384,7 +351,6 @@ impl Motion {
     pub const STILL: Motion = Motion { rot: 0.0, scale: 1.0, dx: 0.0, dy: 0.0, alpha: 1.0 };
 }
 
-/// The four groups of `anim` at `age` seconds.
 pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
     let mut g = [Motion::STILL; 4];
     if age >= anim::ICON_MOTION_S {
@@ -413,7 +379,6 @@ pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
                 m.alpha = lerp_in(t, 0.1 + i as f32 * 0.15, 0.15);
             }
         }
-        // Joined at first (the halves pushed together), then pulling apart to where they rest.
         Anim::Unplug => {
             let k = 1.0 - ease_out(t / 0.5);
             (g[0].dx, g[0].dy, g[1].dx, g[1].dy) = (2.0 * k, -2.0 * k, -2.0 * k, 2.0 * k);
@@ -422,13 +387,11 @@ pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
         Anim::Plane => {
             let v = bump(t, 0.0, 0.6);
             (g[0].dx, g[0].dy) = (0.5 * v, -0.5 * v);
-            // Two streaks of wind sweep down and left across the icon, fading in and out.
             let (a, b) = (ease_out(t / 0.9), ease_out((t - 0.2) / 0.9));
             let streak = |x: f32| (std::f32::consts::PI * x).sin().max(0.0);
             (g[1].dx, g[1].dy, g[1].alpha) = (10.0 - 22.0 * a, -6.0 + 30.0 * a, streak(a));
             (g[2].dx, g[2].dy, g[2].alpha) = (26.0 - 26.0 * b, 8.0 + 18.0 * b, streak(b));
         }
-        // The two sound waves appear one after the other.
         Anim::Volume => {
             g[0].alpha = lerp_in(t, 0.1, 0.15);
             g[1].alpha = lerp_in(t, 0.25, 0.15);
@@ -460,7 +423,6 @@ pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
         }
         Anim::Pulse => g[0].scale = scale(1.1, 0.25, 0.5),
         Anim::Ring => g[0].rot = 14.0 * shake,
-        // Two blinks of the single remaining bar.
         Anim::BatteryLow => g[0].alpha = 1.0 - 0.9 * (tau * 2.0 * lerp_in(t, 0.2, 0.8)).sin().abs(),
         Anim::Saver => g[0].scale = scale(1.2, 0.25, 0.5),
         Anim::Bell => g[0].rot = 24.0 * (-2.5 * t).exp() * (tau * 2.5 * t).sin(),
@@ -487,12 +449,10 @@ pub fn motion(anim: Anim, age: f32) -> [Motion; 4] {
     g
 }
 
-/// The whole icon pops in: scale and opacity at `age`.
 pub fn pop(age: f32) -> (f32, f32) {
     (0.75 + 0.25 * ease_out_back(age / 0.3), (age / 0.15).clamp(0.0, 1.0))
 }
 
-/// Water drop (drawn by the renderer itself): pops in, then hops.
 pub fn drop_motion(age: f32) -> Motion {
     if age >= anim::ICON_MOTION_S {
         return Motion::STILL;
@@ -500,15 +460,11 @@ pub fn drop_motion(age: f32) -> Motion {
     Motion { dy: -1.4 * (-4.0 * age).exp() * (std::f32::consts::TAU * 2.5 * age).sin().abs(), ..Motion::STILL }
 }
 
-// ---- SVG path data -----------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Seg {
     Move(f32, f32),
     Line(f32, f32),
-    /// Control 1, control 2, end.
     Cubic([f32; 6]),
-    /// Radii, x-axis rotation in degrees, large-arc flag, sweep flag (clockwise), end.
     Arc { rx: f32, ry: f32, rot: f32, large: bool, sweep: bool, x: f32, y: f32 },
     Close,
 }
@@ -525,7 +481,6 @@ impl Scan<'_> {
         }
     }
 
-    /// A number: optional sign, digits, optional fraction ("-.5", "1.5", ".01"); a second '.' starts the next number.
     fn num(&mut self) -> Option<f32> {
         self.skip();
         let start = self.i;
@@ -556,8 +511,6 @@ impl Scan<'_> {
     }
 }
 
-/// Parse SVG path data (M L H V C S A Z, absolute or relative; quadratic curves are not used by
-/// these icons and give None) into absolute segments.
 pub fn parse(d: &str) -> Option<Vec<Seg>> {
     let mut sc = Scan { s: d.as_bytes(), i: 0 };
     let (mut cx, mut cy, mut sx, mut sy) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
@@ -658,11 +611,9 @@ mod tests {
 
     #[test]
     fn parses_packed_numbers_and_arcs() {
-        // ".5.5" is two numbers, "-.5" is one.
         assert_eq!(parse("M10 10l.5.5l-.5 1"), Some(vec![Seg::Move(10.0, 10.0), Seg::Line(10.5, 10.5), Seg::Line(10.0, 11.5)]));
         let a = parse("M0 0a4 4 0 1 0 8 0").unwrap();
         assert_eq!(a[1], Seg::Arc { rx: 4.0, ry: 4.0, rot: 0.0, large: true, sweep: false, x: 8.0, y: 0.0 });
-        // 'm' after the first move: relative to the current point, then implicit relative lineto.
         let m = parse("M12 12m-4 0a4 4 0 1 0 8 0").unwrap();
         assert_eq!(m[1], Seg::Move(8.0, 12.0));
     }
@@ -735,38 +686,30 @@ mod tests {
             let v: Vec<f32> = (0..100).map(|i| f(&motion(anim, i as f32 * 0.01)[g])).collect();
             (v.iter().cloned().fold(f32::MAX, f32::min), v.iter().cloned().fold(f32::MIN, f32::max))
         };
-        // Bluetooth: the symbol swells, the dots swell and dim one after the other.
         assert!(range(Anim::Bluetooth, 0, |m| m.scale).1 > 1.05);
         let dot = |i: usize, t: f32| motion(Anim::Bluetooth, t)[i].scale;
         assert!(dot(1, 0.45) > dot(2, 0.45), "first dot peaks before the second");
-        // The charging bars fill in order and all end lit.
         let bars = motion(Anim::Charging, 0.3);
         assert!(bars[0].alpha > bars[1].alpha && bars[1].alpha >= bars[2].alpha && bars[2].alpha >= bars[3].alpha, "{bars:?}");
         assert_eq!(motion(Anim::Charging, 0.0)[0].alpha, 0.0);
-        // Wi-Fi arcs appear one after the other; volume waves too.
         let w = motion(Anim::Wifi, 0.3);
         assert!(w[0].alpha > w[1].alpha && w[1].alpha > w[2].alpha, "{w:?}");
         let v = motion(Anim::Volume, 0.2);
         assert!(v[0].alpha > v[1].alpha, "{v:?}");
-        // Off / muted: the rest of the icon shakes, both ways; the mute cross pops in.
         let (lo, hi) = range(Anim::MicOff, 1, |m| m.dx);
         assert!(lo < -0.2 && hi > 0.2, "{lo} {hi}");
         assert!(motion(Anim::Mute, 0.0)[0].scale < 0.6 && motion(Anim::Mute, 0.5)[0].scale > 0.95);
-        // Unplug: the halves start pushed together and pull apart; the legs come back.
         let start = motion(Anim::Unplug, 0.0);
         assert!(start[0].dx > 1.0 && start[1].dx < -1.0 && start[2].alpha < 0.1, "{start:?}");
         assert_eq!(motion(Anim::Unplug, 0.6)[0].dx, 0.0);
-        // USB in: slides up from below into place; USB out: shakes sideways and dims, both ways.
         let usb = motion(Anim::UsbIn, 0.0)[0];
         assert!(usb.dy > 2.5 && motion(Anim::UsbIn, 0.5)[0].dy == 0.0, "{usb:?}");
         let (lo, hi) = range(Anim::UsbOut, 0, |m| m.dx);
         assert!(lo < -0.3 && hi > 0.3 && range(Anim::UsbOut, 0, |m| m.alpha).0 < 0.7, "{lo} {hi}");
-        // A key goes down; a low battery's bar blinks; the bell swings both ways from its top.
         assert!(range(Anim::Keyboard, 0, |m| m.dy).1 > 0.5);
         assert!(range(Anim::BatteryLow, 0, |m| m.alpha).0 < 0.3);
         let (lo, hi) = range(Anim::Bell, 0, |m| m.rot);
         assert!(lo < -5.0 && hi > 5.0);
-        // The plane's wind streaks cross the icon and fade out.
         assert!(range(Anim::Plane, 1, |m| m.alpha).1 > 0.9 && motion(Anim::Plane, 0.99)[1].alpha < 0.01);
     }
 

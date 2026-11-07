@@ -1,10 +1,3 @@
-//! Plan limits (5-hour and weekly) of the AI apps on this PC, read from what those apps already
-//! keep locally, nothing is sent anywhere: Claude Code's status line (a one-line script in its
-//! settings.json drops its JSON into %APPDATA%\PuwNotch), Codex's session logs, and Antigravity's
-//! own language server on 127.0.0.1 (asked with the token on its command line, so only while the
-//! app is open). A worker thread re-reads them every POLL; `Watch` turns the weekly numbers into
-//! banner alerts.
-
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io::{Read, Seek, SeekFrom};
@@ -24,16 +17,11 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 use crate::i18n::tr;
 
-/// Posted when a reading changes.
 pub const WM_USAGE: u32 = WM_APP + 12;
 
-/// How often the apps are read again.
 const POLL: Duration = Duration::from_secs(60);
-/// ... and this often while the Limits page is open.
 const POLL_OPEN: Duration = Duration::from_secs(5);
-/// How much of a Codex session log's end is searched for the last rate-limit event.
 const CODEX_TAIL: u64 = 512 * 1024;
-/// Newest Codex logs tried before giving up.
 const CODEX_FILES: usize = 6;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -54,19 +42,14 @@ impl App {
         }
     }
 
-    /// Whether the app itself shows what is left (counting down from 100 %: Codex, Antigravity)
-    /// rather than what is used (Claude); the notch follows each app's own way.
     pub fn counts_down(self) -> bool {
         self != App::Claude
     }
 
-    /// How old a reading may be (seconds) before the Limits page says so: the Claude app takes a
-    /// sample every 15 minutes, Codex writes one with each turn of its agent.
     pub fn stale_after(self) -> i64 {
         if self == App::Claude { 20 * 60 } else { 10 * 60 }
     }
 
-    /// What to do when there is nothing to show.
     pub fn open_hint(self) -> &'static str {
         match self {
             App::Claude => tr("Mở khung giới hạn trong app Claude (hoặc dùng Claude Code ở terminal) để tính", "Open the usage popup in the Claude app (or use Claude Code in a terminal) to count"),
@@ -76,27 +59,19 @@ impl App {
     }
 }
 
-/// One limit: how much of it is used and when it starts over.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Bar {
     pub label: String,
     pub weekly: bool,
-    /// 0..100.
     pub used: f32,
-    /// Unix seconds.
     pub resets_at: i64,
 }
 
-/// What the three apps showed at the last read (None: nothing to read, the app is closed or has not counted yet).
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Snapshot {
     pub apps: [Option<Vec<Bar>>; 3],
-    /// The plan of the account in use, when the app says ("free", "plus"...): each account has its own.
     pub plans: [Option<String>; 3],
-    /// When the reading was made by the app, Unix seconds, for the apps that only write it now
-    /// and then (Codex writes it with each turn of its own agent, so it can lag what the app shows).
     pub updated: [Option<i64>; 3],
-    /// Which apps are on this PC (found on disk), whether or not they run now.
     pub present: [bool; 3],
 }
 
@@ -105,12 +80,10 @@ impl Snapshot {
         self.plans[app as usize].as_deref()
     }
 
-    /// Does the app get a tab: it is on this PC, or it has a reading.
     pub fn shown(&self, app: App) -> bool {
         self.present[app as usize] || self.apps[app as usize].is_some()
     }
 
-    /// The tabs as a bit per app, for the page's buttons.
     pub fn mask(&self) -> u8 {
         APPS.iter().enumerate().fold(0, |m, (i, app)| m | (u8::from(self.shown(*app)) << i))
     }
@@ -128,7 +101,6 @@ pub fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
-/// "3 d", "5 h", "20 min": how long until `at`.
 pub fn in_words(at: i64, now: i64) -> String {
     let m = ((at - now).max(0) + 59) / 60;
     match m {
@@ -137,8 +109,6 @@ pub fn in_words(at: i64, now: i64) -> String {
         _ => format!("{} {}", m / 1440, tr("ngày", "d")),
     }
 }
-
-// ---- parsing -------------------------------------------------------------------------------
 
 fn key(k: &str) -> HSTRING {
     HSTRING::from(k)
@@ -152,16 +122,13 @@ fn num(o: &JsonObject, k: &str) -> Option<f64> {
     o.GetNamedNumber(&key(k)).ok()
 }
 
-/// Seconds for a time given as a number (Unix seconds) or as an ISO 8601 string ("2026-11-06T20:12:50Z").
 fn when(o: &JsonObject, k: &str) -> Option<i64> {
     num(o, k).map(|n| n as i64).or_else(|| iso_to_epoch(&o.GetNamedString(&key(k)).ok()?.to_string()))
 }
 
-/// "2026-11-06T20:12:50Z" -> Unix seconds (UTC; fractions and offsets other than Z are not used by the apps).
 fn iso_to_epoch(s: &str) -> Option<i64> {
     let n: Vec<i64> = s.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty()).take(6).map(|p| p.parse().ok()).collect::<Option<_>>()?;
     let [y, m, d, hh, mm, ss] = <[i64; 6]>::try_from(n).ok()?;
-    // Days since 1970-01-01 of a civil date (Howard Hinnant's algorithm).
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
@@ -170,9 +137,6 @@ fn iso_to_epoch(s: &str) -> Option<i64> {
     Some((era * 146_097 + doe - 719_468) * 86_400 + hh * 3600 + mm * 60 + ss)
 }
 
-/// The label of a limit window of `minutes` (the server sets it by plan: 5 hours and a week on
-/// the paid plans, about 30 days on a free one) and whether it is the long one (a week or more),
-/// the one the alerts watch.
 fn window_label(minutes: f64) -> (String, bool) {
     let m = minutes.round() as i64;
     let long = m >= 7 * 24 * 60 - 60;
@@ -192,7 +156,6 @@ fn window_label(minutes: f64) -> (String, bool) {
     (label, long)
 }
 
-/// Claude Code's status-line JSON: `rate_limits.five_hour` and `.seven_day` with `used_percentage` and `resets_at`.
 pub fn parse_claude(text: &str) -> Vec<Bar> {
     let Some(limits) = JsonObject::Parse(&key(text)).ok().and_then(|r| obj(&r, "rate_limits")) else { return Vec::new() };
     [("five_hour", false), ("seven_day", true)]
@@ -205,8 +168,6 @@ pub fn parse_claude(text: &str) -> Vec<Bar> {
         .collect()
 }
 
-/// One Codex session-log line: `payload.rate_limits.primary` / `.secondary`, each null or
-/// `used_percent`, `window_minutes`, `resets_at`.
 pub fn parse_codex_line(line: &str) -> Vec<Bar> {
     let Some(limits) = JsonObject::Parse(&key(line)).ok().and_then(|r| obj(&r, "payload")).and_then(|p| obj(&p, "rate_limits")) else { return Vec::new() };
     ["primary", "secondary"]
@@ -219,8 +180,6 @@ pub fn parse_codex_line(line: &str) -> Vec<Bar> {
         .collect()
 }
 
-/// Antigravity's `RetrieveUserQuotaSummary`: `response.groups[].buckets[]` with `remainingFraction`,
-/// `window` ("5h", "weekly") and `resetTime`.
 pub fn parse_antigravity(text: &str) -> Vec<Bar> {
     let mut out = Vec::new();
     let Some(groups) = JsonObject::Parse(&key(text)).ok().and_then(|r| obj(&r, "response")).and_then(|r| r.GetNamedArray(&key("groups")).ok()) else { return out };
@@ -240,10 +199,6 @@ pub fn parse_antigravity(text: &str) -> Vec<Bar> {
     out
 }
 
-/// The Claude desktop app's own history of its plan usage (`plan-usage-history.json` in its data
-/// folder: `{version, samples: [{t (ms), org, u: {fh: 5-hour %, sd: weekly %, ...}}]}`, a sample
-/// every ~15 minutes while the app runs): the last sample, as (time in seconds, bars). It has no
-/// reset times.
 pub fn parse_claude_history(text: &str) -> Option<(i64, Vec<Bar>)> {
     let samples = JsonObject::Parse(&key(text)).ok()?.GetNamedArray(&key("samples")).ok()?;
     let last = samples.GetObjectAt(samples.Size().ok()?.checked_sub(1)?).ok()?;
@@ -258,7 +213,6 @@ pub fn parse_claude_history(text: &str) -> Option<(i64, Vec<Bar>)> {
     (!bars.is_empty()).then_some(((num(&last, "t")? / 1000.0) as i64, bars))
 }
 
-/// A window that already started over reads zero until the next use shows its new reset time.
 fn rolled(mut bars: Vec<Bar>, now: i64) -> Vec<Bar> {
     for b in &mut bars {
         if b.resets_at > 0 && b.resets_at <= now {
@@ -268,28 +222,19 @@ fn rolled(mut bars: Vec<Bar>, now: i64) -> Vec<Bar> {
     bars
 }
 
-// ---- reading the apps ----------------------------------------------------------------------
-
 fn some(bars: Vec<Bar>) -> Option<Vec<Bar>> {
     (!bars.is_empty()).then_some(bars)
 }
 
-/// The app's last sample is shown for this long, and its 5-hour figure only for as long as a window lasts.
 const CLAUDE_SAMPLE_MAX_AGE: i64 = 7 * 24 * 3600;
 const CLAUDE_FIVE_HOURS: i64 = 5 * 3600;
 
-/// Claude Code's status-line file (as (time written, bars)): it has the reset times.
 fn read_claude_status_line() -> Option<(i64, Vec<Bar>)> {
     let path = PathBuf::from(std::env::var_os("APPDATA")?).join("PuwNotch").join("claude-limits.json");
     let written = std::fs::metadata(&path).ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
     Some((written, some(parse_claude(&std::fs::read_to_string(path).ok()?))?))
 }
 
-/// The folders the Claude desktop app may keep its data in: the Store build's own folder (its name
-/// carries the package id), a packaged build's roaming copy, and the installer build's `%APPDATA%\Claude`.
-///
-/// Listing `Packages` (every app of the user) is the costly part and the answer hardly changes: it is
-/// kept for ten minutes.
 fn claude_data_dirs() -> Vec<PathBuf> {
     static KEPT: Mutex<Option<(Instant, Vec<PathBuf>)>> = Mutex::new(None);
     let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
@@ -315,12 +260,10 @@ fn find_claude_data_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The desktop app's usage history (the newest sample of the folders that have one).
 fn read_claude_app() -> Option<(i64, Vec<Bar>)> {
     let dirs = claude_data_dirs();
     let found = dirs.iter().filter_map(|d| parse_claude_history(&std::fs::read_to_string(d.join("plan-usage-history.json")).ok()?)).max_by_key(|(at, _)| *at);
     if found.is_none() {
-        // Said once in notch.log, for a PC where the Claude app is there but its numbers are not.
         static SAID: AtomicBool = AtomicBool::new(false);
         if !SAID.swap(true, Ordering::Relaxed) {
             crate::system::log(&format!("usage: no plan-usage-history.json of the Claude app in {} data folders", dirs.len()));
@@ -329,14 +272,6 @@ fn read_claude_app() -> Option<(i64, Vec<Bar>)> {
     found
 }
 
-/// The two readings together. Use only goes up inside a window, so when both have the window
-/// the larger one is the later: a status line is rewritten whenever its terminal refreshes, but
-/// its numbers are those of the terminal's last answer from Claude and can be hours old, so its
-/// file time says nothing. The desktop app's reading has no reset times and borrows the status
-/// line's while they are still ahead.
-///
-/// An old sample still shows (the page says how old), but its 5-hour figure goes once a window
-/// has passed. Returns the bars and when they were read.
 fn newest_claude(status_line: Option<(i64, Vec<Bar>)>, app: Option<(i64, Vec<Bar>)>, now: i64) -> Option<(Vec<Bar>, i64)> {
     let app = app.filter(|(at, _)| now - at <= CLAUDE_SAMPLE_MAX_AGE).map(|(at, mut bars)| {
         if now - at > CLAUDE_FIVE_HOURS {
@@ -362,16 +297,12 @@ fn read_claude() -> Option<(Vec<Bar>, i64)> {
     newest_claude(read_claude_status_line(), read_claude_app(), now_secs())
 }
 
-/// Children of `dir` by name, newest (largest name) first: the logs sit in sessions/YYYY/MM/DD/rollout-<time>-....jsonl.
 fn children(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir).map(|d| d.flatten().map(|e| e.path()).collect()).unwrap_or_default();
     v.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
     v
 }
 
-/// The newest rate-limit event of the logs written to last: a log keeps growing after the day it
-/// was started (a resumed session), and an account switch shows only in the newest event, so
-/// the files are taken by when they were written and the events compared by their own time.
 fn read_codex() -> Option<(Vec<Bar>, Option<String>, i64)> {
     let root = PathBuf::from(std::env::var_os("USERPROFILE")?).join(".codex").join("sessions");
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = children(&root).into_iter().flat_map(|y| children(&y)).flat_map(|m| children(&m)).flat_map(|d| children(&d))
@@ -379,25 +310,19 @@ fn read_codex() -> Option<(Vec<Bar>, Option<String>, i64)> {
         .collect();
     files.sort_by(|a, b| b.0.cmp(&a.0));
     let (at, bars, plan) = files.into_iter().take(CODEX_FILES).filter_map(|(_, f)| last_limits(&f)).max_by_key(|(at, _, _)| *at)?;
-    // Signing in as someone else rewrites auth.json (only its time is looked at, never its
-    // contents): a reading from before that belongs to the account before it.
     let signed_in = std::fs::metadata(root.parent()?.join("auth.json")).ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
     (signed_in <= at + 5).then_some((bars, plan, at))
 }
 
-/// The `timestamp` of a Codex log line, Unix seconds.
 fn codex_time(line: &str) -> Option<i64> {
     iso_to_epoch(&JsonObject::Parse(&key(line)).ok()?.GetNamedString(&key("timestamp")).ok()?.to_string())
 }
 
-/// The `plan_type` of a Codex rate-limit event ("free", "plus"...).
 fn codex_plan(line: &str) -> Option<String> {
     let limits = JsonObject::Parse(&key(line)).ok().and_then(|r| obj(&r, "payload")).and_then(|p| obj(&p, "rate_limits"))?;
     limits.GetNamedString(&key("plan_type")).ok().map(|s| s.to_string()).filter(|s| !s.is_empty())
 }
 
-/// The newest rate-limit event in the end of a Codex log (events with null windows are skipped),
-/// with its time and the account's plan.
 fn last_limits(path: &Path) -> Option<(i64, Vec<Bar>, Option<String>)> {
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
@@ -407,7 +332,6 @@ fn last_limits(path: &Path) -> Option<(i64, Vec<Bar>, Option<String>)> {
     String::from_utf8_lossy(&bytes).lines().rev().filter(|l| l.contains("\"used_percent\"")).find_map(|l| Some((codex_time(l).unwrap_or(0), some(parse_codex_line(l))?, codex_plan(l))))
 }
 
-/// A process handle that closes itself.
 struct Process(HANDLE);
 
 impl Drop for Process {
@@ -416,7 +340,6 @@ impl Drop for Process {
     }
 }
 
-/// The running `exe` whose full path contains `dir_hint` (several apps ship a language_server.exe).
 fn find_process(exe: &str, dir_hint: &str) -> Option<Process> {
     unsafe {
         let snapshot = Process(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?);
@@ -442,10 +365,8 @@ fn find_process(exe: &str, dir_hint: &str) -> Option<Process> {
     }
 }
 
-/// The command line of a process of this user (ProcessCommandLineInformation).
 fn command_line(process: &Process) -> Option<String> {
     unsafe {
-        // 8-byte aligned room for the UNICODE_STRING header and the text that follows it.
         let mut buf = vec![0u64; 2048];
         let mut got = 0u32;
         NtQueryInformationProcess(process.0, PROCESSINFOCLASS(60), buf.as_mut_ptr() as *mut c_void, (buf.len() * 8) as u32, &mut got).ok().ok()?;
@@ -454,7 +375,6 @@ fn command_line(process: &Process) -> Option<String> {
     }
 }
 
-/// Port of the language server's plain-HTTP listener, from its log ("... listening on random port at N for HTTP").
 fn antigravity_port() -> Option<u16> {
     let log = PathBuf::from(std::env::var_os("APPDATA")?).join("Antigravity").join("logs").join("language_server.log");
     let text = std::fs::read_to_string(log).ok()?;
@@ -462,15 +382,12 @@ fn antigravity_port() -> Option<u16> {
     line.split("port at ").nth(1)?.split_whitespace().next()?.parse().ok()
 }
 
-/// Where Antigravity's language server listens on this PC and the token it asks for (read from
-/// its own command line, so it exists only while the app runs).
 pub struct LocalServer {
     port: u16,
     token: String,
 }
 
 impl LocalServer {
-    /// Call `method` of its service with a JSON `body`: the answer's body on success.
     pub fn call(&self, method: &str, body: &str) -> Option<String> {
         post_local(self.port, &format!("/exa.language_server_pb.LanguageServerService/{method}"), &self.token, body)
     }
@@ -487,9 +404,7 @@ fn read_antigravity() -> Option<Vec<Bar>> {
     some(parse_antigravity(&antigravity_server()?.call("RetrieveUserQuotaSummary", "{}")?))
 }
 
-/// POST a JSON `body` to a server on this PC, answer body on 200.
 fn post_local(port: u16, path: &str, token: &str, body: &str) -> Option<String> {
-    /// A WinINet handle, closed when it goes out of scope.
     struct Handle(*mut c_void);
     impl Drop for Handle {
         fn drop(&mut self) {
@@ -538,7 +453,6 @@ fn post_local(port: u16, path: &str, token: &str, body: &str) -> Option<String> 
     }
 }
 
-/// Is the app on this PC (a folder of it exists)? Apps that are not are not read at all.
 pub fn installed(app: App) -> bool {
     let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
     let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
@@ -563,12 +477,9 @@ fn read_all() -> Snapshot {
     }
 }
 
-/// The worker that keeps a `Snapshot` fresh and tells the window when it changes.
 pub struct Monitor {
     shared: Arc<Mutex<Snapshot>>,
-    /// The Limits page is open: read more often.
     open: Arc<AtomicBool>,
-    /// The worker sleeps in one piece between readings; opening the page wakes it.
     thread: std::thread::Thread,
 }
 
@@ -580,7 +491,6 @@ impl Monitor {
         let thread = crate::system::spawn("usage", move || {
             unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
             loop {
-                // The Limits page switched off: nothing is read and no alert is made.
                 while !crate::render::page_shown(crate::render::Page::Usage) {
                     std::thread::park_timeout(Duration::from_secs(5));
                 }
@@ -591,7 +501,6 @@ impl Monitor {
                         unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_USAGE, WPARAM(0), LPARAM(0)); }
                     }
                 }
-                // Opening the page wakes the worker (`set_page_open`) so it does not wait out a minute.
                 let started = Instant::now();
                 loop {
                     let limit = if watching.load(Ordering::Relaxed) { POLL_OPEN } else { POLL };
@@ -618,9 +527,6 @@ impl Monitor {
     }
 }
 
-// ---- alerts --------------------------------------------------------------------------------
-
-/// Weekly use at which the banner speaks, and how much of the week in one day is "a lot".
 const WARN_AT: f32 = 80.0;
 const HIGH_AT: f32 = 95.0;
 const DAY_JUMP: f32 = 25.0;
@@ -632,7 +538,6 @@ const SAID_DAY: u8 = 4;
 struct Seen {
     resets_at: i64,
     day: i64,
-    /// Weekly use when this day (or this week) was first seen.
     base: f32,
     said: u8,
 }
@@ -647,12 +552,10 @@ pub struct Alert {
 pub enum Reason {
     Warn,
     High,
-    /// Used this much of the week since this morning.
     Day(f32),
 }
 
 impl Alert {
-    /// (title, body) of the banner.
     pub fn text(&self, now: i64) -> (String, String) {
         let title = format!("{} · {}%", self.app.name(), self.bar.used.round());
         let resets = format!("{} {}", tr("Làm mới sau", "Resets in"), in_words(self.bar.resets_at, now));
@@ -664,20 +567,17 @@ impl Alert {
     }
 }
 
-/// Remembers what was already announced, so each threshold speaks once a week and the daily jump once a day.
 #[derive(Default)]
 pub struct Watch {
     seen: HashMap<String, Seen>,
 }
 
 impl Watch {
-    /// New alerts for this reading, most used first. `day` counts local days.
     pub fn check(&mut self, snap: &Snapshot, day: i64) -> Vec<Alert> {
         let mut out = Vec::new();
         for app in APPS {
             for bar in snap.get(app).unwrap_or(&[]).iter().filter(|b| b.weekly) {
                 let seen = self.seen.entry(format!("{}:{}", app.name(), bar.label)).or_insert(Seen { resets_at: bar.resets_at, day, base: bar.used, said: 0 });
-                // A new week: the thresholds speak again.
                 if (seen.resets_at - bar.resets_at).abs() > 3600 {
                     *seen = Seen { resets_at: bar.resets_at, day, base: bar.used, said: 0 };
                 }
@@ -731,7 +631,6 @@ mod tests {
         assert!(bars[0].weekly && bars[0].used == 99.0 && bars[0].resets_at == 1_793_911_204);
         assert!(parse_codex_line(r#"{"payload":{"rate_limits":{"primary":null,"secondary":null}}}"#).is_empty());
         assert_eq!(codex_time(r#"{"timestamp":"2026-11-06T20:12:50.123Z","payload":{}}"#), Some(1_793_995_970));
-        // A free account: one window of 30 days.
         let free = parse_codex_line(r#"{"payload":{"rate_limits":{"primary":{"used_percent":0.0,"window_minutes":43200,"resets_at":1796059769},"secondary":null,"plan_type":"free"}}}"#);
         assert_eq!((free[0].label.as_str(), free[0].weekly), ("30 ngày", true));
         assert_eq!(codex_plan(r#"{"payload":{"rate_limits":{"primary":null,"plan_type":"free"}}}"#).as_deref(), Some("free"));
@@ -773,11 +672,9 @@ mod tests {
         assert_eq!((both[0].used, both[0].resets_at, both[1].used, both[1].resets_at), (30.0, 5000, 8.0, 9000));
         let ahead = Some((250, vec![bar("5 giờ", 50.0, 5000), bar("Tuần", 4.0, 9000)]));
         assert_eq!(newest_claude(ahead, app.clone(), 300).unwrap().0[0].used, 50.0, "a terminal that used more is later in the window");
-        // A status line written just now with old numbers does not pull the reading back.
         let stale = Some((299, hook.clone().unwrap().1));
         assert_eq!(newest_claude(stale, app.clone(), 300).unwrap().0[0].used, 30.0);
         assert_eq!(newest_claude(None, app.clone(), 300).unwrap().0[0].resets_at, 0);
-        // An old sample still shows, with its age; after a window its 5-hour figure is gone; after a week all of it.
         let (hours, at) = newest_claude(None, app.clone(), 200 + CLAUDE_FIVE_HOURS + 1).map(|(b, at)| (b.len(), at)).unwrap();
         assert_eq!((hours, at), (1, 200), "only the weekly figure");
         assert!(newest_claude(None, app, 200 + CLAUDE_SAMPLE_MAX_AGE + 1).is_none(), "a week old is not shown");
@@ -825,7 +722,6 @@ mod tests {
         assert_eq!(watch.check(&weekly(81.0), 1)[0].reason, Reason::Warn);
         assert_eq!(watch.check(&weekly(96.0), 1)[0].reason, Reason::High);
         assert!(watch.check(&weekly(99.0), 1).is_empty());
-        // A new week starts over.
         let mut next = weekly(5.0);
         next.apps[App::Codex as usize].as_mut().unwrap()[0].resets_at = 2_000_000;
         assert!(watch.check(&next, 2).is_empty());

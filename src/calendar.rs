@@ -1,17 +1,9 @@
-//! The Calendar page's logic: the month as weeks that begin on Monday (ISO 8601, the same on every PC), the
-//! weekday of a date, and the lunar date for the regions that keep a lunar calendar. No holidays: each country
-//! has its own, and the page tells none.
-//!
-//! The lunar date is the astronomical method of Ho Ngoc Duc (new moons and the sun's longitude, in the time zone
-//! of the region), the one Vietnamese lunar calendars follow.
-
 use std::f64::consts::PI;
 
 pub fn days_in_month(year: i32, month: u32) -> u32 {
     crate::todo::days_in_month(year as u32, month)
 }
 
-/// Julian day number of a Gregorian date.
 fn jd(year: i32, month: u32, day: u32) -> i64 {
     let (y, m, d) = (year as i64, month as i64, day as i64);
     let a = (14 - m) / 12;
@@ -20,24 +12,19 @@ fn jd(year: i32, month: u32, day: u32) -> i64 {
     d + (153 * m + 2) / 5 + 365 * y + y.div_euclid(4) - y.div_euclid(100) + y.div_euclid(400) - 32045
 }
 
-/// 0 = Monday ... 6 = Sunday.
 pub fn weekday(year: i32, month: u32, day: u32) -> u32 {
     jd(year, month, day).rem_euclid(7) as u32
 }
 
-/// The column (0 = Monday) the 1st of the month falls in.
 pub fn first_column(year: i32, month: u32) -> u32 {
     weekday(year, month, 1)
 }
 
-/// The month `delta` months from `(year, month)`.
 pub fn shift_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
     let n = year * 12 + month as i32 - 1 + delta;
     (n.div_euclid(12), n.rem_euclid(12) as u32 + 1)
 }
 
-/// What the page shows: the month, the day picked, today, and whether this region keeps a lunar calendar (`zone`,
-/// then the choice between the two is on show) and the lunar one is chosen.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct CalView {
     pub year: i32,
@@ -48,7 +35,6 @@ pub struct CalView {
     pub lunar_on: bool,
 }
 
-/// A lunar date: day, month, whether the month is the leap one.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Lunar {
     pub day: u32,
@@ -91,7 +77,6 @@ fn new_moon_day(k: i64, zone: f64) -> i64 {
     (new_moon(k) + 0.5 + zone / 24.0).floor() as i64
 }
 
-/// The sun's longitude at day `jdn`, in 30-degree steps (0..=11).
 fn sun_longitude(jdn: f64, zone: f64) -> i64 {
     let jdn = jdn - 0.5 - zone / 24.0;
     let t = (jdn - 2451545.0) / 36525.0;
@@ -128,7 +113,6 @@ fn leap_month_offset(a11: i64, zone: f64) -> i64 {
     i - 1
 }
 
-/// The lunar date of a Gregorian date, for a region `zone` hours from UTC (Vietnam 7, China 8, Korea 9).
 pub fn lunar(year: i32, month: u32, day: u32, zone: f64) -> Lunar {
     let day_number = jd(year, month, day);
     let k = ((day_number as f64 - 2415021.076998695) / 29.530588853).floor() as i64;
@@ -159,8 +143,6 @@ pub fn lunar(year: i32, month: u32, day: u32, zone: f64) -> Lunar {
     Lunar { day: (day_number - month_start + 1) as u32, month: m as u32, leap }
 }
 
-/// The time zone (hours from UTC) of a region that keeps a lunar calendar, by its two-letter ISO code; None for
-/// the regions that do not, which then never see the lunar choice.
 pub fn lunar_zone(region: &str) -> Option<f64> {
     match region.to_ascii_uppercase().as_str() {
         "VN" => Some(7.0),
@@ -170,8 +152,6 @@ pub fn lunar_zone(region: &str) -> Option<f64> {
     }
 }
 
-/// The two-letter region of this PC's Windows settings ("VN", "US"...), read when asked so a change in Windows
-/// shows at once.
 pub fn region() -> String {
     let mut buf = [0u16; 16];
     let n = unsafe { windows::Win32::Globalization::GetUserDefaultGeoName(&mut buf) };
@@ -184,7 +164,6 @@ const SHORT_VI: [&str; 7] = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
 const SHORT_EN: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const MONTH_EN: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-/// Weekday names in the interface language, Monday first: long for the day shown, short for the column heads.
 pub fn weekday_long(col: u32, english: bool) -> &'static str {
     (if english { LONG_EN } else { LONG_VI })[col as usize % 7]
 }
@@ -193,12 +172,10 @@ pub fn weekday_short(col: u32, english: bool) -> &'static str {
     (if english { SHORT_EN } else { SHORT_VI })[col as usize % 7]
 }
 
-/// "Tháng 11, 2026" / "November 2026".
 pub fn month_title(year: i32, month: u32, english: bool) -> String {
     if english { format!("{} {year}", MONTH_EN[(month as usize).saturating_sub(1) % 12]) } else { format!("Tháng {month}, {year}") }
 }
 
-/// The lunar months a Gregorian month touches: "Tháng 9 – 10 âm lịch" (a month has one or two of them).
 pub fn lunar_title(year: i32, month: u32, zone: f64, english: bool) -> String {
     let (a, b) = (lunar(year, month, 1, zone), lunar(year, month, days_in_month(year, month), zone));
     let name = |l: Lunar| if l.leap { if english { format!("{} (leap)", l.month) } else { format!("{} nhuận", l.month) } } else { l.month.to_string() };
@@ -236,12 +213,9 @@ mod tests {
 
     #[test]
     fn lunar_dates_that_are_known() {
-        // Mid-Autumn is the 15th of the 8th month: 17 Sep 2024, 6 Oct 2025.
         assert_eq!(lunar(2024, 9, 17, 7.0), Lunar { day: 15, month: 8, leap: false });
         assert_eq!(lunar(2025, 10, 6, 7.0), Lunar { day: 15, month: 8, leap: false });
-        // 2025 has a leap 6th month, from 25 Jul.
         assert_eq!(lunar(2025, 7, 25, 7.0), Lunar { day: 1, month: 6, leap: true });
-        // A lunar month ends and the next one starts on the 9th.
         let (a, b) = (lunar(2026, 11, 8, 7.0), lunar(2026, 11, 9, 7.0));
         assert_eq!((b.day, a.day > 28), (1, true));
     }

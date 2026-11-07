@@ -1,16 +1,12 @@
-//! Select lyrics from the media clock; advance their motion from the frame clock.
-
 use crate::anim::{smooth, Spring, Tuning};
 
 const LEAD_MS: u64 = 80;
-/// Brightness of a line that is not the one being sung.
 pub const DIM: f32 = 0.42;
 
 pub fn current_index(lines: &[(u64, String)], pos_ms: u64) -> Option<usize> {
     lines.partition_point(|(t, _)| *t <= pos_ms.saturating_add(LEAD_MS)).checked_sub(1)
 }
 
-/// Target line, held until the next timestamp. Motion is independent of media polling.
 pub fn phase(lines: &[(u64, String)], pos_ms: u64) -> f32 {
     current_index(lines, pos_ms).unwrap_or(0) as f32
 }
@@ -26,7 +22,6 @@ impl Motion {
     pub fn focus(&self) -> f32 { self.scroll.pos }
     pub fn phase(&self) -> f32 { self.highlight.pos }
 
-    /// First display and real seeks land directly; ordinary playback retargets the springs.
     pub fn step(&mut self, focus: f32, phase: f32, position: u64, dt: f32, rate: f64) -> bool {
         let extra = (dt.max(0.0) as f64 * rate.max(0.0) * 1000.0) as u64;
         let reset = self.position.is_none_or(|last| last.saturating_add(extra).abs_diff(position) > 1000)
@@ -37,14 +32,12 @@ impl Motion {
             self.highlight = Spring::at(phase);
             return false;
         }
-        // A late frame is cut short so the lines never jump.
         let dt = dt.clamp(0.0, 0.1);
         let moving = self.scroll.step(focus, dt, Tuning::LYRIC_SCROLL);
         self.highlight.step(phase, dt, Tuning::LYRIC_HIGHLIGHT) || moving
     }
 }
 
-/// Top of each line when they are stacked with `gap` between them.
 pub fn tops(heights: &[f32], gap: f32) -> Vec<f32> {
     let mut y = 0.0;
     heights
@@ -57,8 +50,6 @@ pub fn tops(heights: &[f32], gap: f32) -> Vec<f32> {
         .collect()
 }
 
-/// Centre (in the stacked lines' own coordinates) of the line in focus at `phase`, moving
-/// between the centres of the two lines it is gliding across.
 pub fn focus(tops: &[f32], heights: &[f32], phase: f32) -> f32 {
     let n = tops.len().min(heights.len());
     if n == 0 {
@@ -72,13 +63,10 @@ pub fn focus(tops: &[f32], heights: &[f32], phase: f32) -> f32 {
     centre(i) + (centre(i + 1) - centre(i)) * (phase - i as f32).clamp(0.0, 1.0)
 }
 
-/// Brightness interpolates with the animated highlight, separately from line selection.
 pub fn line_alpha(j: usize, phase: f32) -> f32 {
     DIM + (1.0 - DIM) * (1.0 - (j as f32 - phase).abs()).clamp(0.0, 1.0)
 }
 
-/// Fade towards the top and bottom of the lyrics area: 1 in the middle, 0 at the edge, over `edge`
-/// px, for a line centred at `y` in an area from `top` to `bottom`.
 pub fn edge_fade(y: f32, top: f32, bottom: f32, edge: f32) -> f32 {
     smooth((y - top).min(bottom - y) / edge.max(1.0))
 }

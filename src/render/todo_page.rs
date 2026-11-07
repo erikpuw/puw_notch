@@ -1,5 +1,3 @@
-//! The Notes page (tasks and appointments in one list): the progress ring on the left, the add box and the list on the right.
-
 use super::*;
 
 impl Renderer {
@@ -34,7 +32,6 @@ impl Renderer {
             draw_input(tr("Thêm ghi chú… (vd: Họp 20:00)", "Add a note… (e.g. Call 20:00)"))?;
             let today = (lv.now / 10_000) as u32;
             let (open, later) = if current { lv.counts } else { (0, 0) };
-            // Left: the day's progress as a big ring with what is left in it.
             let hub = (cl + HERO_W / 2.0 * s, 80.0 * s);
             let done = v.todos.iter().filter(|t| t.done.is_some()).count();
             let frac = if v.todos.is_empty() { 0.0 } else { done as f32 / v.todos.len() as f32 };
@@ -50,7 +47,6 @@ impl Renderer {
                 micon("tasks-gear", icon, F_SMALL_ICON, gb, c)?;
             }
             if open_set {
-                // Settings: the early reminder, stepped with - / +.
                 let y = ROW_Y * s;
                 text(tr("Nhắc trước", "Remind before"), F_BODY, rect(x0, y, xr - 112.0 * s, y + 22.0 * s), lead, grey(0.9, a))?;
                 let value = if lv.remind_before == 0 { tr("Tắt", "Off").to_string() } else { format!("{} {}", lv.remind_before, tr("phút", "min")) };
@@ -69,7 +65,6 @@ impl Renderer {
                     let mid = (x0 + xr) / 2.0;
                     let ring = D2D1_ELLIPSE { point: Vector2 { X: mid, Y: (ROW_Y + 16.0) * s }, radiusX: 11.0 * s, radiusY: 11.0 * s };
                     rt.DrawEllipse(&ring, &self.brush(grey(0.4, a))?, 1.5 * s, None);
-                    // The tick is drawn as 2 px strokes in the ring's middle (the font's was tiny and faint).
                     let w = (2.0 * s).round().max(2.0);
                     let (cx, cy) = (mid.round(), ((ROW_Y + 16.0) * s).round());
                     let ink = self.brush(grey(0.6, a))?;
@@ -84,14 +79,12 @@ impl Renderer {
                     let Button::ListToggle(i) = *b else { continue };
                     let Some(item) = v.todos.get(i) else { continue };
                     let hot = row_hovered(i);
-                    // A plain row: a hairline under it (not the last), the row under the mouse a touch lighter.
                     if hot {
                         rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, xr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &self.brush(grey(0.08, a))?);
                     }
                     if n + 1 < rows_on.len() {
                         rt.FillRectangle(&rect(br.left, br.bottom - 1.0 * s, xr, br.bottom), &self.brush(grey(0.12, a))?);
                     }
-                    // Tick circle, in the colour of how soon it is due.
                     let d = 13.0 * s;
                     let (ccx, ccy) = (br.left + d / 2.0, (br.top + br.bottom) / 2.0);
                     let circle = D2D1_ELLIPSE { point: Vector2 { X: ccx, Y: ccy }, radiusX: d / 2.0 - 0.75 * s, radiusY: d / 2.0 - 0.75 * s };
@@ -106,24 +99,20 @@ impl Renderer {
                         };
                         rt.DrawEllipse(&circle, &self.brush(ring)?, 1.5 * s, None);
                     }
-                    // When, on the right: "HH:MM" today, "Mai HH:MM", "dd/mm HH:MM" (red once past).
                     let mut text_right = br.right;
                     if let Some(at) = item.at {
                         let (day, h, m) = ((at / 10_000) as u32, at / 100 % 100, at % 100);
                         let when = if day == today { format!("{h:02}:{m:02}") }
                             else if day == todo::next_day(today) { format!("{} {h:02}:{m:02}", tr("Mai", "Tmrw")) }
                             else { format!("{:02}/{:02} {h:02}:{m:02}", day % 100, day / 100 % 100) };
-                        // Urgency in words as well as colour: past due, or inside the early reminder.
                         let left = minutes(at) - minutes(lv.now);
                         let flag = if done { "" } else if left <= 0 { tr("Trễ", "Late") } else if left <= lv.remind_before.max(15) as i64 { tr("Sắp", "Soon") } else { "" };
-                        // A task late from another day says the date only, so its words keep the room.
                         let when = if !flag.is_empty() && day != today { format!("{:02}/{:02}", day % 100, day / 100 % 100) } else { when };
                         let label = if flag.is_empty() { when } else { format!("{flag} {when}") };
                         let lw = width(&label, F_LABEL) + 4.0 * s;
                         text(&label, F_LABEL, rect(br.right - lw, br.top, br.right - 2.0 * s, br.bottom), trail, time_color(at, done))?;
                         text_right = br.right - lw - 6.0 * s;
                     }
-                    // Text, struck through when done.
                     let tb = rect(br.left + d + 10.0 * s, br.top, text_right, br.bottom);
                     text(&item.text, F_BODY, tb, lead, grey(if done { 0.5 } else { 1.0 }, a))?;
                     if done {
@@ -131,7 +120,6 @@ impl Renderer {
                         let my = (br.top + br.bottom) / 2.0 + 0.5 * s;
                         rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &self.brush(grey(0.5, a))?);
                     }
-                    // Edit and delete show only while the mouse is on the row.
                     if hot {
                         row_tools(i, hot)?;
                     }

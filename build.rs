@@ -1,7 +1,3 @@
-//! Embed the app icon (assets/puw.res, made by assets/make_icon.py) and a VERSIONINFO block in the
-//! exe: the MSVC linker takes a compiled .res file as an input as-is. The version block is built
-//! here from Cargo.toml so it never drifts; an exe without one looks anonymous to antivirus heuristics.
-
 use std::env::var;
 
 fn main() {
@@ -15,7 +11,6 @@ fn main() {
     println!("cargo:rustc-link-arg-bins={}", out.display());
 }
 
-/// One .res entry with a numeric type and name, US English, data padded to 4 bytes.
 fn resource(kind: u16, name: u16, data: &[u8]) -> Vec<u8> {
     let mut b = Vec::new();
     b.extend((data.len() as u32).to_le_bytes());
@@ -40,7 +35,6 @@ fn utf16z(s: &str) -> Vec<u8> {
     s.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect()
 }
 
-/// A version resource node: wLength, wValueLength, wType, key, value, children, each 4-aligned.
 fn node(key: &str, value: &[u8], value_len: usize, text: bool, children: &[Vec<u8>]) -> Vec<u8> {
     let mut b = vec![0; 6];
     b.extend(utf16z(key));
@@ -61,8 +55,6 @@ fn version_info() -> Vec<u8> {
     let part = |k: &str| var(k).unwrap().parse::<u32>().unwrap();
     let (major, minor, patch) = (part("CARGO_PKG_VERSION_MAJOR"), part("CARGO_PKG_VERSION_MINOR"), part("CARGO_PKG_VERSION_PATCH"));
     let (ms, ls) = (major << 16 | minor, patch << 16);
-    // VS_FIXEDFILEINFO: signature, struct version, file/product versions, flags mask, flags,
-    // VOS_NT_WINDOWS32, VFT_APP, subtype, date.
     let fixed: Vec<u8> = [0xFEEF04BD, 0x0001_0000, ms, ls, ms, ls, 0x3F, 0, 0x0004_0004, 1, 0, 0, 0].into_iter().flat_map(u32::to_le_bytes).collect();
     let version = var("CARGO_PKG_VERSION").unwrap();
     let exe = format!("{}.exe", var("CARGO_PKG_NAME").unwrap());

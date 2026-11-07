@@ -1,9 +1,3 @@
-//! Antigravity's questions to its user on the notch. While the app runs, its language server on
-//! this PC (see `usage::antigravity_server`) is asked every POLL which agent runs are waiting;
-//! the last step of a waiting run is either a short question with options or a permission to use
-//! a tool. That becomes a banner (see approve.rs) and the click is sent back to the same server.
-//! Nothing is answered without a click, and a request that is not clicked stays in Antigravity.
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,21 +12,15 @@ use crate::i18n::tr;
 use crate::usage;
 
 const POLL: Duration = Duration::from_secs(2);
-/// While Antigravity is not running, looking for it is a wasted process listing: less often.
 const POLL_CLOSED: Duration = Duration::from_secs(30);
-/// ... and while it is not installed at all.
 const POLL_ABSENT: Duration = Duration::from_secs(120);
 
-/// What a waiting step asks.
 #[derive(Debug, PartialEq)]
 enum Ask {
-    /// A question with options: (id, text) each.
     Question { question: String, options: Vec<(String, String)> },
-    /// Permission to use a tool: its kind ("mcp") and target.
     Permission { action: String, target: String },
 }
 
-/// A step of an agent run that waits for the user.
 #[derive(Debug, PartialEq)]
 struct Waiting {
     cascade: String,
@@ -53,7 +41,6 @@ fn array_items(a: &JsonArray) -> Vec<JsonObject> {
     (0..a.Size().unwrap_or(0)).filter_map(|i| a.GetObjectAt(i).ok()).collect()
 }
 
-/// The runs that are not idle, as (cascade id, number of steps), from `GetAllCascadeTrajectories`.
 fn busy_runs(text: &str) -> Vec<(String, i64)> {
     let mut out = Vec::new();
     let Some(all) = JsonObject::Parse(&key(text)).ok().and_then(|r| r.GetNamedObject(&key("trajectorySummaries")).ok()) else { return out };
@@ -75,8 +62,6 @@ fn busy_runs(text: &str) -> Vec<(String, i64)> {
     out
 }
 
-/// The last step of `GetCascadeTrajectorySteps` if it waits for the user with a question (one
-/// question, 1 to 3 options, a single answer) or a permission.
 fn parse_waiting(text: &str) -> Option<Waiting> {
     let steps = JsonObject::Parse(&key(text)).ok()?.GetNamedArray(&key("steps")).ok()?;
     let step = steps.GetObjectAt(steps.Size().ok()?.checked_sub(1)?).ok()?;
@@ -104,7 +89,6 @@ fn parse_waiting(text: &str) -> Option<Waiting> {
     Some(Waiting { cascade, trajectory, step: index, ask })
 }
 
-/// A button label from an option's text: "(Recommended) Đồng ý: Cho phép..." -> "Đồng ý".
 fn short_label(text: &str) -> String {
     let mut t = text.trim();
     if t.starts_with('(') {
@@ -116,12 +100,10 @@ fn short_label(text: &str) -> String {
     t.chars().take(14).collect()
 }
 
-/// `value` as a JSON string literal.
 fn json_string(value: &str) -> String {
     JsonValue::CreateStringValue(&key(value)).and_then(|v| v.Stringify()).map_or_else(|_| "\"\"".into(), |s| s.to_string())
 }
 
-/// The body of `HandleCascadeUserInteraction` for an answer, None when it is not one to send.
 fn answer_body(w: &Waiting, answer: Answer) -> Option<String> {
     let inner = match (&w.ask, answer) {
         (Ask::Permission { .. }, Answer::Allow) => r#""permission":{"allow":true,"scope":"PERMISSION_SCOPE_ONCE"}"#.to_string(),
@@ -135,8 +117,6 @@ fn answer_body(w: &Waiting, answer: Answer) -> Option<String> {
     Some(format!(r#"{{"cascadeId":{},"interaction":{{"trajectoryId":{},"stepIndex":{},{inner}}}}}"#, json_string(&w.cascade), json_string(&w.trajectory), w.step))
 }
 
-/// Ask the server for the waiting steps of every run that is not idle. None when the server does not
-/// answer (the app closed or restarted: its port and token are new).
 fn waiting_now(server: &usage::LocalServer) -> Option<Vec<Waiting>> {
     let list = server.call("GetAllCascadeTrajectories", "{}")?;
     Some(
@@ -148,22 +128,17 @@ fn waiting_now(server: &usage::LocalServer) -> Option<Vec<Waiting>> {
     )
 }
 
-/// Start watching: a request for every new waiting step goes to the approval queue.
 pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<u64>>>, enabled: Arc<AtomicBool>, hwnd: HWND) {
     let target = hwnd.0 as isize;
     crate::system::spawn("antigravity", move || {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
-        // The steps asked about so far, each with the request that is up for it (while it waits).
         let mut seen: HashMap<(String, i64), Option<u64>> = HashMap::new();
-        // Finding the server lists every process and reads the app's log: done when the app is not
-        // known to run, not at every poll.
         let mut server: Option<usage::LocalServer> = None;
         loop {
             if !enabled.load(Ordering::Relaxed) {
                 server = None;
             }
             if server.is_none() {
-                // Not on this PC: nothing to look for (checked now and then, in case it is installed later).
                 if !usage::installed(usage::App::Antigravity) {
                     seen.clear();
                     std::thread::sleep(POLL_ABSENT);
@@ -181,7 +156,6 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
                 server = None;
                 continue;
             };
-            // A question answered in Antigravity itself no longer waits: its banner goes.
             for (key, id) in seen.iter_mut() {
                 if id.is_some() && !now.iter().any(|w| (&w.cascade, w.step) == (&key.0, key.1)) {
                     approve::cancel(&cancelled, target, id.take().unwrap_or(0));
@@ -201,7 +175,6 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
                 }
                 let (id, rx) = approve::enqueue(&queue, target, "Antigravity".into(), title, detail, options);
                 seen.insert(key, Some(id));
-                // One thread per request: it waits for the click, then answers.
                 crate::system::spawn("antigravity-answer", move || {
                     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
                     let answer = rx.recv_timeout(approve::TIMEOUT + Duration::from_secs(5)).unwrap_or(Answer::Ask);

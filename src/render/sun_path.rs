@@ -1,52 +1,31 @@
-//! The sun's path on the Weather page: an arc from sunrise to sunset with the sun on it, lit while it is up (two rings of
-//! light that fade in and out gently), a crescent moon with the same two rings on the arc at night. The arc is blue so it matches neither
-//! the sun nor the moon.
-
 use super::*;
 
-/// Logical px from the panel's top: the arc's ends sit on this line, it rises this high above it, and the times are below, clear
-/// of the light round the sun or the moon when it stands at an end (a ring reaches 12.5 px).
-/// Text boxes here are 16-20 px tall for 12 px text: Vietnamese marks stand above the letters and are cut by a tighter box.
 const BASELINE_Y: f32 = 122.0;
 const ARC_H: f32 = 32.0;
-/// The sun's warm white and the moon's pale blue.
 const SUN: (f32, f32, f32) = (1.0, 0.82, 0.3);
 const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
-/// Seconds the sun takes to walk from sunrise to where it is now when the view opens.
 const WALK_S: f32 = 1.4;
-/// Seconds one fade in and out of the rings takes; the inner ring runs a third of the way behind the outer one.
 const GLOW_PERIOD_S: f32 = 3.0;
-/// When the sun sets or rises while the view is open, the change is told in three steps of this many seconds each: at
-/// sunset the lit blue path turns grey, then the sun fades out where it stands, then the moon fades in; at sunrise the moon
-/// fades out, then the sun fades in at the start of the path.
 pub(super) const SWAP_STEP_S: f32 = 0.8;
-/// How many straight pieces the arc is drawn with.
 const ARC_STEPS: usize = 64;
-/// The share of the path, at each end, over which it fades in (or out).
 const ARC_FADE: f32 = 0.16;
 
-/// Where the arc is at `t` (0..1) for ends `(x0, x1)` on `baseline`, rising `height`: a quadratic curve.
 fn arc_point(t: f32, x0: f32, x1: f32, baseline: f32, height: f32) -> (f32, f32) {
     let (cx, cy) = ((x0 + x1) / 2.0, baseline - 2.0 * height);
     let u = 1.0 - t;
     (u * u * x0 + 2.0 * u * t * cx + t * t * x1, u * u * baseline + 2.0 * u * t * cy + t * t * baseline)
 }
 
-/// How much of the path shows at `t` (0..1 along it): its two ends fade out, so the arc does not stop short in mid-air like a
-/// cut line; the dots at the ends say where it begins and ends.
 fn edge_fade(t: f32) -> f32 {
     let k = (t.min(1.0 - t) / ARC_FADE).clamp(0.0, 1.0);
     0.15 + 0.85 * k * k * (3.0 - 2.0 * k)
 }
 
-/// How lit a ring is `phase` seconds in, 0..1: a slow, smooth fade in and out, `lag` (0..1 of a period) behind.
 fn glow(phase: f32, lag: f32) -> f32 {
     0.5 - 0.5 * (std::f32::consts::TAU * (phase / GLOW_PERIOD_S - lag)).cos()
 }
 
 impl Renderer {
-    /// Seconds since the sun rose or set, while the sun view has stayed open through it; None before that, and once the three
-    /// steps are told. `day` is whether the sun is up now.
     pub(super) fn sun_swap(&self, day: bool) -> Option<f32> {
         let at = match self.sun_seen.get() {
             Some((was, at)) if was == day => at,
@@ -57,8 +36,6 @@ impl Renderer {
         at.map(|t| t.elapsed().as_secs_f32()).filter(|secs| *secs < 3.0 * SWAP_STEP_S)
     }
 
-    /// `(left, right)` is the room the page leaves (window px), `phase` the animation clock and `age` seconds since the view
-    /// opened. `moon` is the moon's line icon, for the night.
     pub(super) fn draw_sun_path(
         &self,
         text: &dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
@@ -75,7 +52,6 @@ impl Renderer {
         let rt = &self.rt;
         let center = DWRITE_TEXT_ALIGNMENT_CENTER;
         let pos = sun.pos(minute_of_day);
-        // Seconds since the sun rose or set while this view was open (None: nothing to tell, it opened in this state).
         let swap = self.sun_swap(matches!(pos, weather::SunPos::Day(_)));
         let (x0, x1, yb) = (left + 10.0 * s, right - 10.0 * s, BASELINE_Y * s);
         let h = ARC_H * s;
@@ -84,31 +60,25 @@ impl Renderer {
             unsafe { rt.DrawLine(Vector2 { X: from.0, Y: from.1 }, Vector2 { X: to.0, Y: to.1 }, &self.brush(c)?, w, &self.round) };
             Ok(())
         };
-        // A filled circle of `c` round `at`.
         let disc = |at: (f32, f32), c: (f32, f32, f32), r: f32, alpha: f32| -> Result<()> {
             unsafe { rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: at.0, Y: at.1 }, radiusX: r, radiusY: r }, &self.brush(color(c.0, c.1, c.2, alpha))?) };
             Ok(())
         };
-        // The light round the sun or the moon: two rings that fade in and out gently, the inner one a little behind (no blink, no
-        // rays).
         let halo = |at: (f32, f32), c: (f32, f32, f32), strength: f32| -> Result<()> {
             disc(at, c, 12.5 * s, (0.05 + 0.13 * glow(phase, 0.0)) * strength)?;
             disc(at, c, 8.0 * s, (0.14 + 0.18 * glow(phase, 0.33)) * strength)
         };
         unsafe {
-            // The ground, then the whole path dim.
             rt.FillRectangle(&rect(x0 - 4.0 * s, yb, x1 + 4.0 * s, yb + 1.0 * s), &self.brush(grey(0.14, a))?);
             for i in 0..ARC_STEPS {
                 let (from, to) = (i as f32 / ARC_STEPS as f32, (i + 1) as f32 / ARC_STEPS as f32);
                 line(pt(from), pt(to), grey(0.2, a * edge_fade((from + to) / 2.0)), 2.5 * s)?;
             }
-            // The two ends, with their times under them.
             for (x, minute) in [(x0, sun.rise as u32), (x1, sun.set as u32)] {
                 rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: yb }, radiusX: 2.5 * s, radiusY: 2.5 * s }, &self.brush(grey(0.45, a))?);
                 text(&health::hhmm(minute), F_LABEL, rect(x - 24.0 * s, yb + 11.0 * s, x + 24.0 * s, yb + 27.0 * s), center, grey(0.55, a))?;
             }
             let mid = (x0 + x1) / 2.0;
-            // The lit part of the path up to `upto`, in blue at `alpha`.
             let lit_path = |upto: f32, alpha: f32| -> Result<()> {
                 let steps = ((upto * ARC_STEPS as f32).ceil() as usize).max(1);
                 for i in 0..steps {
@@ -119,19 +89,13 @@ impl Renderer {
                 }
                 Ok(())
             };
-            // The sun at `at`: a warm core in two rings of light that fade in and out.
             let draw_sun = |at: (f32, f32), alpha: f32| -> Result<()> {
                 halo(at, SUN, alpha * a)?;
                 disc(at, SUN, 4.2 * s, alpha * a)
             };
-            // A crescent (the moon's line icon) riding the path, about as big as the sun with its halo, with the same two rings
-            // fading in and out round it (in the moon's own pale blue).
             let draw_moon = |t: f32, alpha: f32| -> Result<()> {
                 if let Some((ic, geoms)) = moon {
-                    // As big as the sun's core (the crescent fills about three quarters of its box).
                     let size = 12.0 * s;
-                    // On the path at `t`, as the sun is by day: the path itself is hidden behind the crescent (a black disc, the
-                    // panel's own colour), so no line runs through its hollow.
                     let at = pt(t);
                     disc(at, (0.0, 0.0, 0.0), 6.5 * s, alpha * a)?;
                     halo(at, MOON, alpha * a * 0.8)?;
@@ -142,14 +106,11 @@ impl Renderer {
             let step = |secs: f32, k: f32| anim::lerp_in(secs, k * SWAP_STEP_S, SWAP_STEP_S);
             match pos {
                 weather::SunPos::Day(t) => {
-                    // Just risen: the moon fades out, then the sun fades in at the start of the path.
                     let (sun_a, moon_a) = swap.map_or((1.0, 0.0), |secs| (step(secs, 1.0), 1.0 - step(secs, 0.0)));
-                    // The sun walks to where it is now; the part of the path behind it is lit.
                     let shown = t * ease_out(age / WALK_S);
                     lit_path(shown, sun_a)?;
                     draw_sun(pt(shown), sun_a)?;
                     if moon_a > 0.0 {
-                        // The night is over: the moon fades out where it sets, at the end of the path.
                         draw_moon(1.0, moon_a)?;
                     }
                     let left_min = sun.daylight_left(minute_of_day);
@@ -162,8 +123,6 @@ impl Renderer {
                     text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 20.0) * s, mid + 80.0 * s, BASELINE_Y * s), center, grey(0.7, a * sun_a))?;
                 }
                 pos => {
-                    // Night: the path is dim, a crescent moon walks it and the next sunrise (or the sunset that was) is told.
-                    // Just set: the lit path turns grey, then the sun fades out where it stands, then the moon fades in.
                     let (blue_a, sun_a, moon_a) = swap.map_or((0.0, 0.0, ease_out(age / 0.6)), |secs| (1.0 - step(secs, 0.0), 1.0 - step(secs, 1.0), step(secs, 2.0)));
                     if blue_a > 0.0 {
                         lit_path(1.0, blue_a)?;
@@ -171,7 +130,6 @@ impl Renderer {
                     if sun_a > 0.0 {
                         draw_sun(pt(1.0), sun_a)?;
                     }
-                    // The moon walks the path through the night, from where the sun set to where it will rise.
                     draw_moon(sun.night_progress(minute_of_day) * ease_out(age / WALK_S), moon_a)?;
                     let words = match (pos, crate::i18n::english()) {
                         (weather::SunPos::Dawn, false) => format!("Mặt trời mọc lúc {}", health::hhmm(sun.rise as u32)),
@@ -227,7 +185,6 @@ mod tests {
     fn the_rings_fade_in_and_out_smoothly_with_no_blink() {
         assert!(glow(0.0, 0.0).abs() < 1e-6 && (glow(GLOW_PERIOD_S / 2.0, 0.0) - 1.0).abs() < 1e-6, "dark, then fully lit half a period on");
         assert!((glow(GLOW_PERIOD_S, 0.0)).abs() < 1e-5, "and back to dark: one fade in and out per period");
-        // Smooth: no step between two frames 16 ms apart, anywhere in the period, for either ring.
         for lag in [0.0, 0.33] {
             let step = (0..600).map(|i| (glow(i as f32 * 0.016, lag) - glow((i + 1) as f32 * 0.016, lag)).abs()).fold(0.0f32, f32::max);
             assert!(step < 0.05, "lag {lag}: a jump of {step} between frames");

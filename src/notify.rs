@@ -1,25 +1,14 @@
-//! Windows notifications, read from the notification centre database
-//! (%LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db) with the SQLite that ships
-//! in System32 (winsqlite3.dll). No package identity or extra dependency needed.
-//! Only toasts Windows keeps in the notification centre show up: notifications must be on.
-
 use std::ffi::{c_char, c_int, c_void, CString};
 use windows::core::{s, w};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
-/// What a banner is, which decides how it is drawn: its own layout each.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BannerKind {
-    /// An icon and its line (volume, a device, a reminder).
     Status,
-    /// An app's message.
     Notification,
-    /// A question with buttons and a countdown.
     Approval,
 }
 
-/// Where a step of a checklist stands: done (a green tick), being waited for (a spinning ring), not
-/// yet its turn (an empty ring), or failed (a red cross).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RowState {
     Done,
@@ -28,23 +17,18 @@ pub enum RowState {
     Failed,
 }
 
-/// One line of a checklist banner: a dot (by its state) and its text; the dot pops in from `at`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub text: String,
     pub at: std::time::Instant,
-    /// A device's line: its icon stands where the dot would, `value` (its battery) at the right end.
     pub icon: Option<&'static str>,
     pub value: Option<String>,
-    /// The value is a low battery: drawn red.
     pub low: bool,
     pub state: RowState,
-    /// What the line is about ("wifi", "bt", "vpn"...): told again, the later state replaces it.
     pub key: Option<&'static str>,
 }
 
 impl Row {
-    /// A step of the checklist kind in `state`.
     pub fn step(text: String, state: RowState, at: std::time::Instant) -> Self {
         Row { text, at, icon: None, value: None, low: false, state, key: None }
     }
@@ -54,7 +38,6 @@ impl Row {
         self
     }
 
-    /// A line that is done (a green dot with a tick).
     pub fn line(text: String, at: std::time::Instant) -> Self {
         Self::step(text, RowState::Done, at)
     }
@@ -65,21 +48,13 @@ pub struct Toast {
     pub app: String,
     pub title: String,
     pub body: String,
-    /// 0..1 bar for status banners (volume, brightness); None for notifications.
     pub level: Option<f32>,
-    /// Fluent icon glyph for the banner; None = notification bell.
     pub icon: Option<&'static str>,
-    /// A picture file the notification carries (a screenshot's preview): click the banner to open it.
     pub image: Option<String>,
-    /// What clicking the banner opens (see `parse_open`); None for status banners.
     pub open: Option<String>,
-    /// Short text at the right end of the title row: a Bluetooth device's battery.
     pub badge: Option<String>,
-    /// An approval request or a question: the banner carries these buttons (labels) and waits for a click.
     pub choices: Vec<String>,
-    /// The app's user model id: its own icon stands in the banner (None: the bell).
     pub app_id: Option<String>,
-    /// A checklist under the title (a status banner only): one line per thing that happened with it.
     pub rows: Vec<Row>,
 }
 
@@ -95,26 +70,19 @@ impl Toast {
     }
 }
 
-/// One notification on the panel's Notifications page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {
-    /// App user model id: where Windows takes the app's icon from.
     pub id: String,
     pub app: String,
     pub title: String,
     pub body: String,
-    /// Arrival as local yyyymmddHHMM.
     pub at: u64,
-    /// What clicking the row opens: its picture, else its link or app (as for the banner).
     pub open: Option<String>,
 }
 
-/// Windows FILETIME (100 ns ticks since 1601-01-01 UTC) -> local yyyymmddHHMM, given the local
-/// offset from UTC in minutes.
 pub fn local_stamp(filetime: i64, utc_offset_min: i64) -> u64 {
-    let total = filetime / 600_000_000 + utc_offset_min; // minutes since 1601-01-01
+    let total = filetime / 600_000_000 + utc_offset_min;
     let (days, minute) = (total.div_euclid(1440), total.rem_euclid(1440));
-    // civil from days (Howard Hinnant), counted from 1970-01-01
     let z = days - 134_774 + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -157,7 +125,6 @@ macro_rules! proc {
 }
 
 impl Sqlite {
-    /// The System32 SQLite and a connection to `path` (a file name, or a `file:` URI with SQLITE_OPEN_URI).
     unsafe fn open(path: &str, flags: c_int) -> Option<(Self, *mut c_void)> {
         let lib = LoadLibraryW(w!("winsqlite3.dll")).ok()?;
         let open: Open = proc!(lib, s!("sqlite3_open_v2"));
@@ -189,10 +156,7 @@ impl Sqlite {
     }
 }
 
-/// Every row of one read-only query on another app's database, `columns` columns each as text. The
-/// file is not locked: a browser holds its own databases exclusively while it runs.
 pub fn query_unlocked(path: &std::path::Path, q: &str, columns: c_int) -> Option<Vec<Vec<String>>> {
-    // SQLite URIs take forward slashes; '?' and '#' in a path would end it early.
     let path = path.to_str()?.replace('\\', "/").replace('%', "%25").replace('?', "%3f").replace('#', "%23");
     unsafe {
         let (sql, db) = Sqlite::open(&format!("file:///{path}?mode=ro&nolock=1"), SQLITE_OPEN_READONLY | SQLITE_OPEN_URI)?;
@@ -214,13 +178,11 @@ pub struct Reader {
     sql: Sqlite,
     db: *mut c_void,
     last_id: i64,
-    /// Notifications with an id up to this are left out of `recent` (cleared on the page).
     pub cleared: i64,
 }
 
 
 impl Reader {
-    /// Opens the database; what is already there is skipped, only newer toasts are reported.
     pub fn open() -> Option<Self> {
         let path = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Microsoft\\Windows\\Notifications\\wpndatabase.db");
         Self::open_path(path.to_str()?)
@@ -235,7 +197,6 @@ impl Reader {
         }
     }
 
-    /// Toasts that arrived since the last call, oldest first.
     pub fn poll(&mut self) -> Vec<Toast> {
         let q = format!(
             "SELECT n.Id, h.PrimaryId, n.Payload FROM Notification n JOIN NotificationHandler h ON h.RecordId = n.HandlerId \
@@ -264,14 +225,11 @@ impl Reader {
         out
     }
 
-    /// Hide everything that has arrived so far from `recent`; returns the id to keep (settings.txt).
     pub fn clear(&mut self) -> i64 {
         self.cleared = self.last_id.max(self.cleared);
         self.cleared
     }
 
-    /// The newest `limit` notifications still in the notification centre, newest first (what the
-    /// user cleared there is gone here too). `utc_offset_min` turns arrival times into local time.
     pub fn recent(&self, limit: usize, utc_offset_min: i64) -> Vec<Note> {
         let q = format!(
             "SELECT h.PrimaryId, n.Payload, n.ArrivalTime FROM Notification n JOIN NotificationHandler h ON h.RecordId = n.HandlerId \
@@ -305,13 +263,11 @@ impl Reader {
     }
 }
 
-/// Toast XML -> (first <text>, the other <text>s joined).
 pub fn parse_payload(xml: &str) -> (String, String) {
     let mut texts = Vec::new();
     let mut rest = xml;
     while let Some(start) = rest.find("<text") {
         rest = &rest[start + 5..];
-        // skip "<texts>" or similar tags that only start with "text"
         if !rest.starts_with(['>', ' ', '/']) {
             continue;
         }
@@ -333,9 +289,6 @@ pub fn parse_payload(xml: &str) -> (String, String) {
     (title, it.collect::<Vec<_>>().join(" "))
 }
 
-/// The picture file a toast carries: its hero image if it has one, else the first image that is not an app logo, when that
-/// is a file on disk (`file:///C%3A%5C...` or a plain path). Snipping Tool's "Screenshot copied"
-/// toast carries the saved screenshot this way.
 pub fn parse_image(xml: &str) -> Option<String> {
     let tags: Vec<&str> = xml.split("<image").skip(1).filter_map(|t| t.split('>').next()).collect();
     let src_of = |tag: &str| {
@@ -343,20 +296,13 @@ pub fn parse_image(xml: &str) -> Option<String> {
         Some(unescape(&rest[..rest.find('"')?]))
     };
     let hero = tags.iter().find(|t| t.contains("placement=\"hero\""));
-    // An app's own logo / the sender's avatar (Discord) is not what the toast is about: clicking
-    // it must open the app, so it is never taken as the picture.
     let plain = tags.iter().find(|t| !t.contains("placement=\"appLogoOverride\""));
     let src = hero.or(plain).and_then(|t| src_of(t))?;
     let path = percent_decode(src.strip_prefix("file:///").unwrap_or(&src)).replace('/', "\\");
-    // A drive path (C:\...) or a share (\\server\...), nothing from the web.
     let drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes()[0].is_ascii_alphabetic();
     (drive || path.starts_with("\\\\")).then_some(path)
 }
 
-/// What clicking a notification opens, for ShellExecute: the toast's own link when it is a
-/// protocol toast (`windowsdefender://update`), else the app that sent it, started through
-/// `shell:AppsFolder` by its app id (works for packaged and desktop apps alike).
-/// ponytail: opens the app, not the exact message; that needs the app's COM toast activator.
 pub fn parse_open(aumid: &str, xml: &str) -> Option<String> {
     let tag = &xml[xml.find("<toast")?..];
     let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
@@ -364,7 +310,6 @@ pub fn parse_open(aumid: &str, xml: &str) -> Option<String> {
         let rest = &tag[tag.find(&format!(" {name}=\""))? + name.len() + 3..];
         Some(unescape(&rest[..rest.find('"')?]))
     };
-    // A real URI scheme only: no drive paths ("C:\..") and no local files.
     let uri = attr("launch").filter(|_| attr("activationType").as_deref() == Some("protocol")).filter(|l| {
         l.split_once(':').is_some_and(|(scheme, _)| scheme.len() > 1 && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) && !scheme.eq_ignore_ascii_case("file"))
     });
@@ -393,8 +338,6 @@ fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
-/// App id -> short display name.
-/// "{guid}\...\chrome.exe" -> "chrome", "MSTeams_8wekyb3d8bbwe!MSTeams" -> "MSTeams", "Microsoft.Windows.Explorer" -> "Explorer".
 pub fn app_name(aumid: &str) -> String {
     let base = if let Some(i) = aumid.rfind(['\\', '/']) {
         let file = &aumid[i + 1..];
@@ -404,7 +347,6 @@ pub fn app_name(aumid: &str) -> String {
     } else {
         aumid.rsplit('.').next().unwrap_or(aumid)
     };
-    // Packaged apps often use the generic "App": take the package name instead.
     let name = if base.eq_ignore_ascii_case("App") {
         let family = aumid.split('_').next().unwrap_or(aumid);
         family.rsplit('.').next().unwrap_or(family)
@@ -420,11 +362,9 @@ mod tests {
 
     #[test]
     fn screenshot_toast_carries_the_saved_file() {
-        // The payload Snipping Tool writes for "Screenshot copied to clipboard".
         let xml = r#"<toast launch="ms-screensketch:edit?&amp;filePath=C%3A%5CUsers%5Cerikpuw%5CPictures%5CScreenshots%5CScreenshot%202026-10-28%20223805.png&amp;saved=true" activationType="protocol"><visual><binding template="ToastGeneric"><image placement="hero" src="file:///C%3A%5CUsers%5Cerikpuw%5CPictures%5CScreenshots%5CScreenshot%202026-10-28%20223805.png" alt="Snipped screen area"></image><text>Screenshot copied to clipboard</text><text>Automatically saved to screenshots folder.</text></binding></visual></toast>"#;
         assert_eq!(parse_image(xml).as_deref(), Some(r"C:\Users\erikpuw\Pictures\Screenshots\Screenshot 2026-10-28 223805.png"));
         assert_eq!(parse_payload(xml).0, "Screenshot copied to clipboard");
-        // The hero wins over a logo; web pictures and toasts without one give nothing.
         let two = r#"<image placement="appLogoOverride" src="file:///C:/a.png"/><image placement="hero" src="file:///C:/b.png"/>"#;
         assert_eq!(parse_image(two).as_deref(), Some(r"C:\b.png"));
         assert_eq!(parse_image(r#"<image src="https://example.com/x.png"/>"#), None);
@@ -435,11 +375,9 @@ mod tests {
     fn click_opens_link_or_app() {
         let defender = r#"<toast launch="windowsdefender://update" activationType="protocol"><visual/></toast>"#;
         assert_eq!(parse_open("Windows.Defender.SecurityCenter", defender).as_deref(), Some("windowsdefender://update"));
-        // Foreground toasts carry app arguments, not a link: start the app.
         let teams = r#"<toast launch="{&quot;chat&quot;:1}"><visual/></toast>"#;
         assert_eq!(parse_open("MSTeams_8wekyb3d8bbwe!MSTeams", teams).as_deref(), Some(r"shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams"));
         assert_eq!(parse_open("Claude_pzs8sxrjxfjjc!Claude", "<toast><visual/></toast>").as_deref(), Some(r"shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude"));
-        // A protocol "link" that is really a file is not followed.
         for bad in [r"C:\evil.exe", "file:///C:/evil.exe"] {
             let xml = format!(r#"<toast launch="{bad}" activationType="protocol"/>"#);
             assert_eq!(parse_open("App!A", &xml).as_deref(), Some(r"shell:AppsFolder\App!A"));
@@ -457,7 +395,6 @@ mod tests {
 
     #[test]
     fn filetime_to_local_stamp() {
-        // 2026-10-26 07:51 UTC
         let ft = 134_374_746_600_000_000;
         assert_eq!(local_stamp(ft, 0), 202610260751);
         assert_eq!(local_stamp(ft, 7 * 60), 202610261451, "UTC+7");
@@ -473,7 +410,6 @@ mod tests {
         assert_eq!(app_name("5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App"), "WhatsAppDesktop");
     }
 
-    /// Real winsqlite3 against a throwaway database with the same two tables.
     #[test]
     fn reads_new_rows_only() {
         let dir = std::env::temp_dir().join(format!("puw_wpn_{}", std::process::id()));
@@ -493,7 +429,6 @@ mod tests {
         assert_eq!(new.len(), 1);
         assert_eq!(new[0].title, "Mới");
         assert_eq!(new[0].body, "nội dung");
-        // the Notifications page: every toast still there, newest first, local time
         let list = r.recent(30, 7 * 60);
         assert_eq!(list.iter().map(|n| (n.title.as_str(), n.at)).collect::<Vec<_>>(), [("Mới", 202610261452), ("Cũ", 202610261451)]);
         assert_eq!(list[0].app, "MSTeams");

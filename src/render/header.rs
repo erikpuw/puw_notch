@@ -1,5 +1,3 @@
-//! The panel's header: the page's name (it morphs with the page), the date and the time, the battery ring and its percentage.
-
 use super::*;
 
 impl Renderer {
@@ -12,8 +10,6 @@ impl Renderer {
         let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
         let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
         let (hl, hr) = (l + PAD * s, r - PAD * s);
-        // Header: the page's name on the left (it morphs with the page), the date and the time
-        // in the middle, the battery ring and its percentage on the right.
         let (ht, hb) = (6.0 * s, 28.0 * s);
         let draw_title = |page: Page, dx: f32, ta: f32| -> Result<()> {
             if ta <= 0.01 {
@@ -30,7 +26,6 @@ impl Renderer {
             }
             None => draw_title(v.page, 0.0, 1.0)?,
         }
-        // The same battery ring as the pill's, then its percentage.
         if let Some(b) = &v.battery {
             let pct = format!("{}%", b.percent);
             let tx = hr - width(&pct, F_LABEL);
@@ -38,7 +33,6 @@ impl Renderer {
             let d = 20.0 * s;
             self.draw_battery_ring((tx - 3.0 * s - d / 2.0, (ht + hb) / 2.0), d, b, a)?;
         }
-        // Date and time in the middle, the time bolder.
         {
             let (date, time) = (v.date, v.time);
             let (dw, tw) = (width(date, F_CLOCK), width(time, F_CLOCK_BOLD));

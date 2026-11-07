@@ -1,11 +1,6 @@
-//! The Focus page (Pomodoro): the time left, three chips, restart / start / next, the whole cycle as one strip of
-//! segments and a line of round and finishing time.
-
 use super::*;
 
 impl Renderer {
-    /// `btns` are the page's buttons, `(cl, cr)` the content's left and right edge, `a` its opacity, `icons` the restart and
-    /// next line icons with their geometry.
     pub(super) fn draw_focus(
         &self,
         text: &dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
@@ -30,7 +25,6 @@ impl Renderer {
             let kc = |k: focus::Kind| if k == focus::Kind::Focus { CORAL } else { GREEN };
             let running = f.running();
             let cw_l = (cr - cl) / s;
-            // The time left, big, with the chips under it.
             text(&focus::mmss(f.remaining(now)), F_TIME, rect(cl, 32.0 * s, cl + 200.0 * s, 88.0 * s), lead, grey(1.0, a))?;
             for kind in [focus::Kind::Focus, focus::Kind::Short, focus::Kind::Long] {
                 let Some(cb) = rect_of(Button::FocusMode(kind)) else { continue };
@@ -41,7 +35,6 @@ impl Renderer {
                 rt.FillRoundedRectangle(&rounded(cb, (cb.bottom - cb.top) / 2.0), &self.brush(fill)?);
                 text(focus_chip_label(kind), F_LABEL, cb, center, if on { solid(kcol, a) } else { grey(if hot { 0.85 } else { 0.6 }, a) })?;
             }
-            // Restart, the white disc, next: the same hand as the Music page's controls.
             if let (Some(rb), Some(pb), Some(nb)) = (rect_of(Button::FocusReset), rect_of(Button::FocusPlay), rect_of(Button::FocusSkip)) {
                 for (b, br, which) in [(Button::FocusReset, rb, 0), (Button::FocusSkip, nb, 1)] {
                     let Some((ic, geoms)) = icons.get(which) else { continue };
@@ -56,7 +49,6 @@ impl Renderer {
                 let nudge = if running { 0.0 } else { 1.5 * s };
                 micon("play", if running { ICON_PAUSE } else { ICON_PLAY }, F_ICON, rect(pb.left + nudge, pb.top, pb.right + nudge, pb.bottom), grey(0.05, a))?;
             }
-            // The whole cycle in one strip: a segment as long as its minutes, full once done, filling while it runs.
             for (i, (x0, x1)) in focus_segments(cw_l).into_iter().enumerate() {
                 let kcol = kc(focus::CYCLE[i]);
                 let hot = hovered == Some(Button::FocusSeg(i));
@@ -70,7 +62,6 @@ impl Renderer {
                     rt.FillRoundedRectangle(&rounded(rect(seg.left, seg.top, seg.left + w, seg.bottom), radius), &self.brush(solid(kcol, a))?);
                 }
             }
-            // Round and the clock's end of the cycle, under the strip.
             let left_min = f.cycle_left(now).as_secs().div_ceil(60) as u32;
             let ends = health::hhmm((minute_of_day + left_min) % 1440);
             let left_txt = if left_min >= 60 {

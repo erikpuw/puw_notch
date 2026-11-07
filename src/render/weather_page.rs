@@ -1,5 +1,3 @@
-//! The Weather page: the city line, the big icon and temperature, the hours ahead and a line of figures.
-
 use super::*;
 
 impl Renderer {
@@ -32,10 +30,8 @@ impl Renderer {
             let wx = v.weather;
             match (&wx.place, wx.now, weather_line) {
                 (Some(place), Some(n), Some((ic, geoms))) => {
-                    // Conditions older than STALE_MIN are dimmed and say so in words.
                     let stale = wx.is_stale(lv.now);
                     let fade = if stale { 0.55 } else { 1.0 };
-                    // City line: the name, then the unit chips and x at its end.
                     let buttons_l = cr - (30.0 + 8.0 + 2.0 * UNIT_W + SUN_GAP + SUN_W + 8.0) * s;
                     text(&place.name, F_TITLE, rect(cl, (CITY_Y + 2.0) * s, buttons_l, (CITY_Y + 22.0) * s), lead, grey(1.0, a))?;
                     if let Some(ob) = rect_of(Button::CityOff) {
@@ -43,8 +39,6 @@ impl Renderer {
                         hover_disc(Button::CityOff)?;
                         text(ICON_CLOSE, F_SMALL_ICON, ob, center, if hot { color(1.0, 0.45, 0.4, a) } else { grey(0.55, a) })?;
                     }
-                    // The unit to show it in: one capsule holding both, the chosen one lit, the
-                    // other lighting on hover.
                     if let (Some(first), Some(last)) = (rect_of(Button::Unit(weather::Unit::C)), rect_of(Button::Unit(weather::Unit::F))) {
                         rt.FillRoundedRectangle(&rounded(rect(first.left, first.top, last.right, last.bottom), UNIT_H / 2.0 * s), &self.brush(grey(0.1, a))?);
                     }
@@ -56,17 +50,12 @@ impl Renderer {
                         }
                         text(unit.symbol(), F_LABEL, chip, center, grey(if on { 1.0 } else { 0.55 }, a))?;
                     }
-                    // The sun's path: a chip left of the unit capsule, lit while that view is on.
                     if let Some(chip) = rect_of(Button::SunToggle) {
                         let (on, hot) = (v.sun_view, hovered == Some(Button::SunToggle));
                         rt.FillRoundedRectangle(&rounded(chip, UNIT_H / 2.0 * s), &self.brush(grey(if on { 0.22 } else if hot { 0.16 } else { 0.1 }, a))?);
                         text("\u{E706}", F_SMALL_ICON, chip, center, grey(if on { 1.0 } else if hot { 0.85 } else { 0.6 }, a))?;
                     }
-                    // Left block, bare on the panel: the big icon, the temperature beside it, the
-                    // sky's words and the feels-like under that.
                     wx_icon(ic, geoms, cl, ICON_Y * s, WX_ICON * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
-                    // The temperature shrinks to fit the left block when it is long ("-128°"), turning
-                    // about its left end.
                     let temp = format!("{}°", v.unit.number(n.temp));
                     let (tx, ty) = (cl + TEMP_X * s, (ICON_Y + 20.0) * s);
                     let k = ((STRIP_X - TEMP_X - 8.0) * s / width(&temp, F_TEMP)).min(1.0);
@@ -76,7 +65,6 @@ impl Renderer {
                     rt.SetTransform(&base);
                     let words_r = cl + (STRIP_X - 8.0) * s;
                     text(weather::describe(n.sky), F_BODY, rect(tx, (ICON_Y + 42.0) * s, words_r, (ICON_Y + 58.0) * s), lead, grey(0.9, a))?;
-                    // Right block: the next five slots, three hours apart, as columns.
                     let bl = cl + STRIP_X * s;
                     let columns = if v.sun_view { 0 } else { hour_lines.len().min(5) };
                     if v.sun_view {
@@ -97,9 +85,6 @@ impl Renderer {
                             }
                         }
                     }
-                    // A hairline, then one line of figures across the whole width: the first at the left
-                    // edge, under the icon, the last at the right end, the rest spread evenly between.
-                    // Kept clear of the page dots below.
                     rt.FillRectangle(&rect(cl, (FIGURES_Y - 3.0) * s, cr, (FIGURES_Y - 2.0) * s), &self.brush(grey(0.12, a))?);
                     let high = weather::outlook(&wx.hours).high.map(|h| format!("{} {}°", tr("Cao nhất", "High"), v.unit.number(h.temp)));
                     let figures: Vec<String> = [
@@ -126,7 +111,6 @@ impl Renderer {
                     } else {
                         (tr("Nhập tên thành phố rồi nhấn Enter", "Type a city and press Enter").to_string(), tr("Có dấu hay không dấu đều được", "With or without accents"))
                     };
-                    // A muted cloud and sun above the words, as the Tasks page has its ring.
                     if let Some((ic, geoms)) = weather_empty {
                         let mid = (cl + cr) / 2.0;
                         wx_icon(ic, geoms, mid - 16.0 * s, 72.0 * s, 32.0 * s, Some(((0.4, 0.4, 0.4), (0.4, 0.4, 0.4))), a, 9.0)?;

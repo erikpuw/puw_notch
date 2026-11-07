@@ -1,28 +1,16 @@
-//! Notch state machine and spring animation. Pure logic, no Win32.
-//! All sizes are logical pixels (multiply by DPI scale to draw).
-
 use crate::anim::{Spring, Tuning};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mode {
-    /// Normal pill under the top edge.
     Collapsed,
-    /// Thin line, used when the window under the notch is busy or "minimal" is on.
     Mini,
-    /// Mouse just arrived; grows a little while we wait to see if it stays.
     Peek,
-    /// Mouse arrived on the mini line.
     PeekMini,
-    /// Full panel.
     Expanded,
-    /// Banner for a new Windows notification; ends by timer.
     Alert,
-    /// Shrinks into the screen edge before the fullscreen window is hidden.
     Hidden,
 }
 
-/// (width, height, corner radius) the notch animates towards in each mode.
-/// `live` = music is playing: wider pill (cover + bars). The panel is one size; it pages its content.
 pub fn target(mode: Mode, live: bool) -> [f32; 3] {
     match (mode, live) {
         (Mode::Collapsed, false) => [150.0, 30.0, 14.0],
@@ -37,20 +25,14 @@ pub fn target(mode: Mode, live: bool) -> [f32; 3] {
     }
 }
 
-/// A notification banner shows at most this many lines of its text; longer text ends with "…".
 pub const BANNER_MAX_LINES: u32 = 4;
-/// Text line height in the notification banner (13 px Segoe UI) and where the text starts.
 pub const BANNER_LINE_H: f32 = 18.0;
 pub const BANNER_TEXT_TOP: f32 = 43.0;
 
-/// Banner size for `lines` lines of notification text (0 = status banner: volume, brightness...).
-/// Wider than the status banner and as tall as its text, capped at `BANNER_MAX_LINES`.
-/// Banner of a question with buttons: `lines` (1 to 3) lines of its text, then a row of buttons.
 pub fn alert_size_choice(lines: u8) -> [f32; 3] {
     [520.0, BANNER_TEXT_TOP + lines.clamp(1, 3) as f32 * BANNER_LINE_H + 42.0, 24.0]
 }
 
-/// Height one line of a checklist banner adds to a status banner.
 pub const ROW_H: f32 = 22.0;
 
 pub fn alert_size(lines: u8) -> [f32; 3] {
@@ -61,29 +43,19 @@ pub fn alert_size(lines: u8) -> [f32; 3] {
     [420.0, BANNER_TEXT_TOP + n * BANNER_LINE_H + 7.0, 24.0]
 }
 
-/// Extra width of the open panel while the lyrics show beside the player. The lyrics take the
-/// player's right margin (its page arrow hides meanwhile), so this is less than their width.
 pub const LYRICS_EXTRA_W: f32 = 284.0;
 
-/// Window must fit the largest target plus the hover margin.
-/// Includes room for the spring overshoot and the ears.
 pub const MAX_W: f32 = 820.0;
 pub const MAX_H: f32 = 330.0;
-/// How long a notification banner stays.
 pub const ALERT_MS: u32 = 5000;
-/// How long a status banner (Caps Lock, brightness) stays.
 pub const STATUS_MS: u32 = 1500;
-/// Concave flares joining the notch sides to the screen edge: grow with the notch, capped.
 const EAR_RATIO: f32 = 0.35;
 const EAR_MAX: f32 = 14.0;
 
-/// Ear size (logical px) for a notch `h` tall.
 pub fn ear(h: f32) -> f32 {
     (h * EAR_RATIO).min(EAR_MAX)
 }
 
-/// Look of the notch: `Ears` (v1) hangs from the screen edge with concave flares; `Pill` (v2)
-/// is a capsule floating `PILL_GAP` below the edge.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Style {
     #[default]
@@ -91,17 +63,13 @@ pub enum Style {
     Pill,
 }
 
-/// Gap between the screen's top edge and the floating pill, logical px.
 const PILL_GAP: f32 = 6.0;
 
 impl Style {
-    /// Logical px between the screen's top edge and the top of the drawn notch.
     pub fn gap(self) -> f32 {
         if self == Style::Pill { PILL_GAP } else { 0.0 }
     }
 
-    /// The gap for a notch `height` (logical px) tall: it closes as the pill shrinks to the thin
-    /// line, which sits right on the edge of the screen.
     pub fn gap_at(self, height: f32) -> f32 {
         self.gap() * ((height - 4.0) / 26.0).clamp(0.0, 1.0)
     }
@@ -119,38 +87,24 @@ impl Style {
     }
 }
 
-/// Area that reacts to the mouse, logical px: (half width from the centre, height from the top).
-/// Only the pill body: the ears are drawn (so Windows reports the mouse over them) but entering
-/// and the dwell check both test this, so the rim neither opens the panel nor bounces the pill.
 pub fn hover_area(size: [f32; 3]) -> (f32, f32) {
     (size[0] / 2.0, size[1])
 }
-/// The system's mouse-leave message can go missing (the window was hidden or pushed under a
-/// fullscreen app and brought back), which leaves the panel open with the cursor far away. True
-/// when the panel, or the "mouse is inside" flag, outlived the real cursor: release it.
-/// Typing keeps the panel open on purpose; a banner ends by its own timer.
 pub fn hover_stale(mode: Mode, hover_in: bool, editing: bool, inside: bool) -> bool {
     !editing && !inside && mode != Mode::Alert && (hover_in || matches!(mode, Mode::Peek | Mode::PeekMini | Mode::Expanded))
 }
 
-/// How long the mouse must stay before Peek turns into Expanded.
 pub const DWELL_MS: u32 = 80;
 
 pub struct Notch {
     pub mode: Mode,
     pub minimal: bool,
     pub live: bool,
-    /// Lines of text in the current notification banner (0 = status banner), see `alert_size`.
     alert_lines: u8,
-    /// Width of a status banner that fits its text (0 = the standard width).
     alert_width: f32,
-    /// Lines of a checklist banner: the banner is taller by `ROW_H` each.
     alert_rows: u8,
-    /// The banner is a question with buttons (wider, see `alert_size_choice`).
     alert_choice: bool,
-    /// The lyrics show beside the player: the open panel is LYRICS_EXTRA_W wider.
     wide: bool,
-    /// Width and height of the open panel: each page asks for its own (`set_panel`).
     panel: [f32; 2],
     obstructed: bool,
     clear_checks: u8,
@@ -161,7 +115,6 @@ impl Notch {
     pub fn new(minimal: bool) -> Self {
         let mut n = Notch { mode: Mode::Collapsed, minimal, live: false, alert_lines: 0, alert_width: 0.0, alert_rows: 0, alert_choice: false, wide: false, panel: [target(Mode::Expanded, false)[0], target(Mode::Expanded, false)[1]], obstructed: false, clear_checks: 0, size: [Spring::default(); 3] };
         n.mode = n.rest_mode();
-        // Start as the thin mini line and let the spring grow it into the pill, the way Nusa appears.
         for (s, t) in n.size.iter_mut().zip(target(Mode::Mini, false)) {
             s.pos = t;
         }
@@ -176,7 +129,6 @@ impl Notch {
         matches!(self.mode, Mode::Collapsed | Mode::Mini)
     }
 
-    /// Resting at its pill size, springs stopped: the only time the area beside it is our own business.
     pub fn is_settled_rest(&self) -> bool {
         self.is_resting() && self.size() == self.goal()
     }
@@ -186,36 +138,30 @@ impl Notch {
         self.wide = false;
     }
 
-    /// Wait for the springs to stop, including any overshoot, before hiding the OS window.
     pub fn is_hidden(&self) -> bool {
         self.mode == Mode::Hidden && self.size.iter().all(|s| s.pos == 0.0 && s.vel == 0.0)
     }
 
-    /// Current (w, h, r). The bounce can swing past zero when shrinking to the mini line; clamp.
     pub fn size(&self) -> [f32; 3] {
         [self.size[0].pos.max(0.0), self.size[1].pos.max(0.0), self.size[2].pos.max(0.0)]
     }
 
-    /// Music started/stopped. Returns true if the target size changed (caller animates).
     pub fn set_live(&mut self, live: bool) -> bool {
         let changed = self.live != live;
         self.live = live;
         changed
     }
 
-    /// Mouse entered the drawn shape. Returns true if a dwell timer should start.
     pub fn on_enter(&mut self) -> bool {
         self.mode = match self.mode {
             Mode::Collapsed => Mode::Peek,
             Mode::Mini => Mode::PeekMini,
-            // Banner stays as is; resting on it opens the panel.
             Mode::Alert => Mode::Alert,
             _ => return false,
         };
         true
     }
 
-    /// Dwell timer fired.
     pub fn on_dwell(&mut self, inside: bool) {
         match self.mode {
             Mode::Peek | Mode::PeekMini => self.mode = if inside { Mode::Expanded } else { self.rest_mode() },
@@ -225,14 +171,11 @@ impl Notch {
     }
 
     pub fn on_leave(&mut self) {
-        // A banner ends by its own timer, not by the mouse passing over it.
         if !matches!(self.mode, Mode::Alert | Mode::Hidden) {
             self.mode = self.rest_mode();
         }
     }
 
-    /// New banner with `lines` lines of notification text (0 = status banner). Returns true if
-    /// shown (not while the panel is open).
     pub fn on_alert(&mut self, lines: u8) -> bool {
         if matches!(self.mode, Mode::Expanded | Mode::Hidden) {
             return false;
@@ -245,31 +188,25 @@ impl Notch {
         true
     }
 
-    /// The status banner on show has `rows` lines under its title.
     pub fn set_alert_rows(&mut self, rows: u8) {
         self.alert_rows = rows;
     }
 
-    /// A status banner took the place of another banner in place: it has no text lines, and none of the
-    /// height of the text banner it replaced stays.
     pub fn set_alert_status(&mut self, rows: u8) {
         self.alert_lines = 0;
         self.alert_rows = rows;
     }
 
-    /// The status banner just shown is `width` wide, to fit its lines.
     pub fn set_alert_width(&mut self, width: f32) {
         self.alert_width = width;
     }
 
-    /// Banner of a question with buttons and `lines` lines of text. Returns true if shown.
     pub fn on_alert_choice(&mut self, lines: u8) -> bool {
         let shown = self.on_alert(lines);
         self.alert_choice = shown;
         shown
     }
 
-    /// Size the springs head for right now.
     fn goal(&self) -> [f32; 3] {
         if self.mode == Mode::Alert {
             let mut size = if self.alert_choice { alert_size_choice(self.alert_lines) } else { alert_size(self.alert_lines) };
@@ -289,14 +226,12 @@ impl Notch {
         t
     }
 
-    /// The open panel's size for the page on show; the springs glide to it. Returns true if it changed.
     pub fn set_panel(&mut self, size: [f32; 2]) -> bool {
         let changed = self.panel != size;
         self.panel = size;
         changed
     }
 
-    /// Lyrics view on / off. Returns true if it changed.
     pub fn set_wide(&mut self, wide: bool) -> bool {
         let changed = self.wide != wide;
         self.wide = wide;
@@ -316,14 +251,10 @@ impl Notch {
         }
     }
 
-    /// Resting as the thin line because something is under the pill (until two quiet checks bring it back).
     pub fn obstructed(&self) -> bool {
         self.obstructed
     }
 
-    /// Result of one obstruction check. A busy one shrinks the notch at once (`screen::check` only says so for a
-    /// window that holds still, and a picture that shows tabs is believed straight away); bringing it back takes
-    /// two quiet ones in a row, so one odd frame (a tooltip) does not.
     pub fn report_busy(&mut self, busy: bool) {
         if busy {
             self.clear_checks = 0;
@@ -339,7 +270,6 @@ impl Notch {
         }
     }
 
-    /// Advance the animation. Returns true while still moving.
     pub fn step(&mut self, dt: f32) -> bool {
         let t = self.goal();
         let mut moving = false;
@@ -439,7 +369,6 @@ mod tests {
 
     #[test]
     fn hover_area_is_the_pill_body() {
-        // Ears and the space beside them do not count: only the pill itself opens the panel.
         let pill = target(Mode::Collapsed, false);
         assert_eq!(hover_area(pill), (pill[0] / 2.0, pill[1]));
         let line = target(Mode::Mini, false);
@@ -477,7 +406,6 @@ mod tests {
         settle(&mut n);
         assert_eq!(n.size(), target(Mode::Collapsed, false));
         assert!(n.is_settled_rest());
-        // music starting widens the resting pill
         assert!(n.set_live(true));
         assert!(!n.set_live(true));
         settle(&mut n);
@@ -487,22 +415,18 @@ mod tests {
     #[test]
     fn lyrics_widen_only_the_open_panel_and_keep_its_height() {
         let mut n = Notch::new(false);
-        // Not open: the flag changes nothing about the pill.
         assert!(n.set_wide(true));
         assert!(!n.set_wide(true), "no change the second time");
         settle(&mut n);
         assert_eq!(n.size(), target(Mode::Collapsed, false));
-        // Open: wider by LYRICS_EXTRA_W, same height and corner, still centred (width only).
         n.on_enter();
         n.on_dwell(true);
         settle(&mut n);
         let [w, h, r] = target(Mode::Expanded, false);
         assert_eq!(n.size(), [w + LYRICS_EXTRA_W, h, r]);
-        // Narrow again.
         n.set_wide(false);
         settle(&mut n);
         assert_eq!(n.size(), [w, h, r]);
-        // The window has room for it plus the shadow.
         assert!(w + LYRICS_EXTRA_W + 2.0 * 14.0 <= MAX_W);
     }
 
@@ -572,13 +496,11 @@ mod tests {
         n.report_busy(true);
         assert!(n.on_alert(0));
         assert_eq!(n.mode, Mode::Alert);
-        // passing over the banner does not end it
         assert!(n.on_enter());
         n.on_leave();
         assert_eq!(n.mode, Mode::Alert);
         n.on_alert_end();
         assert_eq!(n.mode, Mode::Mini);
-        // resting on the banner opens the panel, and the panel is not replaced by a banner
         n.on_alert(0);
         n.on_enter();
         n.on_dwell(true);
@@ -586,7 +508,6 @@ mod tests {
         assert!(!n.on_alert(0));
         n.on_alert_end();
         assert_eq!(n.mode, Mode::Expanded);
-        // a notification with text grows to fit its lines
         let mut n = Notch::new(false);
         n.on_alert(3);
         settle(&mut n);

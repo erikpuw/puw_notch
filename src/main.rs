@@ -59,36 +59,23 @@ use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS
 
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_FRAME: u32 = WM_APP + 7;
-/// Lives in the commctrl headers; not worth a crate feature for one constant.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const T_ANIM: usize = 1;
 const T_CHECK: usize = 2;
 const T_DWELL: usize = 3;
 const T_ALERT: usize = 4;
 const T_CARET: usize = 6;
-/// The foreground window changed or moved: look again once it has had a moment to settle.
 const T_SETTLE: usize = 7;
-/// Network banners queue: each stays at least this long before the next one in line replaces it.
 const T_CONN: usize = 8;
 const CONN_MS: u32 = 1500;
-/// A Windows notification stays this long before the next one in line replaces it.
 const NOTE_MS: u32 = 3000;
-/// The line of banners waiting holds at most this many (the oldest go first).
 const QUEUE_MAX: usize = 8;
 const SETTLE_MS: u32 = 120;
-/// Page switch morph length.
-/// Notifications kept on the Notifications page.
 const NOTES_MAX: usize = 30;
 const CARET_MS: u32 = 530;
 const CHECK_MS: u32 = 500;
-/// A live activity's banner lasts this long past the last tick that renewed it.
 const ACTIVITY_MS: u32 = 1500;
-/// A pill that has rested this long (5 s) gives its pages back to Windows: Task Manager then shows
-/// a few MB instead of what the last panel touched. They come back on demand. (The other notch app
-/// trims as it enters its resting state, too.)
 const TRIM_TICKS: u32 = 10;
-/// When `tick` last ran (unix ms) and where the notch was then (mode * 16 + page): the watchdog
-/// writes to the log when the window stops answering, which the log could not say before.
 static BEAT: AtomicU64 = AtomicU64::new(0);
 static WHERE: AtomicU8 = AtomicU8::new(0);
 const STALL_MS: u64 = 6000;
@@ -129,7 +116,6 @@ const MENU_STYLE_EARS: usize = 18;
 const MENU_STYLE_PILL: usize = 19;
 const MENU_APPROVE: usize = 20;
 const MENU_ACTIVITY: usize = 21;
-/// The page choices of the "Pages" submenu: this + the page's index in `PAGES`.
 const MENU_PAGE: usize = 30;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
@@ -158,125 +144,82 @@ struct App {
     renderer: Renderer,
     scale: f32,
     monitor: RECT,
-    /// Window placement in device px: x, y, w, h.
     win: (i32, i32, i32, i32),
     hidden: bool,
     tracking: bool,
-    /// Cursor reached the pill body this visit (ears alone do not count, see `notch::hover_area`).
     hover_in: bool,
     animating: bool,
     last_frame: Instant,
     taskbar_created: u32,
     time: String,
-    /// Short date for the panel header.
     date: String,
     battery: Option<system::Battery>,
     notifications: Option<notify::Reader>,
-    /// What the Alert banner shows right now.
     banner: Option<Toast>,
-    /// When the banner appeared.
     banner_at: Instant,
-    /// The lyrics button was pressed in this visit of the open panel.
     lyrics_open: bool,
-    /// The 24-hour forecast shows in place of the details (Weather page).
-    /// The last USB change shown (device, change, when), to drop a repeat of it.
     usb_last: Option<(String, usb::Change, Instant)>,
-    /// Last brightness Windows reported; the first report (sent on registering) is not a change.
     last_brightness: Option<u8>,
     audio: Option<audio::Audio>,
     mic_muted: Option<bool>,
-    /// Ticks so far, to look at the default audio devices every few.
     audio_ticks: u8,
     music: music::Music,
-    /// The Limits page's readings, what was already announced, alerts waiting for a free moment,
-    /// and the app tab (followed by itself until the user picks one).
     usage: usage::Monitor,
-    /// Approval requests from other apps (see approve.rs) and the one on the banner now.
     approve: approve::Server,
     approval: Option<approve::Pending>,
     usage_watch: usage::Watch,
     usage_alerts: Vec<usage::Alert>,
-    /// Network banners waiting their turn, in the order the events came; `conn_busy` while one holds the slot.
     conn_queue: Vec<Toast>,
     conn_busy: bool,
-    /// The checklist banner of the network events that came together, while it still shows.
     conn_list: Option<ConnList>,
-    /// A VPN was up and is to come back with the network (see `vpn_expected`).
     vpn_was_up: bool,
-    /// When a VPN that was up went down with no banner on show to say why (the network may follow).
     vpn_lost: Option<Instant>,
     usage_tab: usize,
     usage_tab_chosen: bool,
     track: Option<music::Track>,
     seek_drag: Option<SeekDrag>,
-    /// Idle robot eyes, the tray switch for them and when they last moved.
     robot: robot::Robot,
     robot_on: bool,
-    /// Ears (v1) or floating pill (v2), see `notch::Style`.
     style: notch::Style,
     robot_at: Instant,
-    /// When the current track was paused (None while playing or with no player).
     paused_since: Option<Instant>,
     started: Instant,
-    /// Frame pacing: VSYNC while something moves, T_ANIM at BARS_FRAME_MS for the equaliser alone, 0 = idle.
     frame_ms: u32,
     vsync: Vsync,
     hovered_button: Option<Button>,
-    /// Foreground window + rect at the last check: busy sampling waits for it to hold still.
     last_foreground: Option<(isize, RECT)>,
-    /// Ticks the pill has rested without a move; at `TRIM_TICKS` the working set is handed back.
     rested: u32,
-    /// Whether the log last said the panel is open (so it says it once per change).
     logged_open: bool,
     last_gap_log: Option<Instant>,
     last_slow_tick: Option<Instant>,
-    /// The row of page icons is open under the page dots.
     nav_open: bool,
     page: Page,
     todo: todo::Todo,
     today: u32,
-    /// Text in the add box; kept if the box loses focus.
     draft: String,
-    /// The add box has the keyboard (window activated for it).
     editing: bool,
-    /// Task being edited in the box; None = the box adds.
     edit_item: Option<usize>,
     caret: bool,
     todo_scroll: usize,
-    /// Notifications page: what Windows still keeps, newest first, and its first visible row.
     notes: Vec<notify::Note>,
     note_scroll: usize,
-    /// Where the Notifications list is drawn, in rows: eases toward `note_scroll`.
     note_pos: f32,
     health: health::Health,
     activity: activity::Watch,
     focus: Focus,
-    /// Health card showing its settings.
     settings_open: Option<Card>,
-    /// Page switch in progress: (page leaving, start, direction).
     page_anim: Option<(Page, Instant, i32)>,
     icons_morphing: bool,
     active_page: Option<Page>,
-    /// Window that had the keyboard before typing started; it gets it back after.
     prev_foreground: HWND,
-    /// First half of a UTF-16 pair arriving in WM_CHAR (emoji).
     high_surrogate: Option<u16>,
     weather: weather::Weather,
-    /// The weather as of the last WM_WEATHER (city and current conditions).
     wx: weather::State,
-    /// Text in the Weather page's city box, apart from the tasks' draft.
     city_draft: String,
-    /// A city typed in the box is being looked up: the box keeps its text until the answer says it
-    /// was found (a typo can then be mended instead of retyped).
     awaiting_city: bool,
-    /// When the open panel or its page appeared (the Weather page's icon moves from then).
     page_since: Instant,
-    /// °C or °F, and whether it was chosen (else it follows the region setting and is not saved).
     unit: weather::Unit,
-    /// The Weather page shows the sun's path in place of the hours ahead.
     sun_view: bool,
-    /// The Calendar page: the month on show (0 = not set yet, it opens on this month), the day picked, the lunar
-    /// choice, and whether this PC's region keeps a lunar calendar (its time zone), read again every few seconds.
     cal_year: i32,
     cal_month: u32,
     cal_sel: u32,
@@ -286,8 +229,6 @@ struct App {
     unit_chosen: bool,
 }
 
-/// Animation frame intervals.
-/// `frame_ms` value for frames paced by the display (see `Vsync`).
 const VSYNC: u32 = 1;
 const BARS_FRAME_MS: u32 = 50;
 
@@ -319,8 +260,6 @@ impl App {
         if self.active_page != page {
             self.active_page = page;
             self.music.set_page_open(page == Some(Page::Music));
-            // The notification icons load as soon as the panel opens (on any page), so the Notifications
-            // page already has them when it slides in.
             let notes = page.is_some() && render::page_shown(Page::Notify);
             self.renderer.set_page_open(notes);
             self.usage.set_page_open(page == Some(Page::Usage));
@@ -331,7 +270,6 @@ impl App {
     fn redraw(&mut self) {
         self.sync_page_work();
         if self.hidden && self.notch.is_hidden() { return; }
-        // The page's own motion plays from the moment the panel opens.
         if self.notch.mode != Mode::Expanded {
             self.page_since = Instant::now();
         }
@@ -373,7 +311,6 @@ impl App {
             page_age: self.page_since.elapsed().as_secs_f32(),
             unit: self.unit, sun_view: self.sun_view, cal,
         };
-        // An icon that just changed keeps frames coming until its morph has played.
         self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
         if self.icons_morphing && !self.animating {
             self.kick();
@@ -404,8 +341,6 @@ impl App {
         self.set_frame_interval(VSYNC);
     }
 
-    /// The equaliser in the resting pill keeps frames coming while music plays, and so does the
-    /// aurora on the open Music page; so do the idle robot's eyes while they show or fade.
     fn bars_active(&self) -> bool {
         let playing = self.track.as_ref().is_some_and(|t| t.playing);
         let bars = playing && matches!(self.notch.mode, Mode::Collapsed | Mode::Peek);
@@ -417,8 +352,6 @@ impl App {
         system::Settings { pages: render::pages_on(), minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), sun_view: self.sun_view, notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared), activity: self.activity.enabled }
     }
 
-    /// Idle robot: shown only on the plain resting pill (no music, banner, open panel, mini or
-    /// fullscreen game), from the time since the last key or mouse input.
     fn refresh_robot(&mut self) {
         let allowed = self.robot_on && !self.hidden && self.notch.mode == Mode::Collapsed && !self.notch.live;
         if self.robot.update(idle_seconds(), allowed) || (self.robot.visible() && !self.animating) {
@@ -426,8 +359,6 @@ impl App {
         }
     }
 
-    /// The robot's eyes for this frame (None while it is away), with the cursor relative to the
-    /// pill centre for the glance.
     fn robot_eyes(&mut self) -> Option<robot::Eyes> {
         if !self.robot.visible() {
             self.robot_at = Instant::now();
@@ -439,7 +370,6 @@ impl App {
         let cursor = unsafe { GetCursorPos(&mut p) }.is_ok().then(|| {
             let cx = (self.win.0 + self.win.2 / 2) as f32;
             let cy = self.win.1 as f32 + self.top_px() + self.notch.size()[1] * self.scale / 2.0;
-            // Across the half width of the monitor and down its height, so the eyes follow the cursor over the whole screen.
             let (half_w, h) = (((self.monitor.right - self.monitor.left) as f32 / 2.0).max(1.0), ((self.monitor.bottom - self.monitor.top) as f32).max(1.0));
             (((p.x as f32 - cx) / half_w).clamp(-1.0, 1.0), ((p.y as f32 - cy) / h).clamp(-1.0, 1.0))
         });
@@ -455,20 +385,15 @@ impl App {
         let gap = (now - self.last_frame).as_secs_f32();
         let dt = gap.min(0.05);
         self.last_frame = now;
-        // A frame that came this late while moving is what the eye reads as a stutter: leave a line
-        // (at most one every 10 s) so a report of one says how late and in which mode.
-        // The equaliser alone comes by timer every BARS_FRAME_MS: a few timer steps of slack are not a stutter.
         let limit = if self.frame_ms == BARS_FRAME_MS { 0.125 } else { 0.08 };
         if gap > limit && self.animating && self.last_gap_log.is_none_or(|t| t.elapsed().as_secs() >= 10) {
             self.last_gap_log = Some(now);
             system::log(&format!("late frame: {:.0} ms (mode {:?}, page {})", gap * 1000.0, self.notch.mode, self.page.name()));
         }
-        // The lyrics and the 24-hour forecast belong to one visit of the open panel.
         if self.notch.mode != Mode::Expanded {
             self.lyrics_open = false;
         }
         self.notch.set_wide(self.lyrics_wide());
-        // The row of page icons only lives while the panel is open; it makes the panel a little taller.
         if self.nav_open && self.notch.mode != Mode::Expanded {
             self.nav_open = false;
             render::set_nav_open(false);
@@ -482,7 +407,6 @@ impl App {
             self.set_frame_interval(0);
             return;
         }
-        // The Notifications list glides to the row the wheel asked for.
         let goal = self.note_scroll as f32;
         if self.note_pos != goal {
             self.note_pos = anim::follow(self.note_pos, goal, dt, anim::LIST_GLIDE_RATE);
@@ -491,7 +415,6 @@ impl App {
             }
             moving = true;
         }
-        // The page morph runs on the same frames; drop it once it has played out.
         let morphing = match self.page_anim {
             Some((_, t0, _)) if t0.elapsed().as_secs_f32() < anim::PAGE_MORPH_S => true,
             Some(_) => {
@@ -511,8 +434,6 @@ impl App {
         }
     }
 
-    /// Pull the latest now-playing snapshot; music starting/stopping resizes the pill. A paused
-    /// player keeps the pill for a few seconds (`music::shows_pill`); the panel's Music page keeps it.
     fn refresh_music(&mut self) {
         self.track = self.music.snapshot().filter(|_| render::page_shown(Page::Music));
         if self.seek_drag.as_ref().is_some_and(|drag| !drag.current(self.track.as_ref())) {
@@ -521,21 +442,15 @@ impl App {
         let playing = self.track.as_ref().is_some_and(|t| t.playing);
         self.paused_since = if self.track.is_some() && !playing { Some(self.paused_since.unwrap_or_else(Instant::now)) } else { None };
         let live = music::shows_pill(playing, self.paused_since.map(|t| t.elapsed()));
-        // Frames already coming (the equaliser's timer) need no kick: it would switch them to the screen's
-        // rhythm and back, and restart their timer, at every tick.
         if self.notch.set_live(live) || (self.bars_active() && !self.animating) {
             self.kick();
         }
     }
 
-    /// Device px between the screen's top edge and the top of the drawn notch (a floating pill
-    /// sits lower in the window): mouse y is measured from the notch, not from the window.
     fn top_px(&self) -> f32 {
         (self.style.gap_at(self.notch.size()[1]) * self.scale).round()
     }
 
-    /// Is the cursor over the area that reacts to the mouse right now (`notch::hover_area`)?
-    /// Open or close the row of page icons under the page dots.
     fn set_nav(&mut self, open: bool) {
         if self.nav_open != open {
             self.nav_open = open;
@@ -558,8 +473,6 @@ impl App {
         (x - cx).abs() <= half && y >= 0.0 && y <= h + self.top_px()
     }
 
-    /// Keep the speaker and mic callbacks on the default devices (a few seconds late is fine, so not on
-    /// every tick); the mic's state is read once when it is found, `WM_MIC` reports the rest.
     fn refresh_audio(&mut self) {
         let hwnd = self.hwnd;
         let Some(a) = &mut self.audio else { return };
@@ -571,7 +484,6 @@ impl App {
         }
     }
 
-    /// The default mic was muted or unmuted, from anywhere (laptop mic key, Windows settings, a call app).
     fn mic_changed(&mut self, muted: bool) {
         if self.mic_muted.replace(muted) == Some(muted) {
             return;
@@ -580,7 +492,6 @@ impl App {
         self.show_banner(status_toast("Mic", title.to_string(), "", None, icon), STATUS_MS);
     }
 
-    /// A USB device came or went: a banner with its name (once per plug, none for root hubs).
     fn usb_changed(&mut self, change: usb::Change, path: &str) {
         let Some(id) = usb::instance_id(path) else { return };
         let now = Instant::now();
@@ -595,20 +506,15 @@ impl App {
         self.show_banner(status_toast("USB", usb::device_name(path), state, None, icon), ALERT_MS);
     }
 
-    /// Let go of a panel the mouse has left without Windows saying so (see `notch::hover_stale`).
     fn release_stale_hover(&mut self) {
-        // A seek drag ends with the button: one that outlived it (the release went elsewhere) would
-        // hold the panel open for good.
         if self.seek_drag.is_some() && unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } >= 0 {
             self.cancel_seek();
         }
-        // Only the pages with a text box are held open by typing.
         let typing = self.editing && matches!(self.page, Page::Todo | Page::Weather);
         if self.seek_drag.is_some() || !notch::hover_stale(self.notch.mode, self.hover_in, typing, self.cursor_inside()) {
             return;
         }
         self.hover_in = false;
-        // Ask Windows for the next leave again: the old request may be gone.
         self.tracking = false;
         self.hovered_button = None;
         unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
@@ -616,16 +522,12 @@ impl App {
         self.kick();
     }
 
-    /// After a fullscreen / immersive app (Photos) Windows can leave a topmost window stacked under
-    /// ordinary ones with its style intact: stack it on top again.
     fn keep_on_top(&self) {
         if !self.hidden && screen::buried(self.hwnd) {
             unsafe { let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
         }
     }
 
-    /// Tells the watchdog the window still answers, and leaves a line in the log when the panel
-    /// opens or closes: a panel that "does not retract" then shows in the log with its page.
     fn beat(&mut self) {
         BEAT.store(unix_ms(), Ordering::Relaxed);
         WHERE.store(self.notch.mode as u8 * 16 + PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as u8, Ordering::Relaxed);
@@ -636,9 +538,6 @@ impl App {
         }
     }
 
-    /// What is under the pill, and the verdict: hide for a fullscreen app, thin line or pill. While the window is
-    /// still moving (no verdict yet), or the notch is on its way back to the pill (it takes two quiet checks), the
-    /// next look is soon (`T_SETTLE`) instead of at the next tick.
     fn check_screen(&mut self, sample: bool) {
         let cx = self.win.0 + self.win.2 / 2;
         let pill_w = notch::target(Mode::Collapsed, self.notch.live)[0];
@@ -655,7 +554,6 @@ impl App {
                     let before = self.notch.mode;
                     self.notch.report_busy(busy);
                     if self.notch.mode != before {
-                        // A notch that "does not show" may be resting as the thin line: say why.
                         let fg = screen::class_name(unsafe { GetForegroundWindow() });
                         system::log(&if busy { format!("thin line: content under the pill, foreground {fg}") } else { "back to the pill".to_string() });
                         self.kick();
@@ -669,9 +567,6 @@ impl App {
     }
 
     fn tick(&mut self) {
-        // Typing needs the keyboard: when the notch is not the foreground window (Windows refused
-        // the focus, or took it back without a WM_ACTIVATE) it cannot be typing, and `editing`
-        // would keep the open panel from ever closing.
         if self.editing && unsafe { GetForegroundWindow() } != self.hwnd {
             self.end_edit();
         }
@@ -714,12 +609,9 @@ impl App {
         self.refresh_music();
         self.refresh_robot();
         mark(2, &mut lap);
-        // Progress bar and lyric line move on their own while the panel is open.
         changed |= self.notch.mode == Mode::Expanded && self.track.as_ref().is_some_and(|t| t.playing);
-        // The Pomodoro clock and the line along the pill move on their own once a second while it runs.
         changed |= self.focus.running() && self.audio_ticks % 2 == 0;
 
-        // The verdict about what is under the pill only counts while the pill rests, still and alone.
         let sample = self.notch.is_settled_rest();
         self.rested = if sample { self.rested.saturating_add(1) } else { 0 };
         if self.rested == TRIM_TICKS {
@@ -733,15 +625,12 @@ impl App {
         self.usage_banner();
         mark(4, &mut lap);
 
-        // New ones get a banner; the Notifications page lists what Windows still keeps.
         let new = self.notifications.as_mut().filter(|_| render::page_shown(Page::Notify)).map(|r| r.poll()).unwrap_or_default();
         let showing_notes = self.notch.mode == Mode::Expanded && self.page == Page::Notify;
-        // The list is read again when something arrived (and when the page opens), not on every tick.
         if showing_notes && !self.hidden && !new.is_empty() {
             self.refresh_notes();
             changed = true;
         }
-        // A banner waiting for the connection gives up at its deadline: the step that did not come fails.
         let now = Instant::now();
         if self.conn_list.as_mut().is_some_and(|l| l.expire(now)) {
             let t = self.conn_list.as_ref().map(|l| (list_toast(l), l.life_ms(now)));
@@ -751,8 +640,6 @@ impl App {
         }
         let current = self.activity.poll(Instant::now(), self.hwnd.0 as isize);
         self.activity_banner(current);
-        // Every new notification gets its banner, in the order they arrived (only the last used to: the ones before
-        // it in the same look were lost), each read for `NOTE_MS` before the next replaces it.
         self.conn_queue.extend(new);
         if self.conn_queue.len() > QUEUE_MAX {
             let extra = self.conn_queue.len() - QUEUE_MAX;
@@ -763,7 +650,6 @@ impl App {
         }
 
         mark(5, &mut lap);
-        // A tick that holds the window up for long is a stutter while something moves: say which part.
         let total: u32 = laps.iter().sum();
         if total > 30_000 && self.last_slow_tick.is_none_or(|t| t.elapsed().as_secs() >= 10) {
             self.last_slow_tick = Some(Instant::now());
@@ -774,17 +660,11 @@ impl App {
         }
     }
 
-    /// What clicking the banner on show opens: its picture (a screenshot), else the app or link of
-    /// the notification. None for status banners.
     fn banner_target(&self) -> Option<&str> {
         self.banner.as_ref().filter(|_| self.notch.mode == Mode::Alert).and_then(|b| b.image.as_deref().or(b.open.as_deref()))
     }
 
-    /// Short banner on the notch; skipped over a fullscreen game or while the panel is open.
-    /// Returns whether it is showing.
     fn show_banner(&mut self, t: Toast, ms: u32) -> bool {
-        // Notifications (no status icon) with text grow to fit it, up to BANNER_MAX_LINES lines.
-        // One banner at a time speaks for an approval; nothing else replaces it while it waits.
         if self.approval.is_some() && t.choices.is_empty() {
             return false;
         }
@@ -799,7 +679,6 @@ impl App {
         if self.hidden || !shown {
             return false;
         }
-        // A status banner without the big figure (battery, Bluetooth) is as wide as its lines.
         if t.icon.is_some() && t.choices.is_empty() && t.badge.is_none() {
             let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
             self.notch.set_alert_width(width);
@@ -812,24 +691,18 @@ impl App {
         true
     }
 
-    /// The banner of the running activity, else of the one that just ended.
     fn activity_banner(&mut self, current: Option<activity::LiveActivity>) {
         if let Some(a) = current {
             self.show_activity(activity_toast(&a, false), ACTIVITY_MS);
         } else if let Some(a) = self.activity.take_finished() {
-            // The end stays long enough to be read, like a notification.
             self.show_activity(activity_toast(&a, true), ALERT_MS);
         }
     }
 
-    /// The checklist banner: shown at once, and while it shows a new line makes it taller in place
-    /// (the dot of the new line pops in) and keeps it on for another full time.
     fn show_connection_list(&mut self, t: Toast, ms: u32, replaces: bool) {
         if self.approval.is_some() {
             return;
         }
-        // `replaces`: the list that was on show is folded into this one, so its banner turns into this
-        // one in place (a second banner would be confusing).
         if self.notch.mode == Mode::Alert && self.banner.as_ref().is_some_and(|b| (replaces || b.app == t.app) && b.choices.is_empty()) {
             let width = if t.badge.is_none() { self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale) } else { 0.0 };
             self.notch.set_alert_width(width);
@@ -842,8 +715,6 @@ impl App {
         }
     }
 
-    /// The next network banner in line, now: the first event shows at once, the ones behind it after
-    /// `CONN_MS` each, and the last stays its full time. The slot frees when the timer finds the line empty.
     fn next_connection_banner(&mut self) {
         if self.conn_queue.is_empty() {
             self.conn_busy = false;
@@ -851,11 +722,8 @@ impl App {
             return;
         }
         let t = self.conn_queue.remove(0);
-        // A notification (no status icon) is read for longer than a status line before the next one replaces it.
         let spacing = if t.icon.is_none() { NOTE_MS } else { CONN_MS };
         if !self.show_banner(t.clone(), ALERT_MS) {
-            // While the panel is open or a question waits it cannot show: it waits at the head of the line and is tried
-            // again at the next tick. In a game (hidden) it is dropped, it would be old news after.
             if !self.hidden {
                 self.conn_queue.insert(0, t);
             }
@@ -866,16 +734,12 @@ impl App {
         unsafe { SetTimer(Some(self.hwnd), T_CONN, spacing, None) };
     }
 
-    /// The live activity's banner: it stays while the activity runs (each tick renews it and updates its
-    /// text) and ends by itself a moment after the last one. Another banner is not pushed aside.
     fn show_activity(&mut self, t: Toast, ms: u32) {
         if self.approval.is_some() {
             return;
         }
         if self.notch.mode != Mode::Alert {
             self.show_banner(t, ms);
-        // The same activity's banner is updated in place, also when its icon changes (the arrow
-        // becoming the green tick morphs on screen).
         } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.icon.is_some() && b.choices.is_empty()) {
             let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
             self.notch.set_alert_width(width);
@@ -885,14 +749,11 @@ impl App {
         }
     }
 
-    /// The next approval request as a banner with Allow / Deny. One that cannot show now (the panel
-    /// is open, a fullscreen game) is told to ask as usual.
     fn approve_next(&mut self) {
         if self.approval.is_some() {
             return;
         }
         while let Some(p) = self.approve.next() {
-            // Switched off in the tray, or answered in its app while it waited: back to the app.
             if !self.approve.is_enabled() || self.approve.take_cancelled(p.id) {
                 p.answer(approve::Answer::Ask);
                 continue;
@@ -907,7 +768,6 @@ impl App {
         }
     }
 
-    /// The banner's request gets its answer (a click, or Ask when time ran out); the banner goes.
     fn finish_approval(&mut self, answer: approve::Answer) {
         let Some(p) = self.approval.take() else { return };
         p.answer(answer);
@@ -917,7 +777,6 @@ impl App {
         self.approve_next();
     }
 
-    /// The oldest waiting limit alert, as a banner when one can show now (else it waits for the next tick).
     fn usage_banner(&mut self) {
         if !render::page_shown(Page::Usage) {
             return;
@@ -931,10 +790,6 @@ impl App {
         }
     }
 
-    /// Task reminders (early and on time) whose moment has come, then water / stand-up. One that
-    /// cannot show now (fullscreen game, panel open) rings at the next chance. A banner that shows
-    /// switches the panel to its page, so resting on it opens the right one.
-    /// A Pomodoro segment that ran out: a banner says so and what comes next; the next one has started by itself (after the long break the cycle waits for a new start).
     fn focus_tick(&mut self) {
         if !render::page_shown(Page::Focus) {
             return;
@@ -949,7 +804,6 @@ impl App {
     fn remind(&mut self) {
         let now = system::now_stamp();
         let hhmm = |d: u64| format!("{:02}:{:02}", d / 100 % 100, d % 100);
-        // A page the user hid does nothing: no reminders, no water, no stand-up.
         let (tasks, health) = (render::page_shown(Page::Todo), render::page_shown(Page::Health));
         for (i, ring) in self.todo.rings(now).into_iter().filter(|_| tasks) {
             let Some(item) = self.todo.items.get(i) else { continue };
@@ -987,9 +841,6 @@ impl App {
         }
     }
 
-    /// What the Calendar page shows now: its month (this one until another is chosen), the day picked, today, and
-    /// whether the lunar choice is there (this PC's Windows region, read again every few seconds so a change in
-    /// Windows shows without a restart).
     fn cal_view(&mut self, now: u64) -> calendar::CalView {
         let date = (now / 10_000) as u32;
         let today = ((date / 10_000) as i32, date / 100 % 100, date % 100);
@@ -1003,7 +854,6 @@ impl App {
         calendar::CalView { year: self.cal_year, month: self.cal_month, sel: self.cal_sel, today, zone: self.cal_zone, lunar_on: self.cal_lunar && self.cal_zone.is_some() }
     }
 
-    /// First visible row of the list page on screen.
     fn scroll(&self) -> usize {
         if self.page == Page::Notify { self.note_scroll } else { self.todo_scroll }
     }
@@ -1017,7 +867,6 @@ impl App {
         }
     }
 
-    /// Re-read the Notifications page from Windows (cleared there = gone here).
     fn refresh_notes(&mut self) {
         if let Some(r) = &self.notifications {
             self.notes = r.recent(NOTES_MAX, system::utc_offset_min());
@@ -1029,7 +878,6 @@ impl App {
         render::hit_button(self.win.2 as f32 / 2.0, self.scale, x, y, self.track.as_ref(), self.page, self.rows(), self.scroll(), self.settings_open, self.lyrics_wide())
     }
 
-    /// The lyrics show beside the player: asked for on the Music page of the open panel.
     fn lyrics_wide(&self) -> bool {
         self.lyrics_open && self.page == Page::Music && self.notch.mode == Mode::Expanded
     }
@@ -1059,7 +907,7 @@ impl App {
             Button::Next => self.music.send(music::Cmd::Next),
             Button::Shuffle => if let Some(t) = self.music.snapshot() { self.music.send(music::Cmd::Shuffle(!t.shuffle)) },
             Button::Repeat => if let Some(t) = self.music.snapshot() { self.music.send(music::Cmd::Repeat(t.repeat.next())) },
-            Button::Seek => return, // Committed only by the captured press/drag/release gesture.
+            Button::Seek => return,
             Button::Lyrics => {
                 self.lyrics_open = !self.lyrics_open;
                 self.kick();
@@ -1087,7 +935,6 @@ impl App {
                 self.end_edit();
                 let dir = if button == Button::PageNext { 1 } else { -1 };
                 let mut i = PAGES.iter().position(|p| *p == self.page).unwrap_or(0) as i32;
-                // The pages the user keeps (there is always one).
                 let next = loop {
                     i = (i + dir).rem_euclid(PAGES.len() as i32);
                     if render::page_shown(PAGES[i as usize]) {
@@ -1100,7 +947,6 @@ impl App {
                 self.kick();
             }
             Button::ListInput => self.begin_edit(),
-            // The x shows only while there is text (and no row being edited); over an empty box it is just the box.
             Button::ListClear => {
                 if self.page == Page::Weather || self.edit_item.is_none() {
                     self.draft_mut().clear();
@@ -1112,7 +958,6 @@ impl App {
                 self.edit_item = Some(i);
                 self.begin_edit();
             }
-            // Ticking or deleting reorders the list: an edit in progress would point at the wrong row.
             Button::ListToggle(i) => {
                 self.cancel_task_edit();
                 self.todo.toggle(i, self.today);
@@ -1122,7 +967,6 @@ impl App {
                 self.todo.remove(i);
                 self.clamp_scroll();
             }
-            // The x beside the city: no city, no weather (the pill goes back to clock and battery).
             Button::CityOff => {
                 self.weather.clear();
                 self.wx = self.weather.snapshot();
@@ -1135,14 +979,12 @@ impl App {
             }
             Button::SunToggle => {
                 self.sun_view = !self.sun_view;
-                // The sun starts its walk (and the big icon its pop) again from here.
                 self.page_since = Instant::now();
                 system::save_settings(self.settings());
             }
             Button::CalPrev | Button::CalNext => {
                 let delta = if button == Button::CalNext { 1 } else { -1 };
                 (self.cal_year, self.cal_month) = calendar::shift_month(self.cal_year, self.cal_month, delta);
-                // The day picked follows: today when the month is this one, else its first.
                 let date = system::today();
                 let (ty, tm, td) = ((date / 10_000) as i32, date / 100 % 100, date % 100);
                 self.cal_sel = if (ty, tm) == (self.cal_year, self.cal_month) { td } else { 1 };
@@ -1153,7 +995,6 @@ impl App {
                     self.cal_sel = day as u32;
                 }
             }
-            // Only where the region keeps a lunar calendar is the choice there to take.
             Button::CalMode(on) if self.cal_zone.is_some() => self.cal_lunar = on,
             Button::CalMode(_) => {}
             Button::NoteOpen(i) => {
@@ -1191,14 +1032,10 @@ impl App {
         }
     }
 
-    /// The text of the box on the page now: the city on the Weather page, else the task.
     fn draft_mut(&mut self) -> &mut String {
         if self.page == Page::Weather { &mut self.city_draft } else { &mut self.draft }
     }
 
-    /// Enter in the box: on the Weather page look the city up, keeping the text and the keyboard
-    /// until it is found (see `awaiting_city`); elsewhere save the edited task, or add a new one,
-    /// and stay in the box for the next task.
     fn submit(&mut self) {
         if self.page == Page::Weather {
             if !self.city_draft.trim().is_empty() {
@@ -1227,7 +1064,6 @@ impl App {
         self.note_scroll = self.note_scroll.min(self.notes.len().saturating_sub(NOTE_ROWS));
     }
 
-    /// Typing needs the keyboard: let the window activate for once, remembering who had it.
     fn begin_edit(&mut self) {
         if self.editing {
             return;
@@ -1244,7 +1080,6 @@ impl App {
         self.caret = true;
     }
 
-    /// Stop typing (the draft stays in the box) and hand the keyboard back.
     fn end_edit(&mut self) {
         if !self.editing {
             return;
@@ -1260,17 +1095,14 @@ impl App {
             }
         }
         self.prev_foreground = HWND::default();
-        // The mouse may have left while typing kept the panel open.
         if !self.tracking && !self.cursor_inside() {
             self.notch.on_leave();
             self.kick();
         }
     }
 
-    /// One WM_CHAR unit while typing in the add box.
     fn type_char(&mut self, unit: u16) {
         match unit {
-            // Enter: save and stay in the box for the next task.
             0x0D => self.submit(),
             0x1B => {
                 self.draft_mut().clear();
@@ -1310,7 +1142,6 @@ impl App {
         if self.hidden != hide {
             self.hidden = hide;
             self.notch.set_hidden(hide);
-            // Which window made it hide: a notch missing after start-up may be hidden, not gone.
             let fg = unsafe { GetForegroundWindow() };
             system::log(&if hide { format!("hidden, foreground {}", screen::class_name(fg)) } else { "shown again".to_string() });
             if hide {
@@ -1360,7 +1191,6 @@ impl App {
             if let Ok(pages) = CreatePopupMenu() {
                 let mask = render::pages_on();
                 for (i, p) in PAGES.iter().enumerate() {
-                    // The last page kept cannot be switched off.
                     let last = mask == p.bit();
                     let _ = AppendMenuW(pages, MF_STRING | check(mask & p.bit() != 0) | if last { MF_GRAYED } else { MF_ENABLED }, MENU_PAGE + i, &text(p.name()));
                 }
@@ -1406,7 +1236,6 @@ impl App {
                         self.page_since = Instant::now();
                         self.settings_open = None;
                     }
-                    // A page switched off leaves nothing waiting; one switched on starts fresh.
                     if !render::page_shown(Page::Focus) {
                         self.focus = Focus::default();
                     }
@@ -1428,7 +1257,6 @@ impl App {
                 MENU_APPROVE => {
                     self.approve.set_enabled(!self.approve.is_enabled());
                     system::save_settings(self.settings());
-                    // What is on the banner now goes back to its app.
                     self.finish_approval(approve::Answer::Ask);
                 }
                 MENU_AUTOSTART => system::set_autostart(!system::autostart_enabled()),
@@ -1444,7 +1272,6 @@ impl App {
                 MENU_LANG_VI | MENU_LANG_EN => {
                     i18n::set_english(cmd == MENU_LANG_EN);
                     system::save_settings(self.settings());
-                    // Everything shown is rebuilt from the new language on the next frame.
                     (self.time, self.date) = system::clock();
                     self.redraw();
                 }
@@ -1457,7 +1284,6 @@ impl App {
                     }
                 }
                 MENU_QUIT => { let _ = DestroyWindow(self.hwnd); }
-                // Menu dismissed: frames missed while it was open start again, and a stale hover is let go.
                 _ => self.kick(),
             }
         }
@@ -1477,12 +1303,10 @@ impl App {
                 T_DWELL => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
                     let inside = self.cursor_inside();
-                    // Slid off the body onto an ear before the dwell: entering again needs the body.
                     self.hover_in &= inside;
                     self.notch.on_dwell(inside);
                     self.kick();
                 }
-                // After a foreground change: look, and again in a moment while the window is still moving or the notch is coming back.
                 T_SETTLE => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_SETTLE); }
                     let sample = self.notch.is_settled_rest();
@@ -1497,7 +1321,6 @@ impl App {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_ALERT); }
                     self.notch.on_alert_end();
                     self.finish_approval(approve::Answer::Ask);
-                    // Mouse resting on the banner when it ends: treat as a fresh visit.
                     if self.hover_in && self.notch.on_enter() {
                         unsafe { SetTimer(Some(self.hwnd), T_DWELL, DWELL_MS, None) };
                     }
@@ -1514,11 +1337,8 @@ impl App {
                     let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: self.hwnd, dwHoverTime: 0 };
                     self.tracking = unsafe { TrackMouseEvent(&mut tme) }.is_ok();
                 }
-                // The ears report the mouse too (they are drawn); only the pill body counts.
                 if !self.hover_in && self.cursor_inside() {
                     self.hover_in = true;
-                    // Resting on a banner opens the panel, except a notification's: that one is
-                    // there to be clicked (opens its app or picture).
                     if self.notch.on_enter() && self.banner_target().is_none() && self.approval.is_none() {
                         unsafe { SetTimer(Some(self.hwnd), T_DWELL, DWELL_MS, None) };
                     }
@@ -1530,8 +1350,6 @@ impl App {
                     self.hit(x, y)
                 } else { None };
                 if hover != self.hovered_button { self.hovered_button = hover; self.redraw(); }
-                // The page dots open into the row of page icons while the mouse is on them; the row goes
-                // when the mouse leaves it.
                 if self.notch.mode == Mode::Expanded {
                     let (x, y) = ((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32 - self.top_px());
                     if !self.nav_open && hover == Some(Button::Dots) {
@@ -1540,7 +1358,6 @@ impl App {
                         self.set_nav(false);
                     }
                 }
-                // The x of a notification banner lights up under the mouse.
                 let hot = self.notch.mode == Mode::Alert && self.banner_target().is_some() && {
                     let (x, y) = ((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32 - self.top_px());
                     let b = render::banner_close(self.win.2 as f32 / 2.0, self.scale, self.notch.size()[0], self.style == notch::Style::Pill);
@@ -1567,22 +1384,18 @@ impl App {
                 self.tracking = false;
                 self.hover_in = false;
                 unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
-                // Typing keeps the panel open; it closes when the box lets go of the keyboard.
                 if !self.editing && self.seek_drag.is_none() {
                     self.notch.on_leave();
                 }
                 self.kick();
             }
             WM_CHAR if self.editing => self.type_char(wp.0 as u16),
-            // Lost the keyboard (clicked elsewhere): stop typing, keep the draft.
             WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => self.end_edit(),
-            // The wheel only scrolls a long to-do list; pages switch with the arrows.
             WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && matches!(self.page, Page::Todo | Page::Notify) => {
                 let delta = ((wp.0 >> 16) & 0xffff) as i16;
                 let max = self.rows().saturating_sub(if self.page == Page::Notify { NOTE_ROWS } else { LIST_ROWS });
                 let scroll = if self.page == Page::Notify { &mut self.note_scroll } else { &mut self.todo_scroll };
                 *scroll = if delta > 0 { scroll.saturating_sub(1) } else { (*scroll + 1).min(max) };
-                // The Notifications list eases there frame by frame (see `frame`).
                 if self.page == Page::Notify { self.kick(); } else { self.redraw(); }
             }
             WM_LBUTTONDOWN => {
@@ -1637,7 +1450,6 @@ impl App {
                 }
                 let close = render::banner_close(self.win.2 as f32 / 2.0, self.scale, self.notch.size()[0], self.style == notch::Style::Pill);
                 match self.banner_target() {
-                    // Its x: back to the pill now, nothing opens.
                     Some(_) if x >= close.left && x <= close.right && y >= close.top && y <= close.bottom => {
                         unsafe {
                             let _ = KillTimer(Some(self.hwnd), T_ALERT);
@@ -1646,7 +1458,6 @@ impl App {
                         self.notch.on_alert_end();
                         self.kick();
                     }
-                    // A notification banner: clicking it opens its picture, link or app.
                     Some(target) => open_target(target),
                     None => self.click(x, y),
                 }
@@ -1656,13 +1467,11 @@ impl App {
                 let (name, on) = status::lock_state(wp.0);
                 self.show_banner(status_toast(tr("Bàn phím", "Keyboard"), name.to_string(), on_off(on), None, render::ICON_KEYBOARD), STATUS_MS);
             }
-            // A volume key taken from Windows: apply it here; WM_VOLUME then shows it.
             WM_VOLUMEKEY => {
                 if let Some(a) = &self.audio {
                     a.volume_key(wp.0 as u16);
                 }
             }
-            // From the speaker callback: any change, keys, taskbar slider or an app.
             WM_VOLUME => {
                 let (pct, muted) = (wp.0 as u8, lp.0 != 0);
                 let title = if muted { tr("Đã tắt tiếng", "Muted").to_string() } else { format!("{} {pct}%", tr("Âm lượng", "Volume")) };
@@ -1673,7 +1482,6 @@ impl App {
                 }
             }
             WM_MIC => self.mic_changed(lp.0 != 0),
-            // Charger plugged or unplugged, battery percent changed: read the battery now.
             WM_POWERBROADCAST if wp.0 as u32 == PBT_APMPOWERSTATUSCHANGE => system::battery_changed(),
             WM_POWERBROADCAST if wp.0 as u32 == PBT_POWERSETTINGCHANGE => {
                 let setting = unsafe { (lp.0 as *const POWERBROADCAST_SETTING).as_ref() };
@@ -1696,7 +1504,6 @@ impl App {
                 }
             }
             activity::WM_ACTIVITY => {
-                // A fresh sample from the worker: shown now, not at the next tick.
                 let current = self.activity.latest(Instant::now());
                 self.activity_banner(current);
             }
@@ -1706,12 +1513,10 @@ impl App {
                 }
             }
             WM_CONN => {
-                // The network may just have come back: the weather catches up (a recent one is kept).
                 self.weather.refresh();
                 for e in connectivity::take_events() {
                     let now = Instant::now();
                     match &e {
-                        // A device that goes has its own banner; those wait their turn.
                         Event::Device { up: false, .. } => self.conn_queue.push(connection_toast(e)),
                         Event::DeviceBattery { name, percent, .. } => {
                             if self.conn_list.as_mut().is_some_and(|l| device_battery(l, name, *percent, now)) {
@@ -1720,13 +1525,10 @@ impl App {
                                     self.show_connection_list(t, ms, false);
                                 }
                             } else {
-                                // Not on show (a battery that just ran low): a banner of its own.
                                 self.conn_queue.push(connection_toast(e));
                             }
                         }
-                        // The airplane switch, radios, network, VPN and devices that come together are one banner.
                         _ => {
-                            // Asked before the list takes the event: a VPN that went down with the network stays expected.
                             let expected = vpn_expected(self.vpn_was_up, self.vpn_lost, &e, self.conn_list.as_ref(), now);
                             if matches!(e, Event::Vpn(false)) && self.vpn_was_up && !expected {
                                 self.vpn_lost = Some(now);
@@ -1744,9 +1546,7 @@ impl App {
                     self.next_connection_banner();
                 }
             }
-            // From the limits worker: a reading changed.
             approve::WM_APPROVE => {
-                // A question answered in its own app: its banner goes now.
                 if self.approval.as_ref().is_some_and(|p| self.approve.take_cancelled(p.id)) {
                     self.finish_approval(approve::Answer::Ask);
                 }
@@ -1757,7 +1557,6 @@ impl App {
             usage::WM_USAGE => {
                 let snap = self.usage.snapshot();
                 render::set_usage_apps(snap.mask());
-                // The tab: the user's choice while that app is still on the PC, else the first with a reading.
                 if !self.usage_tab_chosen || !snap.shown(usage::APPS[self.usage_tab]) {
                     self.usage_tab = (0..usage::APPS.len()).find(|&i| snap.get(usage::APPS[i]).is_some())
                         .or_else(|| (0..usage::APPS.len()).find(|&i| snap.shown(usage::APPS[i]))).unwrap_or(0);
@@ -1770,14 +1569,12 @@ impl App {
                 self.kick();
                 return Some(LRESULT(0));
             }
-            // From the weather thread: a city was found (or not) or new conditions came.
             WM_WEATHER => {
                 let before = self.wx.place.clone();
                 self.wx = self.weather.snapshot();
                 if self.wx.place != before {
                     system::save_settings(self.settings());
                 }
-                // The lookup is over: found, the box is done; not found, it keeps the typo to mend.
                 if self.awaiting_city && !self.wx.looking {
                     self.awaiting_city = false;
                     if self.wx.not_found.is_none() {
@@ -1789,7 +1586,6 @@ impl App {
                     self.redraw();
                 }
             }
-            // The PC woke up: the old conditions may be hours stale.
             WM_POWERBROADCAST if wp.0 as u32 == PBT_APMRESUMEAUTOMATIC => self.weather.refresh(),
             WM_DEVICECHANGE => {
                 if let Some((change, path)) = usb::parse_message(wp, lp) {
@@ -1813,7 +1609,6 @@ impl App {
     }
 }
 
-/// Text of the About box.
 fn about_text(version: &str) -> String {
     let what = tr(
         "Notch kiểu Dynamic Island cho Windows: giờ, pin, nhạc, việc cần làm, thông báo, sức khỏe và banner trạng thái. Viết bằng Rust và Direct2D, không dùng WebView.",
@@ -1822,12 +1617,10 @@ fn about_text(version: &str) -> String {
     format!("PUW Notch {version}\n\n{what}\n\n{REPO_URL}")
 }
 
-/// yyyymmddHHMM -> minute of the day.
 fn minute_of_day(stamp: u64) -> u32 {
     ((stamp / 100 % 100) * 60 + stamp % 100) as u32
 }
 
-/// Seconds since the last keyboard / mouse input anywhere (away from the PC -> sitting clock resets).
 fn idle_seconds() -> u32 {
     let mut lii = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
     unsafe {
@@ -1839,7 +1632,6 @@ fn idle_seconds() -> u32 {
     }
 }
 
-/// The PUW icon embedded by build.rs (resource id 1), at the small (tray) or large size.
 fn app_icon(small: bool) -> HICON {
     unsafe {
         let module = GetModuleHandleW(None).ok().map(HINSTANCE::from);
@@ -1855,7 +1647,6 @@ fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, ico
     Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() }
 }
 
-/// The banner of a live activity (or, `done`, of one that just ended).
 fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
     use activity::ActivityKind::*;
     let (app, icon) = match a.kind {
@@ -1865,13 +1656,9 @@ fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
         Download => (tr("Tải xuống", "Download"), render::ICON_DOWNLOAD),
         Build => (tr("Build", "Build"), render::ICON_BUILD),
     };
-    // A download's title says what happens and names the file once it is known ("" until then).
     let named = |what: &str| if a.title.is_empty() { what.to_string() } else { format!("{what}: {}", a.title) };
-    // An ending whose outcome is known: a green check in a ring, or a red cross, takes the icon's place
-    // (the banner icon morphs into it).
     match (a.kind, done, a.result) {
         (Download, true, Some(true)) => {
-            // A click on it opens the folder with the file selected.
             let open = a.file.as_ref().map(|f| format!("select:{}", f.display()));
             return Toast { open, ..status_toast(app, tr("Tải xuống hoàn tất", "Download complete").to_string(), &format!("{} · {}", a.title, a.detail), None, render::ICON_DONE) };
         }
@@ -1882,22 +1669,18 @@ fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
         _ => {}
     }
     let mut title = match (a.kind, done) {
-        // No finished file: cancelled, failed, or moved away before it was seen.
         (Download, true) => named(tr("Đã dừng tải xuống", "Download stopped")),
         (Download, false) => named(tr("Đang tải xuống", "Downloading")),
-        // A vanished process can also mean failure or cancellation.
         (_, true) => format!("{} {}", tr("Đã kết thúc:", "Ended:"), a.title),
         _ if a.progress.is_some() => format!("{} · {}", a.title, a.detail),
         _ => a.title.clone(),
     };
-    // Others run beside it: a count at the end of the title (a badge would take width from the text).
     if a.more > 0 && !done {
         title = format!("{title} · +{}", a.more);
     }
     status_toast(app, title, &a.detail, if done { None } else { a.progress }, icon)
 }
 
-/// The banner for a Pomodoro segment that ended.
 fn focus_toast(done: focus::Done) -> Toast {
     let min = |k: focus::Kind| k.minutes();
     let (title, body) = match (done.ended, done.next) {
@@ -1917,34 +1700,23 @@ fn on_off(on: bool) -> &'static str {
     if on { tr("Bật", "On") } else { tr("Tắt", "Off") }
 }
 
-/// Open what a notification points at (picture, link or app) from a click on the notch. The
-/// notch never takes focus, so hand the click's foreground right on (as Windows does for a toast
-/// click); otherwise the app opens behind the window in front.
 fn open_target(target: &str) {
     unsafe {
         let _ = AllowSetForegroundWindow(ASFW_ANY);
         match target.strip_prefix("select:") {
-            // A finished download: its folder with the file selected.
             Some(file) => ShellExecuteW(None, w!("open"), w!("explorer.exe"), &windows::core::HSTRING::from(format!("/select,\"{file}\"")), None, SW_SHOWNORMAL),
             None => ShellExecuteW(None, w!("open"), &windows::core::HSTRING::from(target), None, None, SW_SHOWNORMAL),
         };
     }
 }
 
-/// The part of the network world an event belongs to. Each has its own banner and a list takes only its
-/// own events; but the airplane banner is checking everything, so it takes all of them (nothing else
-/// shows beside it).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Domain {
     Air,
-    /// Wi-Fi, mobile data, the network and the VPN.
     Net,
-    /// The Bluetooth radio and its devices.
     Bt,
 }
 
-/// What an event is about: told again, the later state replaces the earlier (Wi-Fi off, then Wi-Fi on,
-/// is Wi-Fi on). Devices are not here: each has its own line.
 fn subject(e: &Event) -> Option<&'static str> {
     match e {
         Event::Airplane(_) => Some("air"),
@@ -1965,38 +1737,23 @@ fn domain_of(e: &Event) -> Domain {
     }
 }
 
-/// The banner of a burst of network events. The first is its head (icon and title, as when it comes
-/// alone); what comes while it shows is a line under it. Windows turns the airplane switch, the
-/// radios, the network and the VPN one after another, and one banner tells all of it.
 struct ConnList {
     head: Toast,
-    /// What the head's event reads as a line, for when it has to become one (see `conn_list_add`).
     head_row: String,
     rows: Vec<Row>,
     at: Instant,
-    /// The banner of one Bluetooth device (name, state, its battery large): a second device turns it into a list.
     single: bool,
-    /// The head says how many devices there are ("3 Bluetooth devices"), the lines are those devices.
     devices_head: bool,
     devices: usize,
-    /// Wi-Fi came on or airplane mode went off: the steps still to come, known in advance, shown from
-    /// the start. The connection waits (a spinning ring), the VPN that was up before is next (an empty
-    /// ring); each turns into a done line as it happens. The banner stays until nothing is waited for.
     net: Option<Row>,
     vpn: Option<Row>,
-    /// What is still waited for is given up on at this time (the step that did not come fails).
     deadline: Instant,
     domain: Domain,
-    /// In the airplane banner, the Bluetooth line: "Bluetooth on +3 devices", no battery, no line per
-    /// device. It waits (a spinning ring) until the devices that were connected are, or the deadline.
     bt: Option<Row>,
     bt_on: bool,
     bt_seen: Vec<String>,
     bt_expected: usize,
-    /// What the head is about (see `subject`).
     head_key: Option<&'static str>,
-    /// The list this one replaced while it was still on show (another part of the network world): kept
-    /// so that an airplane switch that comes late can still take it in.
     before: Option<Box<ConnList>>,
 }
 
@@ -2005,15 +1762,11 @@ impl ConnList {
         ConnList { head, head_row, rows, at, single: false, devices_head: false, devices: 0, net: None, vpn: None, deadline: at, domain, bt: None, bt_on: false, bt_seen: Vec::new(), bt_expected: 0, head_key: None, before: None }
     }
 
-    /// Takes an earlier list into this airplane list: its head becomes a line, its lines stay, its
-    /// devices are counted in the Bluetooth line. Its connection and VPN steps stay too when airplane
-    /// mode went off (`keep_steps`).
     fn take_in(&mut self, old: ConnList, keep_steps: bool) {
         let ConnList { head, head_row, head_key, rows, at, single, devices_head, net, vpn, domain, before, .. } = old;
         if let Some(b) = before {
             self.take_in(*b, keep_steps);
         }
-        // "Bluetooth on" is the Bluetooth line of the airplane list, not a line of its own.
         let bt_on_text = row_text(&Event::Radio(RadioType::Bluetooth, true));
         let mut bt_head = domain == Domain::Bt && head_row == bt_on_text;
         let mut told = Vec::new();
@@ -2052,13 +1805,11 @@ impl ConnList {
         }
     }
 
-    /// The lines on show: what has been told, Bluetooth, the connection and the VPN, then the devices.
     fn rows_shown(&self) -> Vec<Row> {
         let (devices, told): (Vec<Row>, Vec<Row>) = self.rows.iter().cloned().partition(|r| r.icon.is_some());
         told.into_iter().chain(self.bt_row()).chain(self.net.iter().cloned()).chain(self.vpn.iter().cloned()).chain(devices).collect()
     }
 
-    /// The airplane banner's Bluetooth line, its text from what has come.
     fn bt_row(&self) -> Option<Row> {
         self.bt.clone().map(|mut r| {
             let radio = if self.bt_on { tr("Bluetooth bật", "Bluetooth on") } else { "Bluetooth" };
@@ -2067,7 +1818,6 @@ impl ConnList {
         })
     }
 
-    /// Airplane mode went off: the Bluetooth line waits for the `expected` devices that were connected.
     fn start_bt(&mut self, expected: usize, now: Instant) {
         self.bt_expected = expected;
         if expected > 0 || self.bt_on || !self.bt_seen.is_empty() {
@@ -2079,7 +1829,6 @@ impl ConnList {
         }
     }
 
-    /// A device connected while the airplane banner shows: it counts in the Bluetooth line.
     fn bt_device(&mut self, name: &str, now: Instant) {
         if !self.bt_seen.iter().any(|n| n == name) {
             self.bt_seen.push(name.to_string());
@@ -2091,10 +1840,7 @@ impl ConnList {
         }
     }
 
-    /// Bluetooth came on (or airplane mode went off): the devices that were connected are listed, each
-    /// waiting (a grey line with a spinning ring) until it connects.
     fn start_devices(&mut self, devices: &[(String, connectivity::DeviceKind)], now: Instant) {
-        // Not those already on the list (they connected before the list came).
         let missing: Vec<_> = devices.iter().filter(|(name, _)| !self.rows.iter().any(|r| r.icon.is_some() && r.text == *name)).take(MAX_WAIT_DEVICES).collect();
         for (name, kind) in missing {
             let mut row = device_row(name, render::device_icon(*kind), None, now);
@@ -2106,12 +1852,10 @@ impl ConnList {
         }
     }
 
-    /// Starts the steps to wait for (see `net`).
     fn start_waiting(&mut self, vpn_expected: bool, now: Instant) {
         if self.net.is_none() {
             self.net = Some(Row::step(tr("Kết nối mạng", "Network connection").to_string(), RowState::Wait, now));
         }
-        // Next after the connection: waited for at once when that has already come.
         if self.vpn.is_none() && vpn_expected {
             let state = if self.net.as_ref().is_some_and(|n| n.state == RowState::Done) { RowState::Wait } else { RowState::Todo };
             self.vpn = Some(Row::step("VPN".to_string(), state, now));
@@ -2124,8 +1868,6 @@ impl ConnList {
             || self.rows.iter().any(|r| r.icon.is_some() && r.state == RowState::Wait)
     }
 
-    /// How long its banner stays from `now`: to the deadline (and a moment more, for the check that
-    /// ends the wait) while something is waited for; the full time once everything has come.
     fn life_ms(&self, now: Instant) -> u32 {
         if self.pending() {
             (self.deadline.saturating_duration_since(now).as_millis() as u32).saturating_add(1500)
@@ -2134,20 +1876,14 @@ impl ConnList {
         }
     }
 
-    /// Airplane mode went off and everything it brings back has come: a radio switched after that is the
-    /// user's own, with its own banner, not a part of this one.
     fn done_coming_back(&self, e: &Event) -> bool {
         matches!(e, Event::Radio(..)) && self.domain == Domain::Air && !self.pending() && self.head_row == row_text(&Event::Airplane(false))
     }
 
-    /// Whether its banner still shows.
     fn fresh(&self, now: Instant) -> bool {
         if self.pending() { now < self.deadline } else { now.saturating_duration_since(self.at) < Duration::from_millis(ALERT_MS as u64) }
     }
 
-    /// The deadline came: the connection that did not come fails, a VPN that did not come is just not
-    /// there (it cannot come without the connection, and it may never have been wanted). True when
-    /// something changed.
     fn expire(&mut self, now: Instant) -> bool {
         if !self.pending() || now < self.deadline {
             return false;
@@ -2158,8 +1894,6 @@ impl ConnList {
         if self.vpn.as_ref().is_some_and(|v| v.state != RowState::Done) {
             self.vpn = None;
         }
-        // A device that did not connect (it may be switched off) is not an error: its line just goes, and
-        // the Bluetooth line counts the ones that did.
         self.rows.retain(|r| !(r.icon.is_some() && r.state == RowState::Wait));
         if let Some(b) = self.bt.as_mut().filter(|b| b.state == RowState::Wait) {
             (b.state, b.at) = (RowState::Done, now);
@@ -2168,10 +1902,8 @@ impl ConnList {
         true
     }
 
-    /// An event that is one of the steps waited for turns it. False: it is an ordinary line.
     fn step_event(&mut self, e: &Event, now: Instant) -> bool {
         match e {
-            // (told again after it is done, Windows does that when Wi-Fi flaps: the same step, not a second line)
             Event::Net(Net::Online { .. }) if self.net.is_some() => {
                 self.net = Some(Row::line(row_text(e), now));
                 if let Some(v) = self.vpn.as_mut().filter(|v| v.state == RowState::Todo) {
@@ -2179,19 +1911,15 @@ impl ConnList {
                 }
                 true
             }
-            // Joined, but Windows found no internet that stayed (see connectivity.rs): the step fails, and the
-            // VPN cannot come. An online network after that still turns the step done.
             Event::Net(Net::Limited { .. }) if self.net.as_ref().is_some_and(|n| n.state == RowState::Wait) => {
                 self.net = Some(Row::step(row_text(e), RowState::Failed, now));
                 self.vpn = None;
                 true
             }
-            // The VPN comes after the connection, wanted before or not: it is the line under it.
             Event::Vpn(true) if self.vpn.is_some() || self.net.is_some() => {
                 self.vpn = Some(Row::line(row_text(e), now));
                 true
             }
-            // The Bluetooth line of the airplane banner: on, and its devices are counted in it.
             Event::Radio(RadioType::Bluetooth, true) if self.domain == Domain::Air => {
                 self.bt_on = true;
                 if self.bt.is_none() {
@@ -2199,10 +1927,8 @@ impl ConnList {
                 }
                 true
             }
-            // Wi-Fi off: whatever was said about the connection, done or waited for, no longer holds.
             Event::Radio(RadioType::Wifi, false) => {
                 (self.net, self.vpn) = (None, None);
-                // (a "VPN off" line is the right thing to have after it, and stays)
                 self.rows.retain(|r| r.key != Some("net"));
                 false
             }
@@ -2210,24 +1936,16 @@ impl ConnList {
         }
     }
 
-    /// Devices that connect while it shows are lines in it: after "Bluetooth on", after airplane mode, or
-    /// in a list of devices.
     fn takes_devices(&self) -> bool {
-        // A Bluetooth banner with no device yet gives way to the banner of the first one (its battery large).
         self.devices_head || (self.domain == Domain::Bt && self.rows.iter().any(|r| r.icon.is_some()))
     }
 }
 
-/// The most the banner of Wi-Fi coming on or airplane mode going off waits for what it lists.
 const WAIT_MAX_MS: u32 = 15_000;
 
-/// A list shows at most this many lines (the airplane switch, the radios, the network and the devices).
 const MAX_ROWS: usize = 8;
-/// A banner lists at most this many devices it waits to see connect.
 const MAX_WAIT_DEVICES: usize = 5;
 
-/// What a banner that waits is to wait for, besides the connection: the VPN that was up, and the
-/// Bluetooth devices that were connected.
 #[derive(Clone, Copy, Default)]
 struct Expect<'a> {
     vpn: bool,
@@ -2238,7 +1956,6 @@ fn devices_title(n: usize) -> String {
     format!("{n} {}", tr("thiết bị Bluetooth", "Bluetooth devices"))
 }
 
-/// Whether a battery value like "18%" is a low one.
 fn low_battery(value: Option<&str>) -> bool {
     value.and_then(|v| v.trim_end_matches('%').parse::<u8>().ok()).is_some_and(|p| p <= connectivity::LOW_BATTERY)
 }
@@ -2247,14 +1964,10 @@ fn device_row(name: &str, icon: &'static str, value: Option<String>, at: Instant
     Row { text: name.to_string(), at, icon: Some(icon), low: low_battery(value.as_deref()), value, state: RowState::Done, key: None }
 }
 
-/// A Bluetooth device connected. Alone it is its own banner (the battery large, the point of it); one
-/// more while that shows, and the banner becomes a list with a line each; after "Bluetooth on" or
-/// airplane mode off the devices are lines in that banner.
 fn device_connected(fresh: Option<ConnList>, e: &Event, now: Instant) -> ConnList {
     let Event::Device { name, kind, battery, .. } = e else { unreachable!("a device event") };
     let value = battery.map(|p| format!("{p}%"));
     match fresh {
-        // The airplane banner counts them in its Bluetooth line.
         Some(mut l) if l.domain == Domain::Air => {
             l.bt_device(name, now);
             l.at = now;
@@ -2295,18 +2008,14 @@ fn device_connected(fresh: Option<ConnList>, e: &Event, now: Instant) -> ConnLis
             l.at = now;
             l
         }
-        // A list of another part (Wi-Fi, say) is replaced, but kept for an airplane switch that comes late.
         other => ConnList { single: true, before: other.map(Box::new), ..ConnList::new(connection_toast(e.clone()), name.clone(), Vec::new(), now, Domain::Bt) },
     }
 }
 
-/// A device's battery reading came after it connected: it goes in its banner or line, not a banner of
-/// its own. False when the device is not on show.
 fn device_battery(l: &mut ConnList, name: &str, percent: u8, now: Instant) -> bool {
     if !l.fresh(now) {
         return false;
     }
-    // The airplane banner shows no battery.
     if l.domain == Domain::Air {
         l.at = now;
         return true;
@@ -2327,7 +2036,6 @@ fn device_battery(l: &mut ConnList, name: &str, percent: u8, now: Instant) -> bo
     true
 }
 
-/// The line an event makes under a head.
 fn row_text(e: &Event) -> String {
     let radio = |name: &str, on: bool| format!("{name} {}", if on { tr("bật", "on") } else { tr("tắt", "off") });
     match e {
@@ -2343,8 +2051,6 @@ fn row_text(e: &Event) -> String {
     }
 }
 
-/// `prev` (the list on show, if any) with the event told. A list lasts as long as its banner shows
-/// (`ALERT_MS` after the last line); an event after that starts a new one.
 fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect) -> ConnList {
     let fresh = prev.filter(|l| l.fresh(now));
     if matches!(e, Event::Device { up: true, .. }) {
@@ -2352,23 +2058,19 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
     }
     let domain = domain_of(e);
     match fresh {
-        // The airplane banner takes every event; any other list only its own kind.
         Some(mut l) if !l.single && !matches!(e, Event::Airplane(_)) && (l.domain == domain || (l.domain == Domain::Air && !l.done_coming_back(e))) => {
             let key = subject(e);
             let wifi_on = matches!(e, Event::Radio(RadioType::Wifi, true));
             let bt_on = matches!(e, Event::Radio(RadioType::Bluetooth, true));
             if wifi_on {
-                // The connection begins again: what was told about it (offline, the VPN off) is stale.
                 l.rows.retain(|r| !matches!(r.key, Some("vpn" | "net")));
             }
             if !l.step_event(e, now) {
                 let text = row_text(e);
                 if (wifi_on || bt_on) && l.domain != Domain::Air {
-                    // Switched on: the head says so, not what was told before it (off, offline, VPN off).
                     l.rows.retain(|r| r.key != key);
                     (l.head, l.head_row, l.head_key) = (connection_toast(e.clone()), text, key);
                 } else if key.is_some() && key == l.head_key {
-                    // The same part told again (off, then on): the later state is the head, not a second line.
                     (l.head, l.head_row) = (connection_toast(e.clone()), text);
                 } else if let Some(r) = l.rows.iter_mut().find(|r| key.is_some() && r.key == key) {
                     (r.text, r.at) = (text, now);
@@ -2386,10 +2088,6 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
             l
         }
         prev => {
-            // Events come in any order (Windows can turn radios off before it flips the airplane switch,
-            // and Bluetooth connects its devices at once): when the switch comes, what was on show is
-            // taken into its banner, not lost, nor shown apart. Another part of the world replaces a
-            // list but keeps it (`before`) for that.
             let airplane = matches!(e, Event::Airplane(_));
             let fold = prev.as_ref().is_some_and(|l| l.head.icon != Some(render::ICON_AIRPLANE) && (airplane || (l.single && l.domain == domain)));
             let (old, before) = if fold { (prev, None) } else { (None, prev.map(Box::new)) };
@@ -2399,14 +2097,12 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
                     l.take_in(old, matches!(e, Event::Airplane(false)));
                     l
                 }
-                // One device on show, and a Bluetooth event: the device is a line under the new head.
                 Some(old) => {
                     let first = device_row(&old.head.title, old.head.icon.unwrap_or(render::ICON_BT), old.head.badge.clone(), old.at);
                     ConnList::new(connection_toast(e.clone()), row_text(e), vec![first], now, domain)
                 }
                 None => ConnList::new(connection_toast(e.clone()), row_text(e), Vec::new(), now, domain),
             };
-            // A list that has itself taken things in (the chain) is not kept twice.
             l.head_key = subject(e);
             l.before = before.filter(|b| b.domain != Domain::Air);
             if matches!(e, Event::Airplane(false) | Event::Radio(RadioType::Wifi, true)) {
@@ -2415,12 +2111,9 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
             if matches!(e, Event::Airplane(false)) {
                 l.start_bt(expect.devices.len(), now);
             }
-            // A VPN that was up goes with airplane mode, told by its own event or not (it may be down already
-            // when the switch is flipped again quickly): its line is there either way.
             if matches!(e, Event::Airplane(true)) && expect.vpn {
                 l.rows.push(Row::line(row_text(&Event::Vpn(false)), now).keyed(Some("vpn")));
             }
-            // One device is its own banner when it connects (the battery large); a list of lines is for two or more.
             if matches!(e, Event::Radio(RadioType::Bluetooth, true)) && expect.devices.len() >= 2 {
                 l.start_devices(expect.devices, now);
             }
@@ -2429,16 +2122,11 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
     }
 }
 
-/// How long before the radio going off a VPN that dropped still counts as dropped with the network.
 const VPN_LOST: Duration = Duration::from_secs(3);
 
-/// Whether a VPN that was up is to come back when the network does. It was up (`was`), and it stays
-/// expected when it went down with the network (in the banner of Wi-Fi off or airplane mode on), not
-/// when it was switched off by itself.
 fn vpn_expected(was: bool, lost: Option<Instant>, e: &Event, list: Option<&ConnList>, now: Instant) -> bool {
     match e {
         Event::Vpn(true) => true,
-        // The VPN can drop a moment before the radio's own event: it went down with the network after all.
         Event::Radio(RadioType::Wifi, false) | Event::Airplane(true) | Event::Net(Net::Offline) => was || lost.is_some_and(|t| now.saturating_duration_since(t) < VPN_LOST),
         Event::Vpn(false) => list.is_some_and(|l| l.fresh(now) && matches!(l.head.icon, Some(render::ICON_AIRPLANE | render::ICON_WIFI_OFF))) && was,
         _ => was,
@@ -2449,7 +2137,6 @@ fn list_toast(l: &ConnList) -> Toast {
     Toast { rows: l.rows_shown(), ..l.head.clone() }
 }
 
-/// Banner text for a connectivity change.
 fn connection_toast(e: Event) -> Toast {
     match e {
         Event::Radio(RadioType::Wifi, on) => status_toast("Wi-Fi", format!("{} Wi-Fi", if on { tr("Đã bật", "Turned on") } else { tr("Đã tắt", "Turned off") }), "", None, if on { render::ICON_WIFI } else { render::ICON_WIFI_OFF }),
@@ -2463,7 +2150,6 @@ fn connection_toast(e: Event) -> Toast {
         }
         Event::Net(Net::Limited { name, .. }) => status_toast(tr("Mạng", "Network"), tr("Không có internet", "No internet").to_string(), &name, None, render::ICON_NO_INTERNET),
         Event::Net(Net::Offline) => status_toast(tr("Mạng", "Network"), tr("Mất kết nối mạng", "Disconnected").to_string(), "", None, render::ICON_NO_INTERNET),
-        // The battery stands large at the banner's right end.
         Event::Device { name, kind, up, battery } => {
             let state = if up { tr("Đã kết nối", "Connected") } else { tr("Đã ngắt kết nối", "Disconnected") };
             Toast { badge: battery.map(|p| format!("{p}%")), ..status_toast("Bluetooth", name, state, None, render::device_icon(kind)) }
@@ -2475,10 +2161,8 @@ fn connection_toast(e: Event) -> Toast {
     }
 }
 
-/// Banner text for a battery change.
 fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
     use system::PowerEvent::*;
-    // Title and a line under it on the left, the percent large at the right.
     let battery = |title: &str, body: &str, icon| Toast { badge: Some(format!("{}%", b.percent)), ..status_toast(tr("Pin", "Battery"), title.to_string(), body, None, icon) };
     match e {
         Plugged => battery(tr("Đang sạc", "Charging"), tr("Đã cắm sạc", "Charger connected"), render::ICON_PLUG),
@@ -2491,12 +2175,6 @@ fn power_toast(e: system::PowerEvent, b: system::Battery) -> Toast {
     }
 }
 
-/// Paces animation frames to the display: a helper thread waits for each DWM composition and
-/// posts WM_FRAME while on. WM_TIMER ticks every 15.6 ms and gets coalesced (frames 3-36 ms
-/// apart measured), which made the spring stutter.
-/// A WM_FRAME is queued and not yet handled: never stack more than one. A message that finds the
-/// app borrowed (a menu or a message box is open) is not handled and must clear this, or the
-/// vsync thread waits for it for ever and nothing moves again.
 static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
 
 struct Vsync {
@@ -2537,12 +2215,10 @@ impl Vsync {
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    // DestroyWindow re-enters here while the tray menu still holds APP's mutable borrow.
     if msg == WM_DESTROY {
         unsafe { PostQuitMessage(0) };
         return LRESULT(0);
     }
-    // Win32 calls made while handling a message can re-enter here; those fall back to the default.
     let handled = APP.with(|a| a.try_borrow_mut().ok().and_then(|mut g| g.as_mut().and_then(|app| app.handle(msg, wp, lp))));
     if handled.is_none() && msg == WM_FRAME {
         FRAME_PENDING.store(false, Ordering::Relaxed);
@@ -2550,8 +2226,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
-/// Starts, exits and failures go to notch.log: a start with Windows that dies early shows nothing
-/// on screen and leaves nothing in the event log otherwise.
 fn main() -> windows::core::Result<()> {
     watchdog();
     std::panic::set_hook(Box::new(|info| system::log(&format!("panic: {info}"))));
@@ -2570,14 +2244,11 @@ fn run() -> windows::core::Result<()> {
             system::log("already running, leaving");
             return Ok(());
         }
-        // Only the run that keeps the window starts the log over: a second start must not wipe it.
         system::log_open();
         let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
         system::log(&format!("start v{} pid {} cwd {cwd}", env!("CARGO_PKG_VERSION"), std::process::id()));
         system::refresh_autostart();
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        // Never run at Windows' "efficiency" speed (EcoQoS): battery saver slows what it takes for
-        // background work, and a topmost window that is not the foreground one looks like that.
         let eco = PROCESS_POWER_THROTTLING_STATE { Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION, ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED, StateMask: 0 };
         let _ = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &eco as *const _ as *const std::ffi::c_void, size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -2720,7 +2391,6 @@ fn run() -> windows::core::Result<()> {
         usb::register(hwnd);
         app.layout();
         app.redraw();
-        // Grow from the mini line into the pill (see Notch::new).
         app.kick();
         app.tray(NIM_ADD);
         APP.with(|a| *a.borrow_mut() = Some(app));
@@ -2775,22 +2445,18 @@ mod tests {
         let later = |ms: u64| t0 + Duration::from_millis(ms);
         let texts = |l: &ConnList| l.rows.iter().map(|r| r.text.clone()).collect::<Vec<String>>();
         let wifi_off = Event::Radio(RadioType::Wifi, false);
-        // Wi-Fi off, and the VPN that was on it: the head is Wi-Fi, the VPN a line under it.
         let l = conn_list_add(None, &wifi_off, t0, Expect::default());
         assert_eq!((l.head.icon, l.rows.len()), (Some(render::ICON_WIFI_OFF), 0), "alone it is the banner it always was");
         let l = conn_list_add(Some(l), &Event::Vpn(false), later(600), Expect::default());
         assert_eq!((l.head.title.as_str(), texts(&l)), (format!("{} Wi-Fi", tr("Đã tắt", "Turned off")).as_str(), vec![tr("VPN tắt", "VPN off").to_string()]));
-        // Airplane mode on: the switch is the head, each thing that went off a line, none told twice.
         let mut l = conn_list_add(None, &Event::Airplane(true), t0, Expect::default());
         for (ms, e) in [(100, wifi_off.clone()), (200, Event::Radio(RadioType::Bluetooth, false)), (300, Event::Vpn(false)), (400, wifi_off.clone())] {
             l = conn_list_add(Some(l), &e, later(ms), Expect::default());
         }
         assert_eq!(l.head.icon, Some(render::ICON_AIRPLANE));
         assert_eq!(texts(&l), [tr("Wi-Fi tắt", "Wi-Fi off"), tr("Bluetooth tắt", "Bluetooth off"), tr("VPN tắt", "VPN off")]);
-        // Radios first, the switch after: what was told becomes the first lines under the switch.
         let l = conn_list_add(Some(conn_list_add(None, &wifi_off, t0, Expect::default())), &Event::Airplane(true), later(300), Expect::default());
         assert_eq!((l.head.icon, texts(&l)), (Some(render::ICON_AIRPLANE), vec![tr("Wi-Fi tắt", "Wi-Fi off").to_string()]));
-        // The banner has gone by the time the next one comes: a new list.
         let l = conn_list_add(Some(l), &Event::Vpn(true), later(300 + ALERT_MS as u64 + 1), Expect::default());
         assert_eq!((l.head.title.as_str(), l.rows.len()), (tr("VPN đã kết nối", "VPN connected"), 0));
     }
@@ -2804,28 +2470,23 @@ mod tests {
         let shown = |l: &ConnList| l.rows_shown().into_iter().map(|r| (r.text, r.state)).collect::<Vec<_>>();
         let (net, connected) = (tr("Kết nối mạng", "Network connection").to_string(), format!("{} JihoonKim", tr("Đã kết nối", "Connected to")));
         let (wifi_on, bt_on, vpn_on) = (tr("Wi-Fi bật", "Wi-Fi on").to_string(), tr("Bluetooth bật", "Bluetooth on").to_string(), tr("VPN kết nối", "VPN connected").to_string());
-        // Airplane mode off, a VPN was up: the whole list is there from the start.
         let mut l = conn_list_add(None, &Event::Airplane(false), t0, Expect { vpn: true, ..Expect::default() });
         assert_eq!(shown(&l), [(net.clone(), Wait), ("VPN".to_string(), Todo)]);
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100), Expect { vpn: true, ..Expect::default() });
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Bluetooth, true), at(120), Expect { vpn: true, ..Expect::default() });
         assert_eq!(shown(&l), [(wifi_on.clone(), Done), (bt_on.clone(), Done), (net.clone(), Wait), ("VPN".to_string(), Todo)]);
-        // It stays while it waits, however long the connection takes (up to the deadline).
         assert!(l.pending() && l.fresh(at(14_000)) && l.life_ms(at(14_000)) > 1_000);
         l = conn_list_add(Some(l), &online, at(7000), Expect { vpn: true, ..Expect::default() });
         assert_eq!(shown(&l), [(wifi_on.clone(), Done), (bt_on.clone(), Done), (connected.clone(), Done), ("VPN".to_string(), Wait)]);
         l = conn_list_add(Some(l), &Event::Vpn(true), at(9000), Expect { vpn: true, ..Expect::default() });
         assert_eq!(l.head.icon, Some(render::ICON_AIRPLANE), "one banner, not a second one");
         assert!(shown(&l).iter().all(|(_, s)| *s == Done) && shown(&l).last().map(|r| r.0.clone()) == Some(vpn_on.clone()));
-        // Everything has come: the usual time from now, no more.
         assert!(!l.pending() && l.life_ms(at(9000)) == ALERT_MS);
         assert!(l.fresh(at(9000 + ALERT_MS as u64 - 1)) && !l.fresh(at(9000 + ALERT_MS as u64 + 1)));
-        // No VPN before: no VPN step, and a VPN that shows up anyway is an ordinary line.
         let mut l = conn_list_add(None, &Event::Airplane(false), t0, Expect::default());
         assert_eq!(shown(&l), [(net.clone(), Wait)]);
         l = conn_list_add(Some(l), &online, at(3000), Expect::default());
         assert!(!l.pending());
-        // A user with no VPN never sees the step; one that shows up anyway is the line under the connection.
         assert!(conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0, Expect::default()).vpn.is_none());
         l = conn_list_add(Some(l), &Event::Vpn(true), at(3500), Expect::default());
         assert_eq!(shown(&l), [(connected.clone(), Done), (vpn_on.clone(), Done)]);
@@ -2842,13 +2503,11 @@ mod tests {
         assert!(l.expire(at(WAIT_MAX_MS as u64)));
         assert_eq!(shown(&l), [(tr("Không kết nối được", "Could not connect").to_string(), Failed)], "the VPN cannot come without it");
         assert!(!l.pending() && l.fresh(at(WAIT_MAX_MS as u64 + ALERT_MS as u64 - 1)) && !l.fresh(at(WAIT_MAX_MS as u64 + ALERT_MS as u64 + 1)));
-        // Joined but no internet that stays: the connection step fails with that, an online network later heals it.
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0, Expect { vpn: true, ..Expect::default() });
         l = conn_list_add(Some(l), &Event::Net(Net::Limited { name: "Cafe".into(), wifi: true }), at(9000), Expect { vpn: true, ..Expect::default() });
         assert_eq!(shown(&l), [(tr("Không có internet", "No internet").to_string(), Failed)]);
         l = conn_list_add(Some(l), &Event::Net(Net::Online { name: "Cafe".into(), wifi: true }), at(12_000), Expect { vpn: true, ..Expect::default() });
         assert_eq!(shown(&l), [(format!("{} Cafe", tr("Đã kết nối", "Connected to")), Done)]);
-        // Wi-Fi off again while it waits: nothing is waited for any more.
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0, Expect { vpn: true, ..Expect::default() });
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, false), at(500), Expect { vpn: true, ..Expect::default() });
         assert!(!l.pending());
@@ -2864,10 +2523,8 @@ mod tests {
         let expect = Expect { devices: &known, ..Expect::default() };
         let dev = |name: &str, kind, battery| Event::Device { name: name.into(), kind, up: true, battery };
         let shown = |l: &ConnList| l.rows_shown().into_iter().map(|r| (r.text, r.state, r.value)).collect::<Vec<_>>();
-        // Bluetooth on: every device that was connected is a line, waiting.
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, expect);
         assert!(l.pending() && l.rows_shown().iter().all(|r| r.state == Wait && r.icon.is_some()));
-        // They connect one by one: the line is done and its battery shows, in the place it was.
         l = conn_list_add(Some(l), &dev("MX Master 3", Mouse, Some(64)), at(1500), expect);
         l = conn_list_add(Some(l), &dev("WH-1000XM5", Headphones, None), at(2000), expect);
         assert!(device_battery(&mut l, "WH-1000XM5", 80, at(2600)));
@@ -2876,19 +2533,16 @@ mod tests {
         l = conn_list_add(Some(l), &dev("Tay cầm", Gamepad, Some(18)), at(4000), expect);
         assert!(!l.pending() && l.life_ms(at(4000)) == ALERT_MS, "all connected: the usual time, no more");
         assert!(l.rows_shown().last().is_some_and(|r| r.low));
-        // One that never connects (switched off) just goes at the deadline.
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, expect);
         l = conn_list_add(Some(l), &dev("WH-1000XM5", Headphones, Some(80)), at(1000), expect);
         assert!(l.expire(at(WAIT_MAX_MS as u64)));
         assert_eq!(l.rows_shown().len(), 1);
         assert!(!l.pending());
-        // Nothing remembered: as before, devices are lines as they come. Only five are waited for.
         let l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, Expect::default());
         assert!(!l.pending() && l.rows_shown().is_empty());
         let many: Vec<_> = (0..8).map(|i| (format!("Thiết bị {i}"), Mouse)).collect();
         let l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, Expect { devices: &many, ..Expect::default() });
         assert_eq!(l.rows_shown().len(), MAX_WAIT_DEVICES);
-        // Airplane mode off: no line per device and no battery; the Bluetooth line counts them.
         let air = Expect { vpn: true, devices: &known };
         let plus = |n: usize| format!("{} +{n} {}", tr("Bluetooth bật", "Bluetooth on"), tr("thiết bị", "devices"));
         let states = |l: &ConnList| l.rows_shown().into_iter().map(|r| (r.text, r.state)).collect::<Vec<_>>();
@@ -2904,7 +2558,6 @@ mod tests {
         l = conn_list_add(Some(l), &dev("Tay cầm", Gamepad, Some(18)), at(1200), air);
         assert_eq!(states(&l)[1], (plus(3), Done));
         assert!(l.rows_shown().iter().all(|r| r.icon.is_none()), "no line per device");
-        // One that never connects: the line counts the ones that did, and is done at the deadline.
         let mut l = conn_list_add(None, &Event::Airplane(false), t0, air);
         l = conn_list_add(Some(l), &dev("WH-1000XM5", Headphones, Some(80)), at(500), air);
         assert!(l.pending() && l.expire(at(WAIT_MAX_MS as u64)));
@@ -2923,15 +2576,10 @@ mod tests {
         let wifi = || Event::Radio(RadioType::Wifi, true);
         let bt = || Event::Radio(RadioType::Bluetooth, true);
         let orders: Vec<Vec<Event>> = vec![
-            // everything in one go, in order
             vec![Event::Airplane(false), wifi(), bt(), dev("Tai nghe", Headphones), dev("Chuột", Mouse), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), online.clone(), Event::Vpn(true)],
-            // the devices before the radios, the radios before the switch
             vec![dev("Tai nghe", Headphones), dev("Chuột", Mouse), bt(), wifi(), Event::Airplane(false), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), online.clone(), Event::Vpn(true)],
-            // Bluetooth, one device, then the switch
             vec![bt(), dev("Tai nghe", Headphones), Event::Airplane(false), dev("Chuột", Mouse), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), wifi(), online.clone(), Event::Vpn(true)],
-            // devices alone, then the switch
             vec![dev("Tai nghe", Headphones), dev("Chuột", Mouse), Event::Airplane(false), wifi(), bt(), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), online.clone(), Event::Vpn(true)],
-            // Wi-Fi, devices, the switch
             vec![wifi(), dev("Tai nghe", Headphones), dev("Chuột", Mouse), Event::Airplane(false), bt(), dev("Bàn phím", Keyboard), dev("Tay cầm", Gamepad), online, Event::Vpn(true)],
         ];
         for (n, events) in orders.iter().enumerate() {
@@ -2941,7 +2589,6 @@ mod tests {
             }
             let l = l.unwrap();
             let rows = l.rows_shown();
-            // One list headed by the switch: Wi-Fi, Bluetooth with its devices counted, the connection, the VPN.
             assert_eq!(l.head.icon, Some(render::ICON_AIRPLANE), "order {n}");
             let texts: Vec<String> = rows.iter().map(|r| r.text.clone()).collect();
             let expected = [
@@ -2962,21 +2609,17 @@ mod tests {
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let none = Expect::default();
         let dev = Event::Device { name: "Chuột".into(), kind: Mouse, up: true, battery: Some(64) };
-        // A Wi-Fi banner takes its own (the VPN with it) but not Bluetooth: that is a banner of its own.
         let wifi = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0, none);
         let wifi = conn_list_add(Some(wifi), &Event::Vpn(false), at(100), none);
         assert_eq!((wifi.domain, wifi.rows.len()), (Domain::Net, 1));
         let bt = conn_list_add(Some(wifi), &Event::Radio(RadioType::Bluetooth, true), at(200), none);
         assert_eq!((bt.domain, bt.head.icon, bt.rows_shown().len()), (Domain::Bt, Some(render::ICON_BT), 0));
-        // and a Bluetooth banner takes no Wi-Fi line
         let wifi_on = conn_list_add(Some(bt), &Event::Radio(RadioType::Wifi, true), at(300), none);
         assert_eq!(wifi_on.domain, Domain::Net);
-        // A device alone is the banner with the battery large; a second one makes it a list; Wi-Fi is no part of it.
         let one = conn_list_add(None, &dev, t0, none);
         assert!(one.single && one.head.badge.as_deref() == Some("64%"));
         let next = conn_list_add(Some(one), &Event::Net(Net::Online { name: "W".into(), wifi: true }), at(100), none);
         assert_eq!((next.domain, next.rows.len(), next.single), (Domain::Net, 0, false));
-        // The airplane banner takes everything while it is checking: no banner of Wi-Fi or Bluetooth beside it.
         let mut air = conn_list_add(None, &Event::Airplane(true), t0, none);
         for e in [Event::Radio(RadioType::Wifi, false), Event::Radio(RadioType::Bluetooth, false), Event::Vpn(false)] {
             air = conn_list_add(Some(air), &e, at(100), none);
@@ -2992,17 +2635,14 @@ mod tests {
         let one = vec![("UGREEN".to_string(), Headphones)];
         let two = vec![("UGREEN".to_string(), Headphones), ("Chuột".to_string(), Mouse)];
         let dev = |n: &str, k, b| Event::Device { name: n.into(), kind: k, up: true, battery: b };
-        // Bluetooth on, one device remembered: no line waits; the device's own banner takes over when it connects.
         let e1 = Expect { devices: &one, ..Expect::default() };
         let l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, e1);
         assert!(!l.pending() && l.rows_shown().is_empty());
         let l = conn_list_add(Some(l), &dev("UGREEN", Headphones, Some(80)), at(1000), e1);
         assert!(l.single && l.head.title == "UGREEN" && l.head.badge.as_deref() == Some("80%") && l.rows_shown().is_empty());
-        // a battery that comes late fills the large figure in
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, e1);
         l = conn_list_add(Some(l), &dev("UGREEN", Headphones, None), at(1000), e1);
         assert!(device_battery(&mut l, "UGREEN", 80, at(1500)) && l.head.badge.as_deref() == Some("80%"));
-        // Two remembered: the list, small batteries, each line done as its device connects.
         let e2 = Expect { devices: &two, ..Expect::default() };
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, e2);
         assert!(l.pending() && l.rows_shown().len() == 2);
@@ -3017,13 +2657,10 @@ mod tests {
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let vpn = Expect { vpn: true, ..Expect::default() };
         let shown = |l: &ConnList| l.rows_shown().into_iter().map(|r| (r.text, r.state)).collect::<Vec<_>>();
-        // Bluetooth: off, on: the head is "on", no line says "off" or "on" besides it.
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, false), t0, Expect::default());
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Bluetooth, true), at(300), Expect::default());
         assert_eq!(l.head.title, format!("{} Bluetooth", tr("Đã bật", "Turned on")));
         assert!(l.rows_shown().is_empty());
-        // Wi-Fi: off, the VPN down with it, on again: the head is Wi-Fi on, the connection and the VPN are
-        // the steps to wait for; nothing about "off" is left.
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0, vpn);
         l = conn_list_add(Some(l), &Event::Vpn(false), at(100), vpn);
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(400), vpn);
@@ -3032,14 +2669,12 @@ mod tests {
         l = conn_list_add(Some(l), &Event::Net(Net::Online { name: "W".into(), wifi: true }), at(2000), vpn);
         l = conn_list_add(Some(l), &Event::Vpn(true), at(3000), vpn);
         assert!(!l.pending() && shown(&l).iter().all(|(_, s)| *s == Done));
-        // The network told offline first (it came before the radio): its head gives way to Wi-Fi on.
         let mut l = conn_list_add(None, &Event::Net(Net::Offline), t0, vpn);
         for (ms, e) in [(100, Event::Vpn(false)), (200, Event::Radio(RadioType::Wifi, false)), (300, Event::Radio(RadioType::Wifi, true))] {
             l = conn_list_add(Some(l), &e, at(ms), vpn);
         }
         assert_eq!(l.head.title, format!("{} Wi-Fi", tr("Đã bật", "Turned on")));
         assert_eq!(shown(&l), [(tr("Kết nối mạng", "Network connection").to_string(), Wait), ("VPN".to_string(), Todo)]);
-        // Wi-Fi on, connected, then off and on within the banner's time: the old "connected" does not stay.
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0, vpn);
         l = conn_list_add(Some(l), &Event::Net(Net::Online { name: "W".into(), wifi: true }), at(1000), vpn);
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, false), at(2000), vpn);
@@ -3061,7 +2696,6 @@ mod tests {
         assert_eq!((w.domain, w.head.title.clone()), (Domain::Net, format!("{} Wi-Fi", tr("Đã tắt", "Turned off"))));
         let b = conn_list_add(Some(w), &Event::Radio(RadioType::Bluetooth, false), at(2200), vpn);
         assert_eq!(b.domain, Domain::Bt);
-        // While it still waits, radios are part of it.
         let l = conn_list_add(None, &Event::Airplane(false), t0, vpn);
         let l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100), vpn);
         assert_eq!(l.domain, Domain::Air);
@@ -3073,7 +2707,6 @@ mod tests {
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let vpn = Expect { vpn: true, ..Expect::default() };
         let online = Event::Net(Net::Online { name: "W".into(), wifi: true });
-        // Windows tells the connection and the VPN again when Wi-Fi flaps: each stays one line.
         for start in [Event::Radio(RadioType::Wifi, true), Event::Airplane(false)] {
             let mut l = conn_list_add(None, &start, t0, vpn);
             for (ms, e) in [(500, &online), (900, &Event::Vpn(true)), (1000, &online), (1100, &Event::Vpn(true)), (1200, &Event::Radio(RadioType::Wifi, true)), (1300, &online)] {
@@ -3090,14 +2723,11 @@ mod tests {
         let vpn = Expect { vpn: true, ..Expect::default() };
         let texts = |l: &ConnList| l.rows_shown().into_iter().map(|r| r.text).collect::<Vec<_>>();
         let vpn_off = row_text(&Event::Vpn(false));
-        // Off and on again quickly: the VPN has not come back, no event tells it going, the line is there.
         let mut l = conn_list_add(None, &Event::Airplane(false), t0, vpn);
         l = conn_list_add(Some(l), &Event::Airplane(true), t0 + Duration::from_millis(300), vpn);
         assert_eq!(texts(&l).iter().filter(|t| **t == vpn_off).count(), 1);
-        // The event that does come is the same line, not a second one.
         l = conn_list_add(Some(l), &Event::Vpn(false), t0 + Duration::from_millis(500), vpn);
         assert_eq!(texts(&l).iter().filter(|t| **t == vpn_off).count(), 1);
-        // No VPN was up: no line.
         let l = conn_list_add(None, &Event::Airplane(true), t0, Expect::default());
         assert!(!texts(&l).contains(&vpn_off));
     }
@@ -3107,15 +2737,12 @@ mod tests {
         let t0 = Instant::now();
         let vpn_up = Event::Vpn(true);
         assert!(vpn_expected(false, None, &vpn_up, None, t0), "it came up: expected from now on");
-        // Wi-Fi off, and the VPN that was on it: still expected.
         let wifi_off = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0, Expect { vpn: true, ..Expect::default() });
         assert!(vpn_expected(true, None, &Event::Vpn(false), Some(&wifi_off), t0));
-        // The VPN switched off by itself (no such banner on show): not expected.
         assert!(!vpn_expected(true, None, &Event::Vpn(false), None, t0));
         let other = conn_list_add(None, &Event::Net(Net::Offline), t0, Expect { vpn: true, ..Expect::default() });
         assert!(!vpn_expected(true, None, &Event::Vpn(false), Some(&other), t0));
         assert!(vpn_expected(true, None, &Event::Radio(RadioType::Wifi, true), None, t0), "other events change nothing");
-        // The VPN dropped just before the radio went off: it went with the network.
         assert!(vpn_expected(false, Some(t0), &Event::Radio(RadioType::Wifi, false), None, t0 + Duration::from_secs(1)));
         assert!(!vpn_expected(false, Some(t0), &Event::Radio(RadioType::Wifi, false), None, t0 + Duration::from_secs(10)));
     }
@@ -3126,28 +2753,23 @@ mod tests {
         let t0 = Instant::now();
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let dev = |name: &str, kind, battery| Event::Device { name: name.into(), kind, up: true, battery };
-        // One device: the banner it always was, its battery large; a late battery arrives in place.
         let mut l = conn_list_add(None, &dev("WH-1000XM5", Headphones, None), t0, Expect::default());
         assert_eq!((l.head.title.as_str(), l.head.badge.clone(), l.rows.len()), ("WH-1000XM5", None, 0));
         assert!(device_battery(&mut l, "WH-1000XM5", 80, at(700)));
         assert_eq!(l.head.badge.as_deref(), Some("80%"));
-        // A second one turns it into a list: a line each, the battery at the right.
         let l = conn_list_add(Some(l), &dev("MX Master 3", Mouse, Some(64)), at(2800), Expect::default());
         assert_eq!(l.head.title, devices_title(2));
         let lines: Vec<_> = l.rows.iter().map(|r| (r.text.as_str(), r.value.as_deref(), r.icon.is_some())).collect();
         assert_eq!(lines, [("WH-1000XM5", Some("80%"), true), ("MX Master 3", Some("64%"), true)]);
-        // A later battery fills its line in; a low one is red; a device that is not on show is not taken.
         let mut l = l;
         assert!(device_battery(&mut l, "MX Master 3", 18, at(3000)) && l.rows[1].low && !l.rows[0].low);
         assert!(!device_battery(&mut l, "Tay cầm", 50, at(3100)));
         assert!(!device_battery(&mut l, "MX Master 3", 18, at(3000 + ALERT_MS as u64 + 1)), "its banner has gone");
-        // After "Bluetooth on" the devices are lines under it, however many; at most MAX_ROWS are drawn.
         let mut l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, Expect::default());
         for i in 0..8u64 {
             l = conn_list_add(Some(l), &dev(&format!("Thiết bị {i}"), Mouse, Some(50)), at(100 * i), Expect::default());
         }
         assert_eq!((l.head.icon, l.rows.len(), l.devices), (Some(render::ICON_BT), MAX_ROWS, 8));
-        // Under a Wi-Fi banner a device is not a line: it has its own banner.
         let wifi = conn_list_add(None, &Event::Radio(RadioType::Wifi, false), t0, Expect::default());
         let l = conn_list_add(Some(wifi), &dev("Chuột", Mouse, Some(70)), at(200), Expect::default());
         assert_eq!((l.head.title.as_str(), l.rows.len(), l.single), ("Chuột", 0, true));

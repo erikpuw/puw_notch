@@ -1,7 +1,3 @@
-//! Live background activities shown as their own banner: Explorer file operations (percent from the
-//! progress dialog's title), browser downloads (size and speed of the partial file), terminal builds
-//! (the build tool a shell started, and how long it has run).
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, SyncSender};
@@ -19,7 +15,6 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible, PostMessageW, WM_APP};
 
-/// A sample with something to show is ready (`Watch::latest`).
 pub const WM_ACTIVITY: u32 = WM_APP + 15;
 
 use crate::i18n::tr;
@@ -27,31 +22,23 @@ use crate::i18n::tr;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActivityKind {
     FileOp,
-    /// Explorer moving, deleting or recycling: a kind each, for an icon each (a folder with an arrow, a trash can).
     Move,
     Delete,
     Download,
     Build,
 }
 
-/// One running activity, as the banner shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveActivity {
     pub kind: ActivityKind,
     pub title: String,
     pub detail: String,
-    /// 0.0 ..= 1.0 when the activity says how far it is; None when it does not.
     pub progress: Option<f32>,
-    /// An ended activity: Some(true) when it is seen to have worked (the downloaded file is there, the
-    /// build exited 0), Some(false) when it failed; None while it runs and when it only stopped being seen.
     pub result: Option<bool>,
-    /// The file a finished download became.
     pub file: Option<PathBuf>,
-    /// How many other activities run at the same time (this one is the first of them).
     pub more: usize,
 }
 
-/// UI-side reader. Filesystem and accessibility calls never run on the animation thread.
 pub struct Watch {
     pub enabled: bool,
     reader: Option<Reader>,
@@ -70,26 +57,20 @@ impl Watch {
         Self { enabled, reader: None }
     }
 
-    /// Asks for a new sample and returns the newest one there is. Each sample that has something to
-    /// show also posts WM_ACTIVITY to `target`, so it reaches the banner without waiting for this tick.
     pub fn poll(&mut self, now: Instant, target: isize) -> Option<LiveActivity> {
         if !self.enabled {
-            // Dropping both channels stops the worker and discards old completion events.
             self.reader = None;
             return None;
         }
         let reader = self.reader.get_or_insert_with(|| Reader::new(target));
-        // At most one sample waits behind the current scan.
         let _ = reader.request.try_send(());
         self.latest(now)
     }
 
-    /// The newest sample, without asking for another (for WM_ACTIVITY).
     pub fn latest(&mut self, now: Instant) -> Option<LiveActivity> {
         let reader = self.reader.as_mut().filter(|_| self.enabled)?;
         for (current, finished) in reader.updates.try_iter() {
             reader.current = current;
-            // Several samples can arrive at once; a later one must not erase an ending not yet shown.
             if finished.is_some() {
                 reader.finished = finished;
             }
@@ -115,10 +96,6 @@ impl Reader {
             let mut monitor = Monitor::new(true);
             let mut active = false;
             loop {
-                // While something runs, sample on its own 4 times a second: a fast copy moves several
-                // percent between the UI's ticks. Idle, wait for the tick (a scan costs ~20-30 ms).
-                // The sample is stamped by this thread, not by the UI that asked: a speed is a size
-                // difference over the time between two reads of the file.
                 if active {
                     if let Err(RecvTimeoutError::Disconnected) = requests.recv_timeout(Duration::from_millis(250)) {
                         break;
@@ -137,7 +114,6 @@ impl Reader {
                     unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_ACTIVITY, WPARAM(0), LPARAM(0)); }
                 }
             }
-            // Its UI Automation object must go before COM does.
             drop(monitor);
             if com.is_ok() {
                 unsafe { CoUninitialize(); }
@@ -158,25 +134,18 @@ pub struct Monitor {
     download_dirs: Vec<PathBuf>,
     download_histories: Vec<PathBuf>,
     download_dirs_at: Option<Instant>,
-    /// The real name of the selected partial file, from the browser's history when the file has none yet.
     download_name: Option<String>,
     download_lookup_at: Option<Instant>,
-    /// The file a download that just vanished became, when it is there.
     download_done: Option<PathBuf>,
-    /// The folder's finished files when the selected partial appeared (see `completed_file`).
     download_before: HashSet<PathBuf>,
-    /// UI Automation, created on first use and kept (it is the expensive part of reading Explorer).
     automation: Option<IUIAutomation>,
-    /// The operation read from the dialog with this window handle (see `poll_explorer`).
     explorer_op: Option<(isize, ActivityKind, String)>,
     explorer_ui_at: Option<Instant>,
     build_exe: Option<String>,
     build_since: Option<Instant>,
-    /// The build process being timed, kept open so its exit code can be read once it is gone.
     build_pid: Option<u32>,
     build_proc: Option<Proc>,
     build_exit: Option<u32>,
-    /// What ran at the last sample.
     last: Vec<LiveActivity>,
     finished: Option<LiveActivity>,
 }
@@ -186,11 +155,6 @@ impl Monitor {
         Self { enabled, ..Default::default() }
     }
 
-    /// What runs right now (None when nothing, or when switched off): the first of the running activities
-    /// (Explorer, then a download, then a build), with how many others run beside it. All are read every
-    /// time, each keeps its own state, and one behind another still ends. An activity that was there and
-    /// is gone becomes `take_finished`, except file operations: Explorer says it is done itself.
-    /// ponytail: one ending is kept per sample; two ending in the same 250 ms show only the first.
     pub fn poll(&mut self, now: Instant) -> Option<LiveActivity> {
         if !self.enabled {
             self.last.clear();
@@ -218,16 +182,10 @@ impl Monitor {
         running.into_iter().next()
     }
 
-    /// The activity that just ended, once.
     pub fn take_finished(&mut self) -> Option<LiveActivity> {
         self.finished.take()
     }
 
-    /// Explorer's progress dialogs, a minimized one too. The window title carries the percent and costs
-    /// nothing to read. Which operation it is (copy, move, delete) is only in the dialog's text, and
-    /// reading that is a cross-process UI Automation walk of ~20-30 ms: once per dialog, not per sample.
-    /// (No lighter way exists: Explorer's IFileOperationProgressSink callbacks only reach the process
-    /// that started the operation.)
     fn poll_explorer(&mut self, now: Instant) -> Option<LiveActivity> {
         let windows = explorer_windows();
         if windows.is_empty() {
@@ -246,7 +204,6 @@ impl Monitor {
                 (a.kind, a.title) = (kind, name);
                 return activity;
             }
-            // Not read yet: look at the dialog's text, but not more than once a second while it says nothing.
             if self.explorer_ui_at.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_secs(1)) {
                 if activity.is_some() { return activity; }
                 continue;
@@ -286,7 +243,6 @@ impl Monitor {
     fn poll_download(&mut self, now: Instant) -> Option<LiveActivity> {
         let selected = self.download_file.as_deref().zip(self.download_changed_at)
             .map(|(path, changed)| (path, self.download_size, changed));
-        // Browser settings change rarely; reading every profile's Preferences each tick is wasted work.
         if self.download_dirs_at.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(30)) {
             (self.download_dirs, self.download_histories) = download_dirs();
             self.download_dirs_at = Some(now);
@@ -317,8 +273,6 @@ impl Monitor {
             self.download_lookup_at = None;
             self.download_before = finished_files(&path);
         }
-        // Chromium may keep "Unconfirmed 98941" on disk the whole time; its history names the file.
-        // Ask again every 2 s until the row is written (never, in InPrivate: the title stays generic).
         if self.download_name.is_none() && self.download_lookup_at.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(2)) {
             self.download_lookup_at = Some(now);
             self.download_name = self.download_histories.iter().find_map(|h| {
@@ -334,8 +288,6 @@ impl Monitor {
 
     fn poll_build(&mut self, now: Instant) -> Option<LiveActivity> {
         let Some((pid, exe)) = pick_build(&process_list()) else {
-            // The tool is gone: its exit code says how it ended. None when it is still running (its
-            // terminal closed) or was not ours to open (an elevated one): then only "ended" is known.
             self.build_exit = self.build_proc.take().and_then(|p| p.exit_code());
             (self.build_pid, self.build_exe, self.build_since) = (None, None, None);
             return None;
@@ -353,17 +305,14 @@ impl Monitor {
     }
 }
 
-/// The activity of the last sample that is no longer running, if any. Explorer's kinds are one source.
 fn ended_activity(last: Vec<LiveActivity>, running: &[LiveActivity]) -> Option<LiveActivity> {
     last.into_iter().find(|a| !is_file_op(a.kind) && !running.iter().any(|r| r.kind == a.kind))
 }
 
-/// Explorer's kinds are one source: a dialog that turns from "preparing" into a move is not an end.
 fn is_file_op(kind: ActivityKind) -> bool {
     matches!(kind, ActivityKind::FileOp | ActivityKind::Move | ActivityKind::Delete)
 }
 
-/// A process opened only to ask how it ended.
 struct Proc(HANDLE);
 
 impl Proc {
@@ -371,7 +320,6 @@ impl Proc {
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok().map(Self) }
     }
 
-    /// The exit code, None while the process still runs.
     fn exit_code(&self) -> Option<u32> {
         const STILL_ACTIVE: u32 = 259;
         let mut code = 0;
@@ -432,7 +380,6 @@ fn new_automation() -> Option<IUIAutomation> {
     Some(automation)
 }
 
-/// Whether `a` says which operation runs (a dialog that is only counting or preparing does not yet).
 fn names_operation(a: &LiveActivity) -> bool {
     a.title != tr("Đang xử lý tệp", "Working on files") && a.title != tr("Đang chuẩn bị", "Preparing files")
 }
@@ -442,7 +389,6 @@ fn parse_explorer_labels(title: &str, labels: &[String]) -> Option<LiveActivity>
     let generic = tr("Đang xử lý tệp", "Working on files");
     for label in labels {
         if let Some(found) = parse_explorer_title(label) {
-            // File names in the dialog can contain '%' too; only progress labels carry a percent.
             let lower = label.trim().to_lowercase();
             if found.title == generic && !lower.ends_with("complete") && !lower.ends_with("hoàn thành") {
                 continue;
@@ -464,7 +410,6 @@ fn parse_explorer_labels(title: &str, labels: &[String]) -> Option<LiveActivity>
     activity
 }
 
-/// The percent is optional while Explorer is preparing, counting, or deleting files.
 pub fn parse_explorer_title(title: &str) -> Option<LiveActivity> {
     let text = title.trim_start().to_lowercase();
     use ActivityKind::{Delete, FileOp, Move};
@@ -499,16 +444,13 @@ pub fn extract_percent(s: &str) -> Option<u32> {
     before[start..].parse::<u32>().ok().filter(|&p| p <= 100)
 }
 
-/// Keep the selected transfer stable; ignore abandoned partials that have not changed recently.
 fn find_download(dirs: &[PathBuf], current: Option<(&Path, u64, Instant)>, now: Instant, wall_now: SystemTime) -> Option<(PathBuf, u64)> {
     dirs.iter().filter_map(|dir| std::fs::read_dir(dir).ok()).flatten().flatten().filter_map(|entry| {
         let path = entry.path();
         if !is_download_part(&path) { return None; }
-        // The directory entry's size and time lag behind a file still open for writing; ask the file.
         let metadata = std::fs::metadata(&path).ok()?;
         if !metadata.is_file() { return None; }
         let modified = metadata.modified().ok()?;
-        // Size growth remains authoritative even when Windows delays updating LastWriteTime.
         let selected = current.is_some_and(|(previous, size, changed)| previous == path
             && (metadata.len() != size || now.saturating_duration_since(changed) < Duration::from_secs(30)));
         if !selected && wall_now.duration_since(modified).unwrap_or_default() >= Duration::from_secs(30) {
@@ -524,17 +466,12 @@ pub fn is_download_part(path: &Path) -> bool {
     ["crdownload", "part", "opdownload"].iter().any(|e| ext.eq_ignore_ascii_case(e))
 }
 
-/// The name of the file a partial one becomes; None while it has none yet.
 pub fn clean_download_name(path: &Path) -> Option<String> {
     let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
-    // Chromium writes "Unconfirmed 98941.crdownload" (localized: "Chưa xác nhận 98941") until it knows
-    // the real name, and may keep it for the whole download; that placeholder is no name.
     let placeholder = !stem.contains('.') && stem.rsplit_once(' ').is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
     (!stem.is_empty() && !placeholder).then(|| stem.to_string())
 }
 
-/// The real name of `part` from a Chromium history's `(current_path, target_path, state)` rows: its own
-/// row, else the only download still in progress (state 0) that is headed for the partial's folder.
 fn history_name(rows: &[Vec<String>], part: &Path) -> Option<String> {
     let name = |row: &Vec<String>| Path::new(&row[1]).file_name()?.to_str().map(str::to_string);
     let own = rows.iter().find(|r| r.len() == 3 && r[0].eq_ignore_ascii_case(part.to_str().unwrap_or_default()));
@@ -546,16 +483,11 @@ fn history_name(rows: &[Vec<String>], part: &Path) -> Option<String> {
     own.or_else(|| running.next().filter(|_| running.next().is_none())).and_then(name)
 }
 
-/// What is in the partial's folder besides partial files: a finished download is what is new there later.
 fn finished_files(part: &Path) -> HashSet<PathBuf> {
     part.parent().and_then(|dir| std::fs::read_dir(dir).ok()).into_iter().flatten().flatten()
         .map(|entry| entry.path()).filter(|path| !is_download_part(path)).collect()
 }
 
-/// The finished file a partial download that just vanished became. A named partial becomes its own name
-/// without the extension (and nothing else: no such file means it was cancelled). An "Unconfirmed" one
-/// has no such name, so it is the file that appeared in its folder since `before` and is at least as
-/// large (not judged by modification time: a browser may keep the server's).
 fn completed_file(part: &Path, size: u64, before: &HashSet<PathBuf>) -> Option<PathBuf> {
     if clean_download_name(part).is_some() {
         let named = part.with_extension("");
@@ -570,7 +502,6 @@ fn completed_file(part: &Path, size: u64, before: &HashSet<PathBuf>) -> Option<P
 }
 
 fn downloads_dir() -> Option<PathBuf> {
-    // Respect the Windows Downloads location, including a folder moved to another drive.
     unsafe {
         if let Ok(raw) = SHGetKnownFolderPath(&FOLDERID_Downloads, KF_FLAG_DEFAULT, None) {
             let path = raw.to_string().ok().map(PathBuf::from);
@@ -581,11 +512,8 @@ fn downloads_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").map(|u| PathBuf::from(u).join("Downloads"))
 }
 
-/// Chromium browsers keep their own download folder (Edge set to E:\Download saves nothing in Downloads).
 const BROWSERS: &[&str] = &[r"Microsoft\Edge\User Data", r"Google\Chrome\User Data", r"BraveSoftware\Brave-Browser\User Data"];
 
-/// Windows Downloads plus every Chromium profile's download folder, without duplicates; and every
-/// profile's History database (where the real name of an "Unconfirmed" download is).
 fn download_dirs() -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut dirs: Vec<PathBuf> = downloads_dir().into_iter().collect();
     let mut histories = Vec::new();
@@ -610,9 +538,7 @@ fn chromium_download_dir(preferences: &str) -> Option<PathBuf> {
     (!dir.is_empty()).then(|| PathBuf::from(dir.to_string()))
 }
 
-/// Build tools that count; node, python and the like run all day without building anything.
 const BUILD_TOOLS: &[&str] = &["cargo.exe", "msbuild.exe", "dotnet.exe", "make.exe", "cmake.exe", "ninja.exe", "go.exe"];
-/// What a terminal's command line runs under (rtk wraps the commands that are typed).
 const TERMINALS: &[&str] = &["cmd.exe", "powershell.exe", "pwsh.exe", "bash.exe", "wsl.exe", "rtk.exe"];
 
 fn listed(list: &[&str], exe: &str) -> bool {
@@ -631,8 +557,6 @@ fn build_name(exe: &str) -> &'static str {
     }
 }
 
-/// The build tool a terminal started, from `(pid, parent pid, exe)` of every process; the tools a
-/// tool starts itself (rustc under cargo) have a tool as parent and do not count twice.
 pub fn pick_build(procs: &[(u32, u32, String)]) -> Option<(u32, String)> {
     procs
         .iter()
@@ -811,7 +735,6 @@ mod tests {
     #[test]
     fn a_hidden_activity_still_ends_and_counts_toward_the_others() {
         let act = |kind| LiveActivity { kind, title: "x".into(), detail: String::new(), progress: None, result: None, file: None, more: 0 };
-        // A copy and a build ran at the last sample; now only the copy remains (as a delete dialog).
         let last = vec![act(ActivityKind::Move), act(ActivityKind::Build)];
         let ended = ended_activity(last.clone(), &[act(ActivityKind::Delete)]);
         assert_eq!(ended.map(|a| a.kind), Some(ActivityKind::Build), "the build ended behind the copy; move to delete is no end");
@@ -866,7 +789,6 @@ mod tests {
         impl Drop for Cleanup { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
         let _cleanup = Cleanup(dir.clone());
         let unconfirmed = dir.join("Unconfirmed 1.crdownload");
-        // A file that was already there is no finished download, however big and fresh it is.
         std::fs::write(dir.join("existing.bin"), vec![0u8; 100]).unwrap();
         let before = finished_files(&unconfirmed);
         assert_eq!(completed_file(&unconfirmed, 5, &before), None, "cancelled: nothing new");
@@ -874,7 +796,6 @@ mod tests {
         assert_eq!(completed_file(&unconfirmed, 5, &before), None, "smaller than what was downloaded");
         std::fs::write(dir.join("model.gguf"), b"123456").unwrap();
         assert_eq!(completed_file(&unconfirmed, 5, &before), Some(dir.join("model.gguf")));
-        // A named partial is its own file or nothing: another new file does not stand in for a cancelled one.
         assert_eq!(completed_file(&dir.join("video.mp4.crdownload"), 1, &before), None, "cancelled named download");
         std::fs::write(dir.join("video.mp4"), b"1").unwrap();
         assert_eq!(completed_file(&dir.join("video.mp4.crdownload"), 1, &before), Some(dir.join("video.mp4")));

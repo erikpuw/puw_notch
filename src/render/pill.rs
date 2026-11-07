@@ -1,5 +1,3 @@
-//! The resting pill: the clock, the battery ring, the weather, the cover and bars while music plays, the idle robot, and the Pomodoro line along its bottom.
-
 use super::*;
 
 impl Renderer {
@@ -16,25 +14,18 @@ impl Renderer {
         let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
         unsafe {
             let pill_music = v.music.filter(|_| v.live);
-            // The idle robot fades the clock and battery out as its eyes fade in.
             let robot_a = v.robot.map_or(0.0, |e| e.alpha);
             let pill_a = small_a;
             let small_a = small_a * (1.0 - robot_a);
             text(v.time, F_SMALL, rect(l, 0.0, r, nh), center, grey(1.0, small_a))?;
             if let Some(b) = &v.battery {
-                // A battery ring left of the time; with music the cover takes that spot, so it
-                // sits before the bars.
                 let d = 22.0 * s;
                 let bx = if pill_music.is_some() { r - 61.0 * s } else { l + 13.0 * s };
                 self.draw_battery_ring((bx + 10.0 * s, nh / 2.0), d, b, small_a)?;
             }
-            // Weather: icon and temperature in the room the clock leaves, to its right on the plain
-            // pill (balancing the battery), after the cover on the music pill. Left out
-            // when it would touch the clock.
             if let (Some((ic, geoms)), Some(n)) = (&weather_line, v.weather.now) {
                 let (icon, gap) = (14.0 * s, 2.0 * s);
                 let clock_half = width(v.time, F_SMALL) / 2.0 + 3.0 * s;
-                // Where the icon and `label` shrunk by `k` go, and the room left between them and the clock.
                 let place = |label: &str, k: f32| {
                     let total = icon + gap + width(label, F_LABEL) * k;
                     if pill_music.is_some() {
@@ -45,8 +36,6 @@ impl Renderer {
                         (left, total, left - (cx + clock_half))
                     }
                 };
-                // "−12°" is wider than "29°": it keeps its degree sign by shrinking a little (down
-                // to 80%); only a number that still does not fit loses the sign, not the weather.
                 let number = v.unit.number(n.temp);
                 let with_sign = format!("{number}°");
                 let tries = [(&with_sign, 1.0), (&with_sign, 0.9), (&with_sign, 0.8), (&number, 1.0)];
@@ -61,7 +50,6 @@ impl Renderer {
                 }
             }
             if pill_music.is_some() {
-                // Live pill: cover on the left, equaliser on the right.
                 let c = 20.0 * s;
                 let top = (nh - c) / 2.0;
                 cover(rect(l + 10.0 * s, top, l + 10.0 * s + c, top + c), 5.0 * s, small_a)?;
@@ -78,9 +66,6 @@ impl Renderer {
             if let Some(e) = v.robot.filter(|e| e.alpha > 0.0) {
                 self.draw_face(&e, cx, nh / 2.0, s, pill_a * e.alpha)?;
             }
-            // Pomodoro: the pill is too full for another mark, so a thin line along its bottom fills as the segment runs
-            // (dimmer while paused part-way). Like the approval banner's countdown it is cut to the outline, so its
-            // start curves up with the corner.
             let done = v.focus.fill(v.focus.seg, std::time::Instant::now());
             if v.focus.running() || done > 0.0 {
                 let ink = if v.focus.kind() == focus::Kind::Focus { CORAL } else { GREEN };

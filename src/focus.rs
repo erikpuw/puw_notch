@@ -1,9 +1,5 @@
-//! Pomodoro: one cycle of eight segments (focus 25, short break 5, ... long break 15). The timer lives in
-//! memory only: a cycle in progress is not worth keeping across a restart.
-
 use std::time::{Duration, Instant};
 
-/// Minutes of a segment kind.
 pub const FOCUS_MIN: u32 = 25;
 pub const SHORT_MIN: u32 = 5;
 pub const LONG_MIN: u32 = 15;
@@ -15,7 +11,6 @@ pub enum Kind {
     Long,
 }
 
-/// Four focus rounds, a short break after each of the first three, the long one at the end.
 pub const CYCLE: [Kind; 8] = [Kind::Focus, Kind::Short, Kind::Focus, Kind::Short, Kind::Focus, Kind::Short, Kind::Focus, Kind::Long];
 
 impl Kind {
@@ -28,7 +23,6 @@ impl Kind {
     }
 }
 
-/// A segment ran out: the one that ended and the one that comes now.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Done {
     pub ended: Kind,
@@ -37,11 +31,8 @@ pub struct Done {
 
 #[derive(Clone, Debug)]
 pub struct Focus {
-    /// Index into `CYCLE`.
     pub seg: usize,
-    /// Time left in the segment as of `since` (or now, while paused).
     left: Duration,
-    /// Set while the clock runs.
     since: Option<Instant>,
 }
 
@@ -64,12 +55,10 @@ impl Focus {
         self.since.is_some()
     }
 
-    /// Time left in the current segment.
     pub fn remaining(&self, now: Instant) -> Duration {
         self.since.map_or(self.left, |s| self.left.saturating_sub(now.saturating_duration_since(s)))
     }
 
-    /// 0.0 .. 1.0 of a segment done (the segments before the current one are full, after it empty).
     pub fn fill(&self, seg: usize, now: Instant) -> f32 {
         match seg.cmp(&self.seg) {
             std::cmp::Ordering::Less => 1.0,
@@ -78,12 +67,10 @@ impl Focus {
         }
     }
 
-    /// Time left in the whole cycle.
     pub fn cycle_left(&self, now: Instant) -> Duration {
         self.remaining(now) + (self.seg + 1..CYCLE.len()).map(seg_len).sum::<Duration>()
     }
 
-    /// Which focus round (1..=4) the current segment belongs to.
     pub fn round(&self) -> usize {
         self.seg / 2 + 1
     }
@@ -93,12 +80,10 @@ impl Focus {
         self.since = if self.since.is_some() { None } else { Some(now) };
     }
 
-    /// Back to the start of the current segment, paused.
     pub fn reset(&mut self) {
         *self = Focus { seg: self.seg, left: seg_len(self.seg), since: None };
     }
 
-    /// Start `seg` over, keeping the clock running if it was.
     pub fn jump(&mut self, seg: usize, now: Instant) {
         let running = self.running();
         *self = Focus { seg: seg % CYCLE.len(), left: seg_len(seg % CYCLE.len()), since: None };
@@ -111,15 +96,12 @@ impl Focus {
         self.jump(self.seg + 1, now);
     }
 
-    /// The chips: the first segment of that kind from the current one on, wrapping round.
     pub fn pick(&mut self, kind: Kind, now: Instant) {
         if let Some(seg) = (0..CYCLE.len()).map(|d| (self.seg + d) % CYCLE.len()).find(|s| CYCLE[*s] == kind) {
             self.jump(seg, now);
         }
     }
 
-    /// A running segment that has run out moves on to the next one, which starts at once: the user is told at
-    /// every change. After the long break the cycle is over: it waits at the start, paused, for a new one.
     pub fn tick(&mut self, now: Instant) -> Option<Done> {
         if !self.running() || !self.remaining(now).is_zero() {
             return None;
@@ -133,13 +115,11 @@ impl Focus {
 
 #[cfg(test)]
 impl Focus {
-    /// A picture of the timer: segment `seg`, `elapsed` into it, running.
     pub fn demo(seg: usize, elapsed: Duration) -> Focus {
         Focus { seg, left: seg_len(seg).saturating_sub(elapsed), since: Some(Instant::now()) }
     }
 }
 
-/// "17:42" from a duration (rounded up, so the clock shows 00:01 until it is really over).
 pub fn mmss(d: Duration) -> String {
     let s = d.as_secs() + u64::from(d.subsec_nanos() > 0);
     format!("{:02}:{:02}", s / 60, s % 60)

@@ -1,15 +1,8 @@
-//! Water and "stand up" reminders. Times are minutes: of the day for the water window, and
-//! `todo::minutes` totals for clocks that span days. Settings and today's water are kept in
-//! %APPDATA%\PuwNotch\health.txt as key=value lines.
-
 use std::path::PathBuf;
 
-/// Away from the keyboard and mouse this long = the sitting clock starts over.
 pub const AWAY_SEC: u32 = 5 * 60;
-/// "Để sau" on a water reminder.
 pub const SNOOZE_MIN: i64 = 10;
 
-/// A setting changed with the −/+ buttons (or a switch).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Setting {
     WaterOn,
@@ -26,19 +19,15 @@ pub struct Health {
     pub water_on: bool,
     pub cup_ml: u32,
     pub goal_ml: u32,
-    /// Reminder window, minutes of the day.
     pub from_min: u32,
     pub to_min: u32,
-    /// Today's water.
     pub taken_ml: u32,
     pub day: u32,
-    /// Last drink or reminder (total minutes): the next reminder counts from here.
     pub water_mark: Option<i64>,
     pub snooze_until: Option<i64>,
     pub goal_told: bool,
     pub sit_on: bool,
     pub sit_every_min: u32,
-    /// Sitting since (total minutes); None while away.
     pub sitting_since: Option<i64>,
     path: Option<PathBuf>,
 }
@@ -89,7 +78,6 @@ impl Health {
         let _ = std::fs::write(p, serialize(self));
     }
 
-    /// New day: today's water starts from zero.
     pub fn new_day(&mut self, today: u32) {
         if self.day != today {
             self.day = today;
@@ -101,13 +89,11 @@ impl Health {
         }
     }
 
-    /// Minutes between water reminders: the window split by the cups still to drink.
     pub fn water_every(&self) -> i64 {
         let cups = self.goal_ml.div_ceil(self.cup_ml.max(1)).max(1) as i64;
         ((self.to_min.saturating_sub(self.from_min)) as i64 / cups).max(15)
     }
 
-    /// When the next water reminder rings (total minutes), None when done or off for today.
     pub fn next_drink(&self, now: i64, minute_of_day: u32) -> Option<i64> {
         if !self.water_on || self.taken_ml >= self.goal_ml || minute_of_day >= self.to_min {
             return None;
@@ -130,7 +116,6 @@ impl Health {
         self.snooze_until = Some(now + SNOOZE_MIN);
     }
 
-    /// Sitting clock. `idle_sec` = time since the last keyboard / mouse input.
     pub fn sitting_minutes(&self, now: i64) -> i64 {
         self.sitting_since.map_or(0, |s| (now - s).max(0))
     }
@@ -139,7 +124,6 @@ impl Health {
         self.sitting_since = Some(now);
     }
 
-    /// Advance the clocks; reminders due now. `now` total minutes, `minute_of_day` local.
     pub fn tick(&mut self, now: i64, minute_of_day: u32, idle_sec: u32) -> Vec<Ring> {
         let mut out = Vec::new();
         if self.water_on && self.taken_ml >= self.goal_ml && !self.goal_told {
@@ -163,7 +147,6 @@ impl Health {
         out
     }
 
-    /// One −/+ step (`dir` = -1 / +1) or a switch flip (any `dir`).
     pub fn change(&mut self, s: Setting, dir: i32) {
         let step = |v: u32, by: u32, lo: u32, hi: u32| (v as i64 + dir as i64 * by as i64).clamp(lo as i64, hi as i64) as u32;
         match s {
@@ -214,7 +197,6 @@ fn serialize(h: &Health) -> String {
     )
 }
 
-/// 480 -> "08:00"
 pub fn hhmm(minute_of_day: u32) -> String {
     format!("{:02}:{:02}", minute_of_day / 60, minute_of_day % 60)
 }
@@ -223,7 +205,6 @@ pub fn hhmm(minute_of_day: u32) -> String {
 mod tests {
     use super::*;
 
-    /// Total minutes at midnight of some day; tests add the minute of the day.
     const DAY0: i64 = 1_000_000 * 1440;
 
     fn at(h: u32, m: u32) -> (i64, u32) {
@@ -311,7 +292,6 @@ mod tests {
         h.sit_on = false;
         let back = parse(&serialize(&h));
         assert_eq!((back.cup_ml, back.taken_ml, back.day, back.sit_on), (300, 900, 20261025, false));
-        // Nusa-style junk and bad values fall back to defaults
         let d = parse("bottle=500\ncup=99999\nfrom=900\nto=600\n");
         assert_eq!((d.cup_ml, d.from_min, d.to_min), (600, 480, 1020));
         assert_eq!(hhmm(495), "08:15");

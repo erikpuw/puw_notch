@@ -1,8 +1,5 @@
-//! The panel's side arrows, page dots, the row of page icons that opens under them, and the Weather page's source credit.
-
 use super::*;
 
-/// A cell part of the way (`k`, 0..1) from `from` to `to`.
 fn lerp_cell(from: D2D_RECT_F, to: D2D_RECT_F, k: f32) -> D2D_RECT_F {
     let l = |a: f32, b: f32| a + (b - a) * k;
     rect(l(from.left, to.left), l(from.top, to.top), l(from.right, to.right), l(from.bottom, to.bottom))
@@ -21,14 +18,10 @@ impl Renderer {
         let center = DWRITE_TEXT_ALIGNMENT_CENTER;
         let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
         unsafe {
-            // Side arrows and page dots.
-            // They sit on the panel's own edges, so they follow it while it widens or narrows.
             let nav = [
                 (Button::PagePrev, rect(l + 10.0 * s, arrow_y(ph) * s, l + (10.0 + ARROW) * s, (arrow_y(ph) + ARROW) * s)),
                 (Button::PageNext, rect(r - (10.0 + ARROW) * s, arrow_y(ph) * s, r - 10.0 * s, (arrow_y(ph) + ARROW) * s)),
             ];
-            // While the lyrics are open the arrows are hidden (they fade as the panel widens), so the
-            // way back is the lyrics button: shrinking the panel never leaves the mouse outside it.
             let arrow_a = a * (1.0 - ((v.size[0] - notch::target(Mode::Expanded, false)[0]) / notch::LYRICS_EXTRA_W).clamp(0.0, 1.0));
             for (b, icon) in [(Button::PagePrev, ICON_LEFT), (Button::PageNext, ICON_RIGHT)] {
                 if arrow_a < 0.01 {
@@ -46,17 +39,11 @@ impl Renderer {
                     text(icon, F_SMALL_ICON, *br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
                 }
             }
-            // The page dots: the long one is the page on show. On a page change the old one shrinks
-            // while the new one grows (the weights below), so the pill seems to travel and stretch.
             let (dot, wide, gap) = (6.0 * s, 18.0 * s, 6.0 * s);
             let kept = PAGES.iter().filter(|p| page_shown(**p)).count();
             let total = wide + (kept as f32 - 1.0) * (dot + gap);
             let mut dx = cx - total / 2.0;
             let arriving = v.leaving.map_or(1.0, |(_, t, _)| ease_out(t));
-            // The row of page icons comes as the panel grows by NAV_EXTRA, the dots give way to it. The icons only show
-            // once they are inside the panel (they reach 10 px under its resting height, so none show before the panel is
-            // 4 px past it, all of them 12 px past it), so they fade out before the shrinking edge gets to them instead of
-            // poking out of it.
             let nav_fade = ((nh - ph * s - 4.0 * s) / (8.0 * s)).clamp(0.0, 1.0);
             for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
                 let weight = match v.leaving {
@@ -71,8 +58,6 @@ impl Renderer {
             }
             if nav_fade > 0.01 {
                 let cells = nav_cells(cx, s, ph);
-                // The square behind the page on show glides from the old page's cell to the new one's as the page changes
-                // (like the dots above it), instead of jumping.
                 let cell_of = |page: Page| cells.iter().find(|(p, _)| *p == page).map(|(_, c)| *c);
                 if let Some(to) = cell_of(v.page) {
                     let from = v.leaving.and_then(|(from, _, _)| cell_of(from)).unwrap_or(to);
@@ -80,11 +65,9 @@ impl Renderer {
                 }
                 for (p, cell) in cells {
                     let hot = v.hovered == Some(Button::GoPage(p));
-                    // The mouse is on a cell that is not the page on show: a fainter square.
                     if hot && p != v.page {
                         rt.FillRoundedRectangle(&rounded(cell, 8.0 * s), &self.brush(grey(0.1, a * nav_fade))?);
                     }
-                    // The icon brightens as the square arrives under it and dims as it leaves.
                     let weight = match v.leaving {
                         _ if p == v.page => arriving,
                         Some((from, _, _)) if p == from => 1.0 - arriving,
@@ -102,13 +85,9 @@ impl Renderer {
                     }
                 }
             }
-            // The Weather page's source (Open-Meteo asks for the credit, CC BY 4.0) and when it was
-            // fetched, "old" when stale: quiet in the bottom-right corner, level with the dots, clear
-            // of the page's own content.
             if let (Page::Weather, None, Some(_), Some(u)) = (v.page, v.leaving, v.weather.now, v.weather.updated) {
                 let stale = v.weather.is_stale(v.list.now);
                 let when = format!("{}{:02}:{:02}", if stale { format!("{} ", tr("cũ", "old")) } else { String::new() }, u / 100 % 100, u % 100);
-                // It sits where the row of page icons opens, so it gives way to it.
                 let ca = a * (1.0 - nav_fade);
                 let ink = if stale { color(ORANGE.0, ORANGE.1, ORANGE.2, ca) } else { grey(0.4, ca) };
                 text(&format!("Open-Meteo · {when}"), F_LABEL, rect(cx + 36.0 * s, (dots_y(ph) - 8.0) * s, r - 32.0 * s, (dots_y(ph) + 7.0) * s), trail, ink)?;

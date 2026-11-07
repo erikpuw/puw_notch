@@ -1,8 +1,3 @@
-//! Speaker volume and microphone mute state through Core Audio. Needs COM initialised on the
-//! calling thread. Both are watched like Nusa does: Windows calls `VolumeWatch` on every change from
-//! any source (keys, the taskbar slider, apps), so their levels are never polled; only which device is
-//! the default is looked at now and then.
-
 use windows::core::implement;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl};
@@ -11,17 +6,13 @@ use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_MUTE, VK_VOLUME_UP};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
-/// Posted on every speaker volume / mute change. WPARAM = percent, LPARAM = 1 when muted.
 pub const WM_VOLUME: u32 = WM_APP + 4;
-/// Same for the default microphone; LPARAM = 1 when muted.
 pub const WM_MIC: u32 = WM_APP + 14;
 
-/// 0..1 scalar to a whole percent.
 fn percent(level: f32) -> u8 {
     (level.clamp(0.0, 1.0) * 100.0).round() as u8
 }
 
-/// Runs on a Core Audio thread: hand the new level to the window (as message `.1`) and return.
 #[implement(IAudioEndpointVolumeCallback)]
 struct VolumeWatch(isize, u32);
 
@@ -35,7 +26,6 @@ impl IAudioEndpointVolumeCallback_Impl for VolumeWatch_Impl {
     }
 }
 
-/// A default device being watched: (device id, endpoint, registered callback).
 type Watched = Option<(String, IAudioEndpointVolume, IAudioEndpointVolumeCallback)>;
 
 pub struct Audio {
@@ -57,9 +47,6 @@ impl Audio {
         }
     }
 
-    /// Watch the default device of `flow` in `slot`, moving the callback over when the default changes
-    /// (headphones plugged in). Cheap when nothing changed. True when the default is another device
-    /// than before.
     fn follow(devices: &IMMDeviceEnumerator, slot: &mut Watched, hwnd: HWND, flow: EDataFlow, msg: u32) -> bool {
         unsafe {
             let Ok(dev) = devices.GetDefaultAudioEndpoint(flow, eMultimedia) else { return false };
@@ -90,8 +77,6 @@ impl Audio {
         Self::follow(&self.devices, &mut self.mic, hwnd, eCapture, WM_MIC)
     }
 
-    /// Act on a volume key the way Windows does (its step size; up/down also unmute). The
-    /// speaker callback then reports the change, so the notch shows it.
     pub fn volume_key(&self, vk: u16) {
         let Some(ep) = self.endpoint(eRender) else { return };
         unsafe {
@@ -105,8 +90,6 @@ impl Audio {
         }
     }
 
-    /// Muted state of the default microphone; None when there is no mic. Read once when the mic is
-    /// (re)found: after that `WM_MIC` reports every change.
     pub fn mic_muted(&self) -> Option<bool> {
         let ep = self.endpoint(eCapture)?;
         unsafe { Some(ep.GetMute().ok()?.as_bool()) }

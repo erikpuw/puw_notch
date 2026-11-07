@@ -1,29 +1,16 @@
-//! The Music page's aurora: a thin glowing line in the cover's two colours, swaying under the
-//! controls. Drawn only while the page is open (see `Renderer::present` and `bars_active`).
-
 use super::*;
 
-/// Brightest the aurora's colours may get (before the line's own transparency): it runs
-/// under the controls at the bottom of the panel.
 const AURORA_MAX_LUM: f32 = 0.5;
 
-/// Points along the aurora band.
 const AURORA_STEPS: usize = 48;
-/// Aurora layers, widest first: (thickness scale, opacity): a soft halo and a brighter core.
 const AURORA_LAYERS: [(f32, f32); 8] = [(2.4, 0.12), (2.0, 0.14), (1.65, 0.16), (1.3, 0.19), (1.0, 0.22), (0.72, 0.26), (0.48, 0.3), (0.26, 0.36)];
-/// The aurora is drawn this many times smaller, then stretched (the stretch blurs it).
 const AURORA_SHRINK: f32 = 8.0;
-/// Where the aurora runs, as fractions of the panel height: centre line, sway, halo thickness.
 const AURORA_Y: f32 = 0.8;
 const AURORA_AMP: f32 = 0.07;
 const AURORA_HALO: f32 = 0.09;
-/// The sharp core over the blurred halo, drawn at full size: (stroke width in px, opacity),
-/// widest first, in the colours turned towards white by AURORA_CORE_WHITE.
 const AURORA_CORE: [(f32, f32); 4] = [(9.0, 0.10), (5.0, 0.16), (2.6, 0.30), (1.2, 0.55)];
 const AURORA_CORE_WHITE: f32 = 0.35;
 
-/// The aurora at time `t` (s) and `u` across the panel (0..1): centre line offset (-1..1) and
-/// thickness (0.1..1). Slow sums of sines, so it sways and breathes without repeating soon.
 fn at(t: f32, u: f32) -> (f32, f32) {
     use std::f32::consts::TAU;
     let c = 0.6 * (TAU * 0.7 * u + t * 0.45).sin() + 0.3 * (TAU * 1.3 * u - t * 0.3 + 1.1).sin() + 0.1 * (TAU * 2.1 * u + t * 0.6).sin();
@@ -31,8 +18,6 @@ fn at(t: f32, u: f32) -> (f32, f32) {
     (c, w)
 }
 
-/// The aurora's two colours: the glow's hue, and the cover's next strongest hue at least 60
-/// degrees away. A cover with one colour gets that colour turned 45 degrees for the second.
 pub(super) fn tints(pixels: &[u8]) -> [(f32, f32, f32); 2] {
     let first = glow_tint(pixels);
     if first == GLOW_NEUTRAL {
@@ -48,7 +33,6 @@ pub(super) fn tints(pixels: &[u8]) -> [(f32, f32, f32); 2] {
     }
 }
 
-/// `c` with its hue turned by `deg` degrees (same brightness and saturation).
 fn rotate_hue((r, g, b): (f32, f32, f32), deg: f32) -> (f32, f32, f32) {
     let (cos, sin) = (deg.to_radians().cos(), deg.to_radians().sin());
     let k = (1.0 - cos) / 3.0;
@@ -58,8 +42,6 @@ fn rotate_hue((r, g, b): (f32, f32, f32), deg: f32) -> (f32, f32, f32) {
 }
 
 impl Renderer {
-    /// One layer of the aurora: the band between `left` and `right`, its centre line and
-    /// thickness from `at`, with the thickness scaled by `k` (wide soft layers, thin core).
     fn band(&self, t: f32, left: f32, right: f32, yc: f32, amp: f32, thick: f32, k: f32) -> Result<ID2D1PathGeometry> {
         let pts: Vec<(f32, f32, f32)> = (0..=AURORA_STEPS).map(|i| {
             let u = i as f32 / AURORA_STEPS as f32;
@@ -83,7 +65,6 @@ impl Renderer {
         }
     }
 
-    /// The aurora's centre line (an open polyline, for the stroked core).
     fn line(&self, t: f32, left: f32, right: f32, yc: f32, amp: f32) -> Result<ID2D1PathGeometry> {
         unsafe {
             let geo = self.factory.CreatePathGeometry()?;
@@ -102,17 +83,12 @@ impl Renderer {
         }
     }
 
-    /// Draw the aurora over the glow inside the panel outline `shape`: `panel` is (left, right,
-    /// height) in device px, `w` the window width, `s` the scale, `t` the animation time (s) and
-    /// `aurora_a` the overall opacity. A failure skips the aurora for this frame.
     pub(super) fn draw_aurora(&self, shape: &ID2D1PathGeometry, panel: (f32, f32, f32), w: i32, s: f32, t: f32, aurora_a: f32, rest: f32) {
         let (l, r, nh) = panel;
         let rt = &self.rt;
         unsafe {
             let [c1, c2] = self.cover.as_ref().map_or([GLOW_NEUTRAL; 2], |c| c.aurora);
             let (c1, c2) = (dim_to_lum(c1, AURORA_MAX_LUM), dim_to_lum(c2, AURORA_MAX_LUM));
-            // First colour on the left into the second on the right; each stop's strength
-            // drifts on its own, so brighter and darker stretches travel along the band.
             let stops: Vec<D2D1_GRADIENT_STOP> = (0..=5).map(|i| {
                 let f = i as f32 / 5.0;
                 let c = (c1.0 + (c2.0 - c1.0) * f, c1.1 + (c2.1 - c1.1) * f, c1.2 + (c2.2 - c1.2) * f);
@@ -120,15 +96,9 @@ impl Renderer {
                 D2D1_GRADIENT_STOP { position: f, color: color(c.0, c.1, c.2, pulse) }
             }).collect();
             let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: l, Y: 0.0 }, endPoint: Vector2 { X: r, Y: 0.0 } };
-            // The line is laid out on the panel's resting height: when the page icons open and the panel
-            // grows, the glow follows the bottom but the aurora stays where it is.
             let lay = nh.min(rest);
             let (yc, amp) = (lay * AURORA_Y, lay * AURORA_AMP);
-            // Everything that can fail is made first: a failure skips the aurora for this
-            // frame instead of leaving the panel's layer pushed and the frame unfinished.
             let made = (|| -> Result<(ID2D1Bitmap, D2D_SIZE_F, ID2D1LinearGradientBrush, ID2D1PathGeometry)> {
-            // Drawn at 1/AURORA_SHRINK size, then stretched with linear filtering: the stretch
-            // is the blur, for a few small fills instead of a blur effect.
             let small_size = D2D_SIZE_F { width: (w as f32 / AURORA_SHRINK).ceil(), height: (nh / AURORA_SHRINK).ceil() + 1.0 };
             let half = AURORA_SHRINK / 2.0;
             let key = (small_size.width as u32, small_size.height as u32);
@@ -150,20 +120,17 @@ impl Renderer {
                 small.FillGeometry(&band, &brush, None);
             }
             small.EndDraw(None, None)?;
-            // Stretched in two linear steps (8x would show its blocks): to half size, then full.
             let sz = small.GetBitmap()?.GetSize();
             mid.BeginDraw();
             mid.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
             mid.DrawBitmap(&small.GetBitmap()?, Some(&rect(0.0, 0.0, sz.width * half, sz.height * half)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
             mid.EndDraw(None, None)?;
-            // The thin bright core, drawn sharp and anti-aliased at full size.
             let whiten = |c: D2D1_COLOR_F| color(c.r + (1.0 - c.r) * AURORA_CORE_WHITE, c.g + (1.0 - c.g) * AURORA_CORE_WHITE, c.b + (1.0 - c.b) * AURORA_CORE_WHITE, c.a);
             let core_stops: Vec<D2D1_GRADIENT_STOP> = stops.iter().map(|st| D2D1_GRADIENT_STOP { position: st.position, color: whiten(st.color) }).collect();
             let core = rt.CreateLinearGradientBrush(&line, None, &rt.CreateGradientStopCollection(&core_stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?)?;
             Ok((mid.GetBitmap()?, sz, core, self.line(t, l, r, yc, amp)?))
             })();
             if let Ok((halo, sz, core, path)) = made {
-                // Only inside the panel's outline.
                 let params = D2D1_LAYER_PARAMETERS { contentBounds: rect(l, 0.0, r, nh), geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
                     maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: 1.0,
                     opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
@@ -195,7 +162,6 @@ mod tests {
 
     #[test]
     fn aurora_takes_the_covers_second_colour() {
-        // Half blue, half pink (premultiplied BGRA, opaque).
         let mut px = Vec::new();
         for i in 0..64 {
             px.extend_from_slice(if i < 32 { &[255, 140, 90, 255] } else { &[170, 70, 255, 255] });
@@ -204,7 +170,6 @@ mod tests {
         assert_ne!(a, b);
         let blue = |c: (f32, f32, f32)| c.2 > c.0;
         assert!(blue(a) != blue(b), "one blue, one pink: {a:?} {b:?}");
-        // One colour only: the second is the first turned, not a copy.
         let [c, d] = tints(&[0, 0, 255, 255].repeat(64));
         assert_eq!(c, (1.0, 0.0, 0.0));
         assert!(d != c && d.0 > 0.5, "{d:?}");

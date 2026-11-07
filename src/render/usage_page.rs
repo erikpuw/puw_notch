@@ -1,26 +1,17 @@
-//! The Limits page: the apps as a segmented control (dimmer while one has not counted), then
-//! cards on the same grey as the other pages. One or two limits (Claude, Codex) get a card each
-//! with a ring and the time left; three or more (Antigravity) get a card per group with a bar per
-//! window, so the numbers stay readable.
-
 use super::*;
 use crate::usage::{self, Bar, APPS};
 
-/// Logical px: the cards' top and height (the tabs end at 56), the gap between cards, their padding.
 const CARDS_TOP: f32 = 64.0;
 const CARDS_H: f32 = 92.0;
 const GAP: f32 = 6.0;
 const PAD: f32 = 14.0;
-/// Widest a card gets, so one or two limits do not stretch over the whole page.
 const CARD_MAX_W: f32 = 200.0;
 const RED: (f32, f32, f32) = (1.0, 0.35, 0.35);
 
-/// Green while there is room, orange getting close, red nearly out.
 fn ring_colour(used: f32) -> (f32, f32, f32) {
     if used < 60.0 { GREEN } else if used < 85.0 { ORANGE } else { RED }
 }
 
-/// Each app's own colour: the chosen tab and the cards carry a wash of it.
 fn app_accent(app: usage::App) -> (f32, f32, f32) {
     match app {
         usage::App::Claude => (0.85, 0.47, 0.34),
@@ -29,7 +20,6 @@ fn app_accent(app: usage::App) -> (f32, f32, f32) {
     }
 }
 
-/// "Gemini · Week" -> (Some("Gemini"), "Week"); "5 h" -> (None, "5 h").
 fn split_label(label: &str) -> (Option<&str>, &str) {
     match label.rsplit_once(" · ") {
         Some((group, window)) => (Some(group), window),
@@ -37,7 +27,6 @@ fn split_label(label: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// The limits grouped by their group name, in order ("" for those without one).
 fn groups(bars: &[Bar]) -> Vec<(String, Vec<&Bar>)> {
     let mut out: Vec<(String, Vec<&Bar>)> = Vec::new();
     for bar in bars {
@@ -47,7 +36,6 @@ fn groups(bars: &[Bar]) -> Vec<(String, Vec<&Bar>)> {
             None => out.push((group, vec![bar])),
         }
     }
-    // The short window first, then the week.
     for (_, list) in &mut out {
         list.sort_by_key(|b| b.weekly);
     }
@@ -55,7 +43,6 @@ fn groups(bars: &[Bar]) -> Vec<(String, Vec<&Bar>)> {
 }
 
 impl Renderer {
-    /// `tabs` are the page's buttons, `(cl, cr)` the content's left and right edge, `a` its opacity.
     pub(super) fn draw_usage(
         &self,
         text: &dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
@@ -70,22 +57,17 @@ impl Renderer {
         let (center, lead, trail) = (DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING);
         let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
         let segment = |i: usize| tabs.iter().find(|(x, _)| *x == Button::UsageTab(i)).map(|(_, b)| *b);
-        // The chosen app, or the first one that has a tab.
         let tab = if segment(self.usage_tab).is_some() { self.usage_tab } else { (0..APPS.len()).find(|&i| segment(i).is_some()).unwrap_or(0) };
         let now = usage::now_secs();
-        // What is shown (the app's own way: the part left, or the part used) and how full it looks.
         let shown = |used: f32| if APPS[tab].counts_down() { 100.0 - used } else { used }.clamp(0.0, 100.0);
         unsafe {
-            // The segmented control: one dark track, the chosen app lifted on it.
             let ends = (0..APPS.len()).filter_map(segment).fold(None, |ends: Option<(D2D_RECT_F, D2D_RECT_F)>, b| Some(ends.map_or((b, b), |(first, _)| (first, b))));
             let Some(_) = ends else {
-                // None of the three is on this PC.
                 let r = rect(cl, CARDS_TOP * s, cr, (CARDS_TOP + CARDS_H) * s);
                 rt.FillRoundedRectangle(&rounded(r, 14.0 * s), &self.brush(grey(0.11, a))?);
                 text(crate::i18n::tr("Chưa thấy Claude, Codex hay Antigravity trên máy này", "No Claude, Codex or Antigravity found on this PC"), F_LABEL, r, center, grey(0.6, a))?;
                 return Ok(());
             };
-            // The apps as chips: a dot in the app's colour and its name; the chosen one on a light chip.
             for (i, app) in APPS.iter().enumerate() {
                 let Some(b) = segment(i) else { continue };
                 if i == tab {
@@ -93,7 +75,6 @@ impl Renderer {
                 } else if hovered == Some(Button::UsageTab(i)) {
                     rt.FillRoundedRectangle(&rounded(b, (b.bottom - b.top) / 2.0), &self.brush(grey(0.07, a))?);
                 }
-                // An app that has not counted yet is dimmer.
                 let counted = self.usage.get(*app).is_some();
                 let shade = match (i == tab, counted) { (true, true) => 1.0, (true, false) => 0.7, (false, true) => 0.55, (false, false) => 0.35 };
                 let dot = app_accent(*app);
@@ -120,8 +101,6 @@ impl Renderer {
             };
 
             if bars.len() <= 2 {
-                // One dial of rings (the outer is the first limit, the inner the second) and a row for each limit
-                // beside it: its window, the share, the time left, and a thin bar.
                 let hub = (cl + 58.0 * s, 114.0 * s);
                 let d = 100.0 * s;
                 let k = app_accent(APPS[tab]);
@@ -131,10 +110,8 @@ impl Renderer {
                 }
                 text(&format!("{}%", shown(bars[0].used).round()), F_TITLE, rect(hub.0 - 30.0 * s, hub.1 - 14.0 * s, hub.0 + 30.0 * s, hub.1 + 14.0 * s), center, grey(1.0, a))?;
                 let x0 = cl + 134.0 * s;
-                // A reading the app made a while ago says so: what it shows now may be further on.
                 let stale = self.usage.updated(APPS[tab]).filter(|&at| now - at > APPS[tab].stale_after());
                 for (n, bar) in bars.iter().enumerate() {
-                    // Two rows leave the 20 px under the second bar free for the note about an old reading (46 apart, not 52).
                     let y = (if bars.len() == 1 { 84.0 } else { 64.0 + n as f32 * 46.0 }) * s;
                     let (_, window) = split_label(&bar.label);
                     let tone = if n == 0 { ring_colour(bar.used) } else { k };
@@ -157,7 +134,6 @@ impl Renderer {
                 return Ok(());
             }
 
-            // A card per group: its name, then a bar per window with the percent at the right.
             let list = groups(bars);
             let width = (((cr - cl) - GAP * s * (list.len() as f32 - 1.0)) / list.len() as f32).min(CARD_MAX_W * s);
             let mut x = cl + ((cr - cl) - width * list.len() as f32 - GAP * s * (list.len() as f32 - 1.0)) / 2.0;

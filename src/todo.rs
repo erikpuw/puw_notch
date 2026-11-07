@@ -1,45 +1,27 @@
-//! Tasks and appointments in one list, typed on the notch: "Mua sữa", "Họp nhóm 20:00",
-//! "Khám răng 28/10 14:30", "Họp mai 9h". A time alone is today (tomorrow once it has passed);
-//! a date (dd/mm[/yyyy], "hôm nay", "mai" / "ngày mai", "today", "tomorrow") without a time is
-//! 08:00. Timed tasks ring `remind_before` minutes early (0 = only on time) and on time; open
-//! tasks past their time stay, marked overdue, until ticked or deleted.
-//! Saved in %APPDATA%\PuwNotch\todo.txt, one task per line: "-[ @<at>]\t<text>" open,
-//! "x <yyyymmdd>[ @<at>]\t<text>" done that day (<at> = yyyymmddHHMM), plus "# remind <min>".
-//! calendar.txt ("@<at>\t<text>") from the old Appointments page is folded in once.
-
 use std::path::{Path, PathBuf};
 
-/// Longest task text kept (characters).
 pub const MAX_LEN: usize = 120;
-/// Choices for the early reminder, minutes before the time (0 = off).
 pub const REMIND_STEPS: [u32; 6] = [0, 5, 10, 15, 30, 60];
 const REMIND_DEFAULT: u32 = 15;
-/// A date typed without a time.
 const DEFAULT_HOUR: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
     pub text: String,
-    /// Day it was ticked (yyyymmdd), None while open.
     pub done: Option<u32>,
-    /// When, yyyymmddHHMM; None for a plain task.
     pub at: Option<u64>,
-    /// Early and on-time reminders already shown (this run only; past ones are not replayed).
     pub told_soon: bool,
     pub told_now: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Ring {
-    /// `remind_before` minutes to go.
     Soon,
-    /// It is time.
     Now,
 }
 
 pub struct Todo {
     pub items: Vec<Item>,
-    /// Early reminder, one of `REMIND_STEPS`.
     pub remind_before: u32,
     path: Option<PathBuf>,
 }
@@ -50,7 +32,6 @@ impl Default for Todo {
     }
 }
 
-/// Local time as yyyymmddHHMM.
 pub fn stamp(date: u32, hour: u32, minute: u32) -> u64 {
     date as u64 * 10_000 + hour as u64 * 100 + minute as u64
 }
@@ -66,7 +47,6 @@ pub fn days_in_month(year: u32, month: u32) -> u32 {
     }
 }
 
-/// Day after a yyyymmdd date.
 pub fn next_day(date: u32) -> u32 {
     let (y, m, d) = (date / 10_000, date / 100 % 100, date % 100);
     match (d < days_in_month(y, m), m < 12) {
@@ -76,11 +56,9 @@ pub fn next_day(date: u32) -> u32 {
     }
 }
 
-/// Minutes since an arbitrary epoch of a yyyymmddHHMM stamp, for differences between two stamps.
 pub fn minutes(t: u64) -> i64 {
     let (date, hm) = ((t / 10_000) as u32, t % 10_000);
     let (y, m, d) = (date / 10_000, date / 100 % 100, date % 100);
-    // days from civil (Howard Hinnant), good for any Gregorian date
     let (y, m) = if m <= 2 { (y as i64 - 1, m as i64 + 12) } else { (y as i64, m as i64) };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
@@ -90,8 +68,6 @@ pub fn minutes(t: u64) -> i64 {
     days * 1440 + (hm / 100) as i64 * 60 + (hm % 100) as i64
 }
 
-/// Find a 24 h time in the text ("20:00", "8:05", "20h", "20h30", "8H"). Returns
-/// (hour, minute, text without it). Only whole tokens count: "2024" or "abc20h" are left alone.
 pub fn parse_time(text: &str) -> Option<(u32, u32, String)> {
     let words: Vec<&str> = text.split_whitespace().collect();
     for (i, w) in words.iter().enumerate() {
@@ -110,7 +86,6 @@ pub fn parse_time(text: &str) -> Option<(u32, u32, String)> {
         }
         let rest: Vec<&str> = words.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, w)| *w).collect();
         let mut rest = rest.join(" ");
-        // "Họp lúc 20:00" -> "Họp"
         for tail in [" lúc", " vào", " at"] {
             if rest.to_lowercase().ends_with(tail) {
                 rest.truncate(rest.len() - tail.len());
@@ -121,8 +96,6 @@ pub fn parse_time(text: &str) -> Option<(u32, u32, String)> {
     None
 }
 
-/// Find a date in the words: "hôm nay", "mai" / "ngày mai", "today", "tomorrow", dd/mm[/yyyy]
-/// (also with '-'). Returns (yyyymmdd, year given) and the words without it.
 fn parse_date(words: &[&str], today: u32) -> Option<((u32, bool), Vec<String>)> {
     let lower: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
     let rest = |drop: &[usize]| words.iter().enumerate().filter(|(i, _)| !drop.contains(i)).map(|(_, w)| w.to_string()).collect();
@@ -157,9 +130,6 @@ fn parse_date(words: &[&str], today: u32) -> Option<((u32, bool), Vec<String>)> 
     None
 }
 
-/// Typed text -> (task text, when). Spaces squeezed, length capped; None when nothing is left.
-/// No date and no time: a plain task. A time alone: today, or tomorrow once passed. A date:
-/// that day (08:00 without a time); dd/mm already behind us this year means next year.
 pub fn read(text: &str, now: u64) -> Option<(String, Option<u64>)> {
     let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_LEN).collect();
     let today = (now / 10_000) as u32;
@@ -184,14 +154,11 @@ pub fn read(text: &str, now: u64) -> Option<(String, Option<u64>)> {
             if at > now { at } else { stamp(next_day(today), h, m) }
         }
     };
-    // A bare time ("20h") still needs a readable title.
     let rest = if rest.is_empty() && time.is_some() { format!("{h:02}:{m:02}") } else { rest };
     (!rest.is_empty()).then_some((rest, Some(at)))
 }
 
 impl Todo {
-    /// Load todo.txt (folding in an old calendar.txt once) and drop tasks finished before today.
-    /// Reminders already behind `now` are not replayed.
     pub fn load(now: u64) -> Self {
         let dir = std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("PuwNotch"));
         let mut t = dir.as_deref().map(Self::load_from).unwrap_or_default();
@@ -222,7 +189,6 @@ impl Todo {
         let _ = std::fs::write(p, format!("# remind {}\n{}", self.remind_before, serialize(&self.items)));
     }
 
-    /// Reminders whose moment is already behind `now` count as shown.
     fn settle_reminders(&mut self, now: u64) {
         let before = self.remind_before as i64;
         for it in &mut self.items {
@@ -233,8 +199,6 @@ impl Todo {
         }
     }
 
-    /// Open first; among those today's (also overdue and plain tasks) before later days, by time.
-    /// Equal keys keep their order, so a new plain task stays on top.
     fn sort(&mut self, today: u32) {
         self.items.sort_by_key(|it| {
             let later = it.at.is_some_and(|a| (a / 10_000) as u32 > today);
@@ -244,7 +208,6 @@ impl Todo {
 
     pub fn add(&mut self, text: &str, now: u64) -> bool {
         let Some((text, at)) = read(text, now) else { return false };
-        // Set inside the early window: only the on-time reminder is left.
         let told_soon = at.is_some_and(|a| minutes(a) - minutes(now) <= self.remind_before as i64);
         self.items.insert(0, Item { text, done: None, at, told_soon, told_now: false });
         self.sort((now / 10_000) as u32);
@@ -252,8 +215,6 @@ impl Todo {
         true
     }
 
-    /// Replace a task's text and time (read the same way as `add`); done state is kept.
-    /// Blank text leaves the task as it was.
     pub fn update(&mut self, i: usize, text: &str, now: u64) -> bool {
         let Some((text, at)) = read(text, now) else { return false };
         let before = self.remind_before as i64;
@@ -268,7 +229,6 @@ impl Todo {
         true
     }
 
-    /// What the edit box shows: the text with its time (and date when not today) back in.
     pub fn edit_text(&self, i: usize, today: u32) -> String {
         let Some(it) = self.items.get(i) else { return String::new() };
         match it.at {
@@ -284,7 +244,6 @@ impl Todo {
         }
     }
 
-    /// Tick / untick. Done tasks sink below the open ones.
     pub fn toggle(&mut self, i: usize, today: u32) {
         let Some(it) = self.items.get_mut(i) else { return };
         it.done = if it.done.is_some() { None } else { Some(today) };
@@ -299,8 +258,6 @@ impl Todo {
         }
     }
 
-    /// Forget tasks finished on an earlier day and re-sort (tomorrow's tasks become today's).
-    /// Open tasks stay, even past their day. Returns whether anything went.
     pub fn new_day(&mut self, today: u32) -> bool {
         let before = self.items.len();
         self.items.retain(|it| it.done.is_none_or(|d| d >= today));
@@ -312,21 +269,18 @@ impl Todo {
         gone
     }
 
-    /// Step the early reminder through `REMIND_STEPS` (-1 / +1).
     pub fn step_remind(&mut self, dir: i32) {
         let i = REMIND_STEPS.iter().position(|&m| m == self.remind_before).unwrap_or(3) as i32;
         self.remind_before = REMIND_STEPS[(i + dir).clamp(0, REMIND_STEPS.len() as i32 - 1) as usize];
         self.save();
     }
 
-    /// (open for today: plain, overdue and today's; open on later days).
     pub fn counts(&self, today: u32) -> (usize, usize) {
         let open = self.items.iter().filter(|it| it.done.is_none());
         let later = open.clone().filter(|it| it.at.is_some_and(|a| (a / 10_000) as u32 > today)).count();
         (open.count() - later, later)
     }
 
-    /// Reminders to show now: open timed tasks reaching their early or on-time moment.
     pub fn rings(&self, now: u64) -> Vec<(usize, Ring)> {
         let before = self.remind_before as i64;
         let mut out = Vec::new();
@@ -351,7 +305,6 @@ impl Todo {
     }
 }
 
-/// Files saved by Notepad or PowerShell can start with a byte-order mark.
 fn strip_bom(text: &str) -> &str {
     text.strip_prefix('\u{feff}').unwrap_or(text)
 }
@@ -383,7 +336,6 @@ fn parse(text: &str) -> Vec<Item> {
         .collect()
 }
 
-/// Old Appointments page file: "@<at>\t<text>" per line, all open.
 fn parse_calendar(text: &str) -> Vec<Item> {
     text.lines()
         .filter_map(|line| {
@@ -399,7 +351,6 @@ fn serialize(items: &[Item]) -> String {
     items
         .iter()
         .map(|it| {
-            // Tabs and line breaks would break the format.
             let text = it.text.replace(['\t', '\r', '\n'], " ");
             let at = it.at.map(|d| format!(" @{d}")).unwrap_or_default();
             match it.done {
@@ -415,7 +366,6 @@ mod tests {
     use super::*;
 
     const DAY: u32 = 20261025;
-    /// Sun 25/10/2026 14:30
     const NOW: u64 = 202610251430;
 
     fn texts(t: &Todo) -> Vec<&str> {
@@ -496,7 +446,6 @@ mod tests {
         assert_eq!(t.rings(202610251530), vec![(h, Ring::Now)]);
         t.mark(h, Ring::Now);
         assert!(t.rings(202610251600).is_empty(), "each reminder once; plain tasks never ring");
-        // 0 = only on time; done tasks never ring
         let mut t = Todo::default();
         t.remind_before = 0;
         t.add("Họp 15:30", NOW);

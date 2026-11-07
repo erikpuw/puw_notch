@@ -1,5 +1,3 @@
-//! foobar2000 native timeline supplement.
-
 use windows::core::{BOOL, Interface};
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
@@ -15,7 +13,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_LBUTTONDOWN, WM_LBUTTONUP,
 };
 
-/// Timing read from foobar2000's status bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timeline {
     pub duration_ms: u64,
@@ -23,7 +20,6 @@ pub struct Timeline {
     pub can_seek: bool,
 }
 
-// shortcut: Default UI seekbar class, add an adapter if a different skin exposes another control.
 const SEEKBAR_CLASS: &str = "{596C5150-D8FF-4ed4-81AB-99B3DDA08AF1}";
 
 unsafe extern "system" fn collect_seekbars(hwnd: HWND, data: LPARAM) -> BOOL {
@@ -54,7 +50,6 @@ pub fn seek(position_ms: u64, duration_ms: u64) -> bool {
     unsafe {
         let mut rect = RECT::default();
         if GetClientRect(bar, &mut rect).is_err() || rect.bottom <= 0 { return false; }
-        // Default UI reserves half of its 16-DIP thumb at each end of the track.
         let inset = (8 * GetDpiForWindow(bar).max(96) / 96) as i32;
         let Some(x) = seek_x(rect.right, inset, position_ms, duration_ms) else { return false; };
         let point = LPARAM(((rect.bottom / 2) << 16 | x) as isize);
@@ -85,8 +80,6 @@ fn foobar_window() -> Option<HWND> {
 
 fn status_bar_timing(automation: &IUIAutomation, root: &IUIAutomationElement) -> Option<(u64, u64)> {
     unsafe {
-        // AutomationId 666 is foobar2000's status bar; searching only direct root children
-        // avoids walking its playlist and other large UI subtrees.
         let condition = automation.CreateTrueCondition().ok()?;
         let children = root.FindAll(TreeScope_Children, &condition).ok()?;
         let count = children.Length().ok()?.clamp(0, 64);
@@ -114,8 +107,6 @@ fn status_bar_timing(automation: &IUIAutomation, root: &IUIAutomationElement) ->
     None
 }
 
-/// Reads real elapsed and total time from foobar2000's UIA status bar.
-/// The caller must already have initialized COM on this thread.
 pub fn timeline() -> Option<Timeline> {
     unsafe {
         let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;

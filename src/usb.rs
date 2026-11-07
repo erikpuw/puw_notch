@@ -1,7 +1,3 @@
-//! USB devices plugged in and pulled out: Windows tells the window (WM_DEVICECHANGE) when a device
-//! of the USB device interface class arrives or goes; the name comes from the device node, which
-//! Windows keeps after the device is gone, so a removed device can be named too.
-
 use windows::core::{GUID, HSTRING, PCWSTR};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{CM_Get_DevNode_PropertyW, CM_Locate_DevNodeW, CM_LOCATE_DEVNODE_PHANTOM, CR_SUCCESS};
 use windows::Win32::Devices::Properties::{DEVPKEY_Device_BusReportedDeviceDesc, DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_FriendlyName, DEVPROPTYPE};
@@ -10,7 +6,6 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::i18n::tr;
 
-/// The USB device interface class: one interface per physical device.
 const USB_DEVICE: GUID = GUID::from_u128(0xA5DCBF10_6530_11D2_901F_00C04FB951ED);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,7 +14,6 @@ pub enum Change {
     Removed,
 }
 
-/// Ask Windows to send WM_DEVICECHANGE to `hwnd` for USB devices.
 pub fn register(hwnd: HWND) {
     let filter = DEV_BROADCAST_DEVICEINTERFACE_W {
         dbcc_size: size_of::<DEV_BROADCAST_DEVICEINTERFACE_W>() as u32,
@@ -32,8 +26,6 @@ pub fn register(hwnd: HWND) {
     }
 }
 
-/// What a WM_DEVICECHANGE says, when it is a USB device arriving or leaving: the change and the
-/// device interface path.
 pub fn parse_message(wp: WPARAM, lp: LPARAM) -> Option<(Change, String)> {
     let change = match wp.0 as u32 {
         DBT_DEVICEARRIVAL => Change::Arrived,
@@ -52,7 +44,6 @@ pub fn parse_message(wp: WPARAM, lp: LPARAM) -> Option<(Change, String)> {
         if (*p).dbcc_classguid != USB_DEVICE {
             return None;
         }
-        // The name runs on past the struct; its length comes from the message's size.
         let offset = std::mem::offset_of!(DEV_BROADCAST_DEVICEINTERFACE_W, dbcc_name);
         let chars = ((*p).dbcc_size as usize).saturating_sub(offset) / 2;
         let name = std::slice::from_raw_parts((p as *const u8).add(offset) as *const u16, chars);
@@ -60,35 +51,27 @@ pub fn parse_message(wp: WPARAM, lp: LPARAM) -> Option<(Change, String)> {
     }
 }
 
-/// One plug can make Windows say the same thing twice: the same device and change again within
-/// this long is dropped.
 const REPEAT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 pub fn is_repeat(last: Option<&(String, Change, std::time::Instant)>, id: &str, change: Change, now: std::time::Instant) -> bool {
     last.is_some_and(|(last_id, last_change, at)| last_id == id && *last_change == change && now.duration_since(*at) < REPEAT)
 }
 
-/// UTF-16 up to the first NUL.
 fn utf16_text(units: &[u16]) -> String {
     let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
     String::from_utf16_lossy(&units[..end])
 }
 
-/// Device instance id from a device interface path:
-/// `\\?\USB#VID_046D&PID_C52B#5&1a2b3c&0&2#{a5dcbf10-...}` -> `USB\VID_046D&PID_C52B\5&1a2b3c&0&2`.
 pub fn instance_id(path: &str) -> Option<String> {
     let rest = path.strip_prefix(r"\\?\").or_else(|| path.strip_prefix(r"\??\")).unwrap_or(path);
     let (id, _class) = rest.rsplit_once("#{")?;
     (!id.is_empty()).then(|| id.replace('#', "\\"))
 }
 
-/// Root hubs come and go with the controller, not with anything the user plugs in.
 pub fn is_root_hub(path: &str) -> bool {
     path.to_ascii_uppercase().contains("ROOT_HUB")
 }
 
-/// The name Windows has for the device, best first: what the device reports about itself, its
-/// friendly name, its description. Falls back to "USB device".
 pub fn device_name(path: &str) -> String {
     let named = instance_id(path).and_then(|id| {
         [&DEVPKEY_Device_BusReportedDeviceDesc, &DEVPKEY_Device_FriendlyName, &DEVPKEY_Device_DeviceDesc]
@@ -98,7 +81,6 @@ pub fn device_name(path: &str) -> String {
     named.unwrap_or_else(|| tr("Thiết bị USB", "USB device").to_string())
 }
 
-/// A string property of the device node `instance`, if it has one.
 fn node_text(instance: &str, key: &DEVPROPKEY) -> Option<String> {
     unsafe {
         let mut node = 0u32;

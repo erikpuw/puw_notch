@@ -1,9 +1,3 @@
-//! Approval requests from other apps, answered on the notch: a hook of Claude Code
-//! (~/.claude/puw-notch-approve.ps1) connects to the pipe `\\.\pipe\puw-notch-approve`, sends one
-//! line of JSON (`app`, `title`, `detail`) and waits for one line back: `allow`, `deny`, or `ask`
-//! (do nothing, the app asks as usual). The pipe only speaks on this PC. Nothing is ever allowed
-//! without a click, and an unanswered request falls back to `ask` after TIMEOUT.
-
 use std::collections::{HashSet, VecDeque};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,25 +14,19 @@ use windows::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, Disconne
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
-/// Posted when a request waits in the queue.
 pub const WM_APPROVE: u32 = WM_APP + 13;
 
-/// How long a request waits for an answer before the app is told to ask as usual.
 pub const TIMEOUT: Duration = Duration::from_secs(50);
 
-/// How long its banner stays on the notch: it hands the question back to the app when it goes.
 pub const BANNER: Duration = Duration::from_secs(20);
 
-/// Biggest request read (a line of a few hundred bytes).
 const MAX_REQUEST: usize = 8 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Answer {
     Allow,
     Deny,
-    /// The option at this index of a question with choices.
     Choice(usize),
-    /// No answer from here: the app shows its own question.
     Ask,
 }
 
@@ -53,13 +41,11 @@ impl Answer {
     }
 }
 
-/// A request waiting for an answer.
 pub struct Pending {
     pub id: u64,
     pub app: String,
     pub title: String,
     pub detail: String,
-    /// Labels of a question with choices (empty: a plain Allow / Deny request).
     pub options: Vec<String>,
     reply: Sender<Answer>,
 }
@@ -72,25 +58,18 @@ impl Pending {
 
 pub struct Server {
     queue: Arc<Mutex<VecDeque<Pending>>>,
-    /// Requests whose question was answered elsewhere (in the app itself): their banner goes.
     cancelled: Arc<Mutex<HashSet<u64>>>,
-    /// The tray switch: off, every request is handed back to its app at once.
     enabled: Arc<AtomicBool>,
 }
 
-/// Who may open the pipe: SYSTEM, the administrators, and the user who runs the notch. The pipe's default
-/// would only let in the creator's own group, so a notch that starts elevated (the Start with Windows task)
-/// would turn away Claude Code's hook, which runs with the user's normal rights.
 fn pipe_sddl(user_sid: &str) -> String {
     format!("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{user_sid})")
 }
 
-/// The string form of the SID of the user this process runs as (the same user with or without elevation).
 fn user_sid() -> Option<String> {
     unsafe {
         let mut token = HANDLE::default();
         OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
-        // 8-byte aligned room for a TOKEN_USER and the longest SID.
         let mut buf = [0u64; 32];
         let mut len = 0;
         let got = GetTokenInformation(token, TokenUser, Some(buf.as_mut_ptr().cast()), (buf.len() * 8) as u32, &mut len);
@@ -98,13 +77,10 @@ fn user_sid() -> Option<String> {
         got.ok()?;
         let mut text = PWSTR::null();
         ConvertSidToStringSidW((*(buf.as_ptr() as *const TOKEN_USER)).User.Sid, &mut text).ok()?;
-        // ponytail: the string Windows allocated is never freed: made once per run, a few bytes.
         text.to_string().ok()
     }
 }
 
-/// The pipe's security attributes, None when they cannot be made (the default then applies, as before).
-/// The descriptor lives as long as the process: the pipe is made again for every client.
 fn pipe_security() -> Option<SECURITY_ATTRIBUTES> {
     let sddl: Vec<u16> = pipe_sddl(&user_sid()?).encode_utf16().chain([0]).collect();
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
@@ -155,12 +131,10 @@ impl Server {
         self.enabled.store(on, Ordering::Relaxed);
     }
 
-    /// Was this request cancelled (answered in its app)? Asking forgets it.
     pub fn take_cancelled(&self, id: u64) -> bool {
         self.cancelled.lock().is_ok_and(|mut c| c.remove(&id))
     }
 
-    /// The queue, for other sources of requests (see antigravity.rs).
     pub fn queue(&self) -> Arc<Mutex<VecDeque<Pending>>> {
         self.queue.clone()
     }
@@ -170,7 +144,6 @@ impl Server {
     }
 }
 
-/// Put a request in the queue and tell the window; its answer arrives on the receiver.
 pub fn enqueue(queue: &Mutex<VecDeque<Pending>>, target: isize, app: String, title: String, detail: String, options: Vec<String>) -> (u64, Receiver<Answer>) {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -182,7 +155,6 @@ pub fn enqueue(queue: &Mutex<VecDeque<Pending>>, target: isize, app: String, tit
     (id, rx)
 }
 
-/// The app answered this request itself: tell the window, its banner goes.
 pub fn cancel(cancelled: &Mutex<HashSet<u64>>, target: isize, id: u64) {
     if let Ok(mut c) = cancelled.lock() {
         c.insert(id);
@@ -190,7 +162,6 @@ pub fn cancel(cancelled: &Mutex<HashSet<u64>>, target: isize, id: u64) {
     unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_APPROVE, WPARAM(0), LPARAM(0)); }
 }
 
-/// One client: read its request, wait for the answer, reply, hang up.
 fn serve(pipe: HANDLE, queue: &Mutex<VecDeque<Pending>>, target: isize) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
     let answer = read_request(pipe).map_or(Answer::Ask, |(app, title, detail, options)| {
@@ -205,7 +176,6 @@ fn serve(pipe: HANDLE, queue: &Mutex<VecDeque<Pending>>, target: isize) {
     }
 }
 
-/// (app, title, detail, options) from the client's first line.
 fn read_request(pipe: HANDLE) -> Option<(String, String, String, Vec<String>)> {
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 1024];

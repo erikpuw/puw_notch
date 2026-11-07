@@ -1,5 +1,3 @@
-//! The Notifications page: the count and Clear all on the left, the list of the latest Windows notifications.
-
 use super::*;
 
 impl Renderer {
@@ -24,12 +22,10 @@ impl Renderer {
         unsafe {
             let (x0, xr) = (cl + NOTE_X * s, cr);
             let today = (lv.now / 10_000) as u32;
-            // An app's mark: its own icon as it is, or its initial on a colour taken from its name.
             let note_tile = |row: usize, tile: D2D_RECT_F| -> Result<()> {
                 let Some(n) = v.notes.get(row) else { return Ok(()) };
                 match note_icons.get(row).and_then(|i| i.as_ref()) {
                     Some(icon) => {
-                        // The icon itself, as Windows draws it: no tile behind it, no margin around it.
                         rt.DrawBitmap(icon, Some(&tile), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                     }
                     None => {
@@ -40,7 +36,6 @@ impl Renderer {
                 }
                 Ok(())
             };
-            // Left: how many notifications, and Clear all.
             text(&v.notes.len().to_string(), F_FIGURE, rect(cl, 56.0 * s, cl + (NOTE_X - 8.0) * s, 92.0 * s), lead, grey(1.0, a))?;
             text(tr("thông báo", "notifications"), F_LABEL, rect(cl, 92.0 * s, cl + (NOTE_X - 4.0) * s, 110.0 * s), lead, grey(0.9, a))?;
             if let Some(cb) = rect_of(Button::NotesClear) {
@@ -51,15 +46,11 @@ impl Renderer {
                 let area = rect(x0, NOTE_Y * s, xr, (NOTE_Y + NOTE_H * NOTE_ROWS as f32) * s);
                 text(tr("Chưa có thông báo", "No notifications"), F_BODY, area, center, grey(0.55, a))?;
             }
-            // Right: the same for every notification, its tile and two lines (the title and its time, then the app and
-            // the text, cut with "..." when long). Rows glide to their place after a wheel step: drawn
-            // from the fractional position, inside the list's own clip.
             let pos = if current { lv.note_pos } else { 0.0 };
             let first = pos.floor().max(0.0) as usize;
             rt.PushAxisAlignedClip(&rect(x0 - 8.0 * s, NOTE_Y * s, xr + 10.0 * s, (NOTE_Y + NOTE_H * NOTE_ROWS as f32 + 2.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);
             for (row, n) in v.notes.iter().enumerate().skip(first).take(NOTE_ROWS + 1) {
                 let y = (NOTE_Y + (row as f32 - pos) * NOTE_H) * s;
-                // The row under the mouse lights up: clicking it opens the notification.
                 if hovered == Some(Button::NoteOpen(row)) {
                     rt.FillRoundedRectangle(&rounded(rect(x0 - 6.0 * s, y - 1.0 * s, xr + 2.0 * s, y + (NOTE_H - 3.0) * s), 8.0 * s), &self.brush(grey(0.08, a))?);
                 }
@@ -70,7 +61,6 @@ impl Renderer {
                 let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
                     else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }
                     else { format!("{:02}/{:02}", day % 100, day / 100 % 100) };
-                // The app's tile, so it is plain whose message it is, then the two lines.
                 note_tile(row, rect(x0, y + 8.5 * s, x0 + 16.0 * s, y + 24.5 * s))?;
                 let tx = x0 + 24.0 * s;
                 text(&when, F_LABEL, rect(xr - 64.0 * s, y, xr, y + 18.0 * s), trail, grey(0.55, a))?;

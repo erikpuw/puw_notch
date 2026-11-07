@@ -1,9 +1,3 @@
-//! Now playing (any app that reports to Windows media controls: Spotify, browsers, ...)
-//! plus synced lyrics from LRCLIB. WinRT calls block, so a worker thread reads the player and the UI
-//! reads a shared snapshot after a WM_MUSIC nudge. Windows says when the session, the track, play or
-//! pause or the timeline change (`Watch`), which wakes the worker; it only looks by itself now and then
-//! (`next_poll`), often when iTunes (no such events) is open.
-
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,22 +14,16 @@ use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_MEDIA_PLAY_PAUSE};
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow, PostMessageW, WM_APP};
 
-/// Posted when the snapshot changed (new track, play/pause, lyrics arrived).
 pub const WM_MUSIC: u32 = WM_APP + 5;
-/// How often the worker looks without being woken: iTunes (read through COM, says nothing) open,
-/// a track playing (position and state corrections), nothing playing (events do the rest).
 const POLL: Duration = Duration::from_millis(500);
 const POLL_PLAYING: Duration = Duration::from_secs(2);
-const POLL_IDLE: Duration = Duration::from_secs(10);/// A paused player keeps the music pill this long, then the notch goes back to the clock.
+const POLL_IDLE: Duration = Duration::from_secs(10);
 const PAUSE_KEEP: Duration = Duration::from_secs(10);
 
-/// Music layout in the resting pill: while playing, or for `PAUSE_KEEP` after a pause so a quick
-/// resume is still one hover away. `paused_for` = None when nothing is paused.
 pub fn shows_pill(playing: bool, paused_for: Option<Duration>) -> bool {
     playing || paused_for.is_some_and(|d| d < PAUSE_KEEP)
 }
 
-/// What the player repeats: nothing, the whole list, or the one track.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum Repeat {
     #[default]
@@ -45,7 +33,6 @@ pub enum Repeat {
 }
 
 impl Repeat {
-    /// What a click asks for next: off, all, one, off.
     pub fn next(self) -> Repeat {
         match self {
             Repeat::Off => Repeat::All,
@@ -83,24 +70,19 @@ pub struct Track {
     pub(crate) rate: f64,
     pub(crate) reported_position: i64,
     pub(crate) updated_ticks: i64,
-    /// Resolution of a rounded native position; zero for a precise timeline.
     pub(crate) position_precision_ms: u64,
     pub can_toggle: bool,
     pub can_next: bool,
     pub can_previous: bool,
     pub can_seek: bool,
-    /// The player says it can shuffle / repeat, and what it does now.
     pub can_shuffle: bool,
     pub can_repeat: bool,
     pub shuffle: bool,
     pub repeat: Repeat,
     pub command_error: Option<&'static str>,
-    /// When `position_ms` was read; the UI extrapolates from here while playing.
     pub(crate) at: Option<Instant>,
-    /// Encoded cover image (PNG/JPEG), decoded by the renderer; `art_key` changes with the track.
     pub art: Option<Arc<Vec<u8>>>,
     pub art_key: u64,
-    /// Synced lyric lines (ms, text), sorted. Empty = none found (yet).
     pub lyrics: Arc<Vec<(u64, String)>>,
     pub(crate) art_ready: bool,
     pub(crate) assets_ready: bool,
@@ -110,7 +92,6 @@ impl Track {
     pub(crate) fn same_media(&self, other: &Track) -> bool {
         self.source_id == other.source_id && self.title == other.title && self.artist == other.artist
     }
-    /// 0 when the player reports no timeline (e.g. foobar2000): nothing to extrapolate from.
     pub fn position_ms(&self) -> u64 {
         self.position_after(self.at.map_or(Duration::ZERO, |at| at.elapsed()))
     }
@@ -130,7 +111,6 @@ impl Track {
     fn inherit_cached(&mut self, previous: &Track, reset_position: bool) {
         if !reset_position && self.updated_ticks <= 0 && previous.updated_ticks <= 0 {
             let predicted = previous.position_ms();
-            // Whole-second UIA reports must not jump across a shorter lyrics transition.
             let rounded = self.playing && previous.playing && self.position_precision_ms > 0
                 && self.position_precision_ms == previous.position_precision_ms
                 && self.position_ms.abs_diff(predicted) < self.position_precision_ms;
@@ -155,18 +135,13 @@ pub enum Cmd {
     Next,
     Previous,
     Seek(u64),
-    /// Shuffle on (true) or off.
     Shuffle(bool),
     Repeat(Repeat),
 }
 
-/// What wakes the worker.
 pub enum Msg {
-    /// A button of the notch for the track shown.
     Command(Cmd, Track),
-    /// The Music page or the pill appeared or went: read in full and fetch what is missing.
     Resync,
-    /// Windows says the player changed something: look now.
     Wake,
 }
 
@@ -228,16 +203,12 @@ fn playback_snapshot(source_id: String, playing: bool, previous: Option<&Track>)
     t
 }
 
-/// Did the player take the command (an operation of the media session, waited for)?
 macro_rules! done {
     ($op:expr) => {
         $op.and_then(|o| o.get()) == Ok(true)
     };
 }
 
-/// Play / pause that does not give up after the first "no": a session left over from before the
-/// headphones went away may refuse the toggle yet take play or pause, and when none of them does,
-/// the media key goes to whatever Windows treats as the current player.
 fn play_pause(s: &GlobalSystemMediaTransportControlsSession) -> bool {
     let info = s.GetPlaybackInfo().ok();
     let toggle = info.as_ref().and_then(|i| i.Controls().ok()).is_some_and(|c| c.IsPlayPauseToggleEnabled().unwrap_or(false));
@@ -277,7 +248,6 @@ fn session_command(s: &GlobalSystemMediaTransportControlsSession, cmd: &Cmd, tra
     }
 }
 
-/// Handlers on the current media session: any change of its state, track or timeline wakes the worker.
 struct Watch {
     session: GlobalSystemMediaTransportControlsSession,
     tokens: [i64; 3],
@@ -313,7 +283,6 @@ impl Drop for Watch {
     }
 }
 
-/// Wake the worker when the sessions or the current one change (a player opens, closes, takes over).
 fn watch_manager(manager: &GlobalSystemMediaTransportControlsSessionManager, wake: &Sender<Msg>) {
     let tx = wake.clone();
     let _ = manager.SessionsChanged(&TypedEventHandler::<GlobalSystemMediaTransportControlsSessionManager, SessionsChangedEventArgs>::new(move |_, _| {
@@ -358,8 +327,6 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Msg>, wake: Sender<Msg
                 (None, true)
             }
             Ok(Msg::Wake) => {
-                // A player (puw-player) sets the title first and the cover in a second update a moment
-                // later: that update finds the cover missing and reads it again.
                 let missing = shared.lock().ok().is_some_and(|mut g| g.as_mut().filter(|t| t.art.is_none()).map(|t| t.art_ready = false).is_some());
                 if missing {
                     requested = None;
@@ -369,12 +336,10 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Msg>, wake: Sender<Msg
             Err(RecvTimeoutError::Timeout) => (None, false),
             Err(RecvTimeoutError::Disconnected) => return,
         };
-        // The handlers follow the current session.
         let current = manager.as_ref().and_then(|m| m.GetCurrentSession().ok());
         if watching.as_ref().map(|w| &w.session) != current.as_ref() {
             watching = current.and_then(|s| Watch::new(s, &wake));
         }
-        // The Music page switched off: no player is read, commands are dropped.
         if !crate::render::page_shown(crate::render::Page::Music) {
             if shared.lock().map(|mut g| g.take().is_some()).unwrap_or(false) {
                 notify();
@@ -388,7 +353,6 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Msg>, wake: Sender<Msg
             Some(_) if native_target => None,
             Some((_, track)) => manager.as_ref().and_then(|m| m.GetSessions().ok()).and_then(|sessions|
                 sessions.into_iter().find(|s| s.SourceAppUserModelId().is_ok_and(|id| id == track.source_id.as_str())))
-                // The player's session is gone (its audio device went away): the current one is the best guess.
                 .or_else(|| manager.as_ref().and_then(|m| m.GetCurrentSession().ok())),
             None => manager.as_ref().and_then(|m| m.GetCurrentSession().ok()),
         };
@@ -430,8 +394,6 @@ fn worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<Msg>, wake: Sender<Msg
             }
             continue;
         };
-        // Duration stays out: some players report it only on some polls, and a flapping key
-        // would drop the lyrics and fetch them again every time.
         let new_key = format!("{}\u{1}{}\u{1}{}", t.source_id, t.title, t.artist);
         let changed_track = new_key != key;
         let prev = shared.lock().ok().and_then(|g| g.clone());
@@ -467,24 +429,20 @@ fn asset_job_current(shared: &Mutex<Option<Track>>, page_open: &AtomicBool, pill
         && needs_assets(c, page_open.load(Ordering::Relaxed), pill_visible.load(Ordering::Relaxed))))
 }
 
-/// How many times, and how far apart, a thumbnail that is still the previous track's is read again before it is taken as the cover.
 const ART_RETRIES: u32 = 8;
 const ART_RETRY_WAIT: Duration = Duration::from_millis(250);
 
-/// A new track's picture that equals the previous track's: the player changed the title first and its thumbnail has not caught up yet.
 fn art_is_stale(previous: Option<&Arc<Vec<u8>>>, fresh: Option<&Arc<Vec<u8>>>) -> bool {
     matches!((previous, fresh), (Some(p), Some(f)) if **p == **f)
 }
 
 fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<GlobalSystemMediaTransportControlsSession>)>, target: isize, page_open: Arc<AtomicBool>, pill_visible: Arc<AtomicBool>) {
     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
-    // The last picture published and the track it was for.
     let mut last: Option<(u64, Arc<Vec<u8>>)> = None;
     while let Ok(mut job) = rx.recv() {
         for newer in rx.try_iter() { job = newer; }
         let (t, session) = job;
         if !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
-        // Shows `art` on the track this job is for; `ready` is false while a stale thumbnail is shown and will be read again.
         let publish = |art: Option<Arc<Vec<u8>>>, ready: bool| {
             if let Ok(mut g) = shared.lock() {
                 if let Some(cur) = g.as_mut().filter(|c| c.art_key == t.art_key) {
@@ -498,12 +456,8 @@ fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<G
         let mut art = t.art.clone();
         if art.is_none() && !t.art_ready {
             match &session {
-                // A player often sets the title first and its thumbnail a moment later: until the picture differs from the
-                // previous track's it is shown but not trusted, and read again (an album's tracks share a cover, so after
-                // ART_RETRIES the same picture is taken).
                 Some(s) => for attempt in 0..ART_RETRIES {
                     let fresh = s.TryGetMediaPropertiesAsync().and_then(|o| o.get()).and_then(|p| p.Thumbnail()).ok().and_then(|r| read_stream(&r)).map(Arc::new);
-                    // One allocation for the picture already shown, so the renderer sees no change.
                     let fresh = match (fresh, &previous) { (Some(f), Some(p)) if *f == **p => Some(p.clone()), (f, _) => f };
                     let stale = art_is_stale(previous.as_ref(), fresh.as_ref());
                     let done = !stale || attempt + 1 == ART_RETRIES;
@@ -522,8 +476,6 @@ fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<G
         }
         if let Some(a) = &art { last = Some((t.art_key, a.clone())); }
         if !page_open.load(Ordering::Relaxed) || !asset_job_current(&shared, &page_open, &pill_visible, t.art_key) { continue; }
-        // The lyrics come over the network and can take seconds: on their own thread, so the next
-        // track's cover does not wait for them. One fetch per track at a time.
         if LYRICS_FOR.swap(t.art_key, Ordering::Relaxed) == t.art_key { continue; }
         let (shared, page_open, pill_visible) = (shared.clone(), page_open.clone(), pill_visible.clone());
         crate::system::spawn("lyrics", move || {
@@ -542,7 +494,6 @@ fn asset_worker(shared: Arc<Mutex<Option<Track>>>, rx: Receiver<(Track, Option<G
     }
 }
 
-/// The track (`art_key`) whose lyrics are being fetched.
 static LYRICS_FOR: AtomicU64 = AtomicU64::new(u64::MAX);
 
 fn prefer_itunes(standard: Option<&Track>, native: Option<&Track>, foreground: bool) -> bool {
@@ -612,7 +563,6 @@ fn timeline_position(start: i64, end: i64, position: i64, updated: i64, now: i64
     let duration = end.saturating_sub(start).max(0);
     let mut position = position.saturating_sub(start).max(0) as u64 / 10_000;
     let age = now.saturating_sub(updated);
-    // Empty, future or implausibly old timestamps must not send the bar straight to the end.
     if playing && updated > 0 && now >= updated && age <= duration {
         position = position.saturating_add((age as f64 / 10_000.0 * rate) as u64);
     }
@@ -638,8 +588,6 @@ fn read_stream(r: &IRandomAccessStreamReference) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// LRCLIB, most precise first: exact (title + artist + duration), field search, then free text.
-/// Names are cleaned first: video titles carry "| Official MV", channel names "Official" etc.
 fn fetch_lyrics(title: &str, artist: &str, duration_s: u64, page_open: &AtomicBool) -> Vec<(u64, String)> {
     let base = "https://lrclib.net/api";
     let (title, artist) = clean_names(title, artist);
@@ -678,12 +626,9 @@ fn fetch_lyrics(title: &str, artist: &str, duration_s: u64, page_open: &AtomicBo
     Vec::new()
 }
 
-/// Clean player names for a lyrics lookup.
-/// "SƠN TÙNG M-TP | LẠC TRÔI | OFFICIAL MUSIC VIDEO" by "Sơn Tùng M-TP Official" -> ("LẠC TRÔI", "Sơn Tùng M-TP").
 pub fn clean_names(title: &str, artist: &str) -> (String, String) {
     let lower_has = |s: &str, words: &[&str]| { let l = s.to_lowercase(); words.iter().any(|w| l.contains(w)) };
     const NOISE: [&str; 14] = ["official", "music video", " mv", "mv ", "lyric", "audio", "video", "visualizer", "karaoke", "live", "remaster", "4k", "hd", "m/v"];
-    // Drop bracketed parts: (Official MV), [Lyrics], 【...】
     let mut t = String::new();
     let mut depth = 0;
     for c in title.chars() {
@@ -700,28 +645,23 @@ pub fn clean_names(title: &str, artist: &str) -> (String, String) {
             artist = stripped.trim().to_string();
         }
     }
-    // "A | B | Official MV": keep the parts that are not noise; the part equal to the artist goes.
     let parts: Vec<String> = t.split(['|', '｜', '•']).map(|p| p.trim().to_string()).filter(|p| !p.is_empty() && !lower_has(p, &NOISE)).collect();
     let t = match parts.as_slice() {
         [] => t.trim().to_string(),
         [one] => one.clone(),
-        // A part that merely mentions the artist ("PHƯƠNG MỸ CHI x DTAP") is not the song either.
         many => {
             let artist_l = artist.to_lowercase();
             let names_artist = |p: &&String| !artist_l.is_empty() && p.to_lowercase().contains(&artist_l);
             many.iter().find(|p| !names_artist(p)).or_else(|| many.iter().find(|p| p.to_lowercase() != artist_l)).unwrap_or(&many[0]).clone()
         }
     };
-    // Quotes around the song name: 'THIÊN ANH HÙNG CA'.
     let mut t = t.trim_matches(|c: char| matches!(c, '\'' | '"' | '‘' | '’' | '“' | '”')).to_string();
-    // "Artist - Title": take the artist from the title when the channel is not a person's name.
     if let Some((a, rest)) = t.split_once(" - ") {
         if artist.is_empty() || a.to_lowercase().contains(&artist.to_lowercase()) || artist.to_lowercase().contains(&a.to_lowercase()) {
             artist = a.trim().to_string();
         }
         t = rest.trim().to_string();
     }
-    // Featured artists confuse the lookup.
     for sep in [" ft.", " ft ", " feat.", " feat ", " x "] {
         if let Some(i) = t.to_lowercase().find(sep) {
             t.truncate(i);
@@ -730,9 +670,6 @@ pub fn clean_names(title: &str, artist: &str) -> (String, String) {
     (t.trim().to_string(), artist)
 }
 
-/// A version of the song is wrong when its length is far from the playing one (extended mixes, loops):
-/// its time stamps would run ahead or behind. Pick the closest length; none within this many seconds
-/// means no lyrics. Unknown playing length: the first.
 const LENGTH_TOLERANCE_S: f64 = 20.0;
 
 fn closest_length(mut found: Vec<(Vec<(u64, String)>, f64)>, duration_s: u64) -> Option<Vec<(u64, String)>> {
@@ -764,7 +701,6 @@ pub fn http_get(url: &str) -> Option<String> {
     Some(resp.Content().ok()?.ReadAsStringAsync().ok()?.get().ok()?.to_string())
 }
 
-/// Percent-encode for a query value (UTF-8, unreserved chars kept).
 pub fn url_encode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -774,7 +710,6 @@ pub fn url_encode(s: &str) -> String {
         .collect()
 }
 
-/// "[01:02.50]text" lines -> sorted (ms, text). Lines with several stamps repeat; metadata tags are skipped.
 pub fn parse_lrc(lrc: &str) -> Vec<(u64, String)> {
     let mut out = Vec::new();
     for line in lrc.lines() {
@@ -803,7 +738,6 @@ fn parse_stamp(tag: &str) -> Option<u64> {
     Some(m * 60_000 + (secs * 1000.0).round() as u64)
 }
 
-/// Current line with the same 80 ms lead as the expanded lyrics, hiding empty spacer lines.
 pub fn current_line(lines: &[(u64, String)], pos_ms: u64) -> Option<&str> {
     let (_, text) = lines.get(crate::lyrics::current_index(lines, pos_ms)?)?;
     (!text.is_empty()).then_some(text.as_str())
@@ -1141,7 +1075,6 @@ mod tests {
         assert_eq!(current_line(&l, 60000), Some("Điệp khúc"));
     }
 
-    /// Machine state: `cargo test list_sessions -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn list_sessions() {
@@ -1169,7 +1102,6 @@ mod tests {
         }
     }
 
-    /// Network: `cargo test lrclib_live -- --ignored`
     #[test]
     #[ignore]
     fn lrclib_live() {
@@ -1196,11 +1128,9 @@ mod tests {
         assert_eq!(clean_names("Shape of You [Official Video]", "Ed Sheeran"), ("Shape of You".into(), "Ed Sheeran".into()));
         assert_eq!(clean_names("Blinding Lights", "The Weeknd - Topic"), ("Blinding Lights".into(), "The Weeknd".into()));
         assert_eq!(clean_names("Lạc Trôi", "Sơn Tùng M-TP"), ("Lạc Trôi".into(), "Sơn Tùng M-TP".into()));
-        // The part that only mentions the artist and a collaborator is not the song; quotes go.
         assert_eq!(clean_names("PHƯƠNG MỸ CHI x DTAP | 'THIÊN ANH HÙNG CA' | Official MV", "Phương Mỹ Chi"), ("THIÊN ANH HÙNG CA".into(), "Phương Mỹ Chi".into()));
     }
 
-    /// Network: `cargo test lrclib_video_title -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn lrclib_video_title() {

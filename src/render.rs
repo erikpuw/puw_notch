@@ -1,8 +1,3 @@
-//! Direct2D drawing on the GPU into a DXGI swap chain shown through DirectComposition: frames never
-//! come back to the CPU (UpdateLayeredWindow needed a GPU-to-CPU read-back per frame, which stalled
-//! the UI thread while the GPU was busy, e.g. decoding a video). The window region is the drawn
-//! shape's bounds, so the mouse goes through everywhere else.
-
 use windows::core::{w, Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY};
 use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, GENERIC_READ, HMODULE, HWND, SIZE};
@@ -65,76 +60,48 @@ use crate::robot::{curious_eyes, Eyes, Face, EYE_H};
 use crate::todo::{self, Item};
 use crate::weather;
 
-/// Everything the painter needs for one frame (logical px).
 pub struct View<'a> {
     pub mode: Mode,
     pub size: [f32; 3],
     pub time: &'a str,
-    /// Short date for the panel header ("CN, 25/10").
     pub date: &'a str,
-    /// None on a desktop PC: no battery icon, no label.
     pub battery: Option<Battery>,
-    /// Banner content while in Alert (a notification or a status change).
     pub banner: Option<&'a Toast>,
-    /// Now playing (also paused), for the panel's Music page.
     pub music: Option<&'a Track>,
-    /// Resting pill uses the music layout (cover, bars); see `music::shows_pill`.
     pub live: bool,
-    /// Idle robot eyes in the resting pill (they replace clock and battery while shown).
     pub robot: Option<Eyes>,
-    /// Seconds, drives the equaliser bars.
     pub phase: f32,
-    /// Seconds since the current banner appeared (drives its icon's motion).
     pub banner_age: f32,
-    /// The lyrics are open beside the player (Music page, open panel): the panel is wider.
     pub lyrics: bool,
     pub hovered: Option<Button>,
     pub page: Page,
-    /// Page switch in progress: (page sliding out, progress 0..1, direction +1 next / -1 previous).
     pub leaving: Option<(Page, f32, i32)>,
-    /// Box, scroll and counts of the list page on screen (tasks or notifications).
     pub list: ListView<'a>,
     pub todos: &'a [Item],
-    /// Notifications page, newest first.
     pub notes: &'a [Note],
     pub health: HealthView<'a>,
-    /// The Pomodoro timer: its page and the line along the pill's bottom.
     pub focus: &'a Focus,
-    /// The weather's city and current conditions (shown on the pill and the Weather page).
     pub weather: &'a weather::State,
-    /// Seconds since the open panel or its page appeared: the Weather page's icon moves for a moment.
     pub page_age: f32,
-    /// °C or °F, for every temperature shown.
     pub unit: weather::Unit,
-    /// The Weather page shows the sun's path in place of the hours ahead.
     pub sun_view: bool,
-    /// The Calendar page: the month, the day picked, today and the lunar choice.
     pub cal: crate::calendar::CalView,
 }
 
-/// Pages of the open panel, switched with the side arrows.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
     Music,
-    /// Tasks and appointments in one list.
     Todo,
-    /// Pomodoro: the timer of focus and break segments.
     Focus,
-    /// Windows notifications, to read back.
     Notify,
     Health,
-    /// The city (typed here) and its current weather.
     Weather,
-    /// The month, weeks from Monday.
     Calendar,
-    /// Plan limits of the AI apps open on this PC.
     Usage,
 }
 
 pub const PAGES: [Page; 8] = [Page::Music, Page::Todo, Page::Focus, Page::Notify, Page::Health, Page::Weather, Page::Calendar, Page::Usage];
 
-/// Which pages (a bit each, see `Page::bit`) the user keeps: the arrows and dots only go through those.
-/// Never empty.
 static PAGES_ON: AtomicU8 = AtomicU8::new(ALL_PAGES);
 const ALL_PAGES: u8 = ((1u16 << PAGES.len()) - 1) as u8;
 
@@ -152,8 +119,6 @@ pub fn page_shown(page: Page) -> bool {
 }
 
 impl Page {
-    /// The page's bit in the saved mask. Fixed per page (not its place in `PAGES`), so a page added in the
-    /// middle of the order does not move the choices already saved.
     pub fn bit(self) -> u8 {
         1 << match self {
             Page::Music => 0,
@@ -167,7 +132,6 @@ impl Page {
         }
     }
 
-    /// The name in the panel's header (and in the tray's list of pages).
     pub fn name(self) -> &'static str {
         match self {
             Page::Music => tr("Nhạc", "Music"),
@@ -182,33 +146,22 @@ impl Page {
     }
 }
 
-/// The add / edit box and the visible rows of a list page.
 pub struct ListView<'a> {
-    /// Counts shown above the task rows: (open for today, open on later days).
     pub counts: (usize, usize),
-    /// Early reminder, minutes (the tasks' settings row).
     pub remind_before: u32,
-    /// Local time yyyymmddHHMM, for the time labels.
     pub now: u64,
-    /// Text being typed (kept when the box loses focus).
     pub draft: &'a str,
     pub editing: bool,
-    /// Row being edited in the box (None = the box adds a new one).
     pub edit_item: Option<usize>,
-    /// Caret blink phase.
     pub caret: bool,
-    /// First visible row.
     pub scroll: usize,
-    /// Notifications list position in rows while it glides to `scroll` (a wheel step eases).
     pub note_pos: f32,
 }
 
 pub struct HealthView<'a> {
     pub h: &'a Health,
-    /// Total minutes (todo::minutes) and minute of the day, now.
     pub now: i64,
     pub minute_of_day: u32,
-    /// Card whose settings are open.
     pub settings: Option<Card>,
 }
 
@@ -216,67 +169,45 @@ pub struct HealthView<'a> {
 pub enum Card {
     Water,
     Sit,
-    /// The task list's settings (early reminder).
     Tasks,
 }
 
-/// Clickable things of the open panel.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Button {
     Previous,
     PlayPause,
     Next,
-    /// Shuffle on / off, and repeat off, all, one (the next mode on each click).
     Shuffle,
     Repeat,
     Seek,
-    /// Show / hide the lyrics beside the player.
     Lyrics,
-    /// Show / hide the 24-hour forecast beside the weather.
     PagePrev,
     PageNext,
-    /// The page dots: open the row of page icons under them.
     Dots,
-    /// An icon of that row: go to the page.
     GoPage(Page),
     ListInput,
-    /// Tick / untick task at this index (the whole row, text included). To-do only.
     ListToggle(usize),
     ListEdit(usize),
     ListDelete(usize),
-    /// Open the notification at this index (its app, link or picture).
     NoteOpen(usize),
-    /// Show the temperature in this unit (Weather page).
     Unit(weather::Unit),
-    /// Show this app (index into `usage::APPS`) on the Limits page.
     UsageTab(usize),
-    /// Switch the weather off (the x beside the city).
     CityOff,
-    /// The x at the end of the add / city box, wiping what is typed.
     ListClear,
-    /// "Clear all" under the Notifications list: hides what has arrived so far.
     NotesClear,
     Gear(Card),
     Drink,
-    /// Water reminder later (10 min).
     Snooze,
     Stood,
-    /// −1 / +1 on a setting.
     Step(Setting, i32),
-    /// −1 / +1 on the tasks' early reminder.
     RemindStep(i32),
     Toggle(Setting),
-    /// The Focus page: start / pause, back to the segment's start, on to the next segment, a chip (go to the
-    /// next segment of that kind), a segment of the strip.
     FocusPlay,
     FocusReset,
     FocusSkip,
     FocusMode(focus::Kind),
     FocusSeg(usize),
-    /// The Weather page: the sun's path in place of the hours ahead, and back.
     SunToggle,
-    /// The Calendar page: the month before / after, a cell of the grid (0 = the first Monday column of the first
-    /// row), and Solar (false) | Lunar (true).
     CalPrev,
     CalNext,
     CalCell(usize),
@@ -311,21 +242,16 @@ impl Button {
 }
 
 const PAD: f32 = 24.0;
-/// Music page: cover on the left, a column of text, bar and controls on its right.
 const COVER: f32 = 120.0;
 const COVER_TOP: f32 = 40.0;
 const COVER_GAP: f32 = 16.0;
 const PLAY_BTN: f32 = 36.0;
 const SKIP_BTN: f32 = 28.0;
 const LYRICS_BTN: f32 = 28.0;
-/// Distance between the centres of neighbouring player buttons: shuffle, previous, play, next, repeat.
 const SKIP_GAP: f32 = 40.0;
 const CONTROLS_Y: f32 = 148.0;
 const BAR_Y: f32 = 108.0;
-/// Page content sits between the side arrows (logical px from the panel edge).
 const SIDE: f32 = 44.0;
-/// The Focus page (logical px from the panel's top-left): the chips under the big time, the strip of the cycle's segments
-/// and the line of text under it.
 const FOCUS_CHIP_Y: f32 = 92.0;
 const FOCUS_CHIP_H: f32 = 22.0;
 const FOCUS_STRIP_Y: f32 = 128.0;
@@ -334,7 +260,6 @@ const FOCUS_SEG_GAP: f32 = 3.0;
 const FOCUS_PLAY: f32 = 44.0;
 const FOCUS_SMALL: f32 = 28.0;
 
-/// The width of a chip: its label plus room each side.
 fn focus_chip_w(label: &str) -> f32 {
     22.0 + 6.6 * label.chars().count() as f32
 }
@@ -347,7 +272,6 @@ fn focus_chip_label(kind: focus::Kind) -> &'static str {
     }
 }
 
-/// The cycle's segments across `width` (logical px): each as long as its minutes, `FOCUS_SEG_GAP` apart.
 fn focus_segments(width: f32) -> Vec<(f32, f32)> {
     let total: f32 = focus::CYCLE.iter().map(|k| k.minutes() as f32).sum();
     let room = width - FOCUS_SEG_GAP * (focus::CYCLE.len() - 1) as f32;
@@ -360,9 +284,7 @@ fn focus_segments(width: f32) -> Vec<(f32, f32)> {
     }).collect()
 }
 const ARROW: f32 = 24.0;
-/// Pages are clipped this far in from the panel's sides (just inside the arrows).
 const PAGE_CLIP: f32 = 34.0;
-/// The arrows sit level with the panel's middle and the dots near its bottom, whatever its height.
 fn arrow_y(h: f32) -> f32 {
     h / 2.0 - 13.0
 }
@@ -371,65 +293,43 @@ fn dots_y(h: f32) -> f32 {
     h - 12.0
 }
 
-/// What the open panel measures (logical px) while `page` shows. One place decides it; the notch
-/// glides to it, and the layout and hit areas of the page read the same height.
 pub fn panel_size(page: Page) -> [f32; 2] {
     let [w, h, _] = target(Mode::Expanded, false);
     match page {
-        // Every page shares one standard size, 480 x 186; a page that needs more asks for it here.
         _ => [w, h],
     }
 }
-/// Task list page.
 const INPUT_Y: f32 = 36.0;
 const INPUT_H: f32 = 24.0;
-/// The left column of the page (the ring of the day's progress and what it counts), then the
-/// right column (the add box and the list) from `LIST_X` on, as far as the content reaches.
 const HERO_W: f32 = 92.0;
 const LIST_X: f32 = HERO_W + 6.0;
 const ROW_Y: f32 = 66.0;
-/// A note is a plain row with a hairline under it, and its tick, edit and delete buttons: 26 px high,
-/// four of them from `ROW_Y` down to just above the page dots.
 const ROW_H: f32 = 26.0;
 pub const LIST_ROWS: usize = 4;
-/// Weather page, logical px from the content's left / the panel's top. City line: the name, then at
-/// its right end the unit chips, 24h and x. Left block: the big icon with the temperature beside it, the
-/// sky's words and the feels-like under that. Right block (from `STRIP_X` to the content's right): the
-/// next hours as columns. Under both, across the whole width, a hairline and one line of figures.
 const CITY_Y: f32 = 62.0;
 const ICON_Y: f32 = 90.0;
 const WX_ICON: f32 = 56.0;
 const TEMP_X: f32 = 64.0;
 const STRIP_X: f32 = 160.0;
-/// The hours' columns: the top of the time, and the line of figures under the hairline.
 const STRIP_Y: f32 = 88.0;
 const FIGURES_Y: f32 = 152.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 18.0;
-/// The Weather page's sun chip (beside the unit capsule) and the gap between them.
 const SUN_W: f32 = 28.0;
 const SUN_GAP: f32 = 6.0;
 
-/// Notifications page: a narrow column on the left with the count and "Clear all"; on the right, from
-/// `NOTE_X` to the content's end, a row for each notification: its app's tile, then two lines.
 const NOTE_X: f32 = 72.0;
 const NOTE_Y: f32 = 36.0;
 const NOTE_H: f32 = 33.0;
 pub const NOTE_ROWS: usize = 4;
-/// "Clear all" under the count, in the left column (the click area).
 const CLEAR_W: f32 = 64.0;
 const CLEAR_H: f32 = 18.0;
 const CLEAR_Y: f32 = 118.0;
-/// Health page cards.
 const CARD_TOP: f32 = 34.0;
-/// The cards share the content's width; they end 28 px above the panel's bottom.
 const CARD_GAP: f32 = 8.0;
 fn card_bottom(panel_h: f32) -> f32 {
     panel_h - 28.0
 }
-/// The row of page icons is open where the page dots are (the panel is `NAV_EXTRA` taller meanwhile): its cells
-/// start at the dots' top, 7 px under the controls, and 5 px of panel is left under them (the glyph is smaller
-/// than its cell, so the clear space under it reads as about 8).
 static NAV_OPEN: AtomicBool = AtomicBool::new(false);
 pub const NAV_EXTRA: f32 = 15.0;
 
@@ -441,7 +341,6 @@ pub fn nav_open() -> bool {
     NAV_OPEN.load(Ordering::Relaxed)
 }
 
-/// The icon of a page in the row.
 fn nav_icon(page: Page) -> &'static str {
     match page {
         Page::Music => "\u{E8D6}",
@@ -449,16 +348,12 @@ fn nav_icon(page: Page) -> &'static str {
         Page::Focus => "\u{E916}",
         Page::Notify => ICON_BELL,
         Page::Health => "\u{E95E}",
-        // The Weather page draws its own line sun (see `draw`); this is only a stand-in.
         Page::Weather => "\u{E706}",
         Page::Usage => "\u{E9D9}",
         Page::Calendar => "\u{E787}",
     }
 }
 
-/// The row of page icons: its cells are at most this far apart (logical px) with `NAV_GAP` between neighbours. The row is
-/// at most `NAV_ROW_W` wide (the panel's 480 less its 44 px margins), so with many pages the cells close up instead of
-/// running into the arrows or the credit at the corner.
 const NAV_PITCH: f32 = 34.0;
 const NAV_GAP: f32 = 4.0;
 const NAV_ROW_W: f32 = 392.0;
@@ -467,8 +362,6 @@ fn nav_pitch(pages: usize) -> f32 {
     NAV_PITCH.min(NAV_ROW_W / pages.max(1) as f32)
 }
 
-/// The cells of the row (window px) for a panel `cx` is the middle of: `nav_pitch` apart, centred, just
-/// below the panel's resting height `ph`.
 fn nav_cells(cx: f32, scale: f32, ph: f32) -> Vec<(Page, D2D_RECT_F)> {
     let shown: Vec<Page> = PAGES.into_iter().filter(|p| page_shown(*p)).collect();
     let (n, pitch) = (shown.len() as f32, nav_pitch(shown.len()));
@@ -479,8 +372,6 @@ fn nav_cells(cx: f32, scale: f32, ph: f32) -> Vec<(Page, D2D_RECT_F)> {
     }).collect()
 }
 
-/// Is the mouse (window px) over the row of page icons, or just above it? The row shows while it is, and
-/// the page dots come back once it leaves.
 pub fn in_nav_zone(cx: f32, scale: f32, ph: f32, x: f32, y: f32) -> bool {
     let cells = nav_cells(cx, scale, ph);
     let (Some((_, first)), Some((_, last))) = (cells.first(), cells.last()) else { return false };
@@ -488,34 +379,25 @@ pub fn in_nav_zone(cx: f32, scale: f32, ph: f32, x: f32, y: f32) -> bool {
         && y >= (dots_y(ph) - 4.0) * scale && y <= (ph + NAV_EXTRA + 10.0) * scale
 }
 
-/// Which apps (bit per `usage::APPS` index) have a tab on the Limits page: those found on this PC.
 static USAGE_APPS: AtomicU8 = AtomicU8::new(0b111);
 
 pub fn set_usage_apps(mask: u8) {
     USAGE_APPS.store(mask, Ordering::Relaxed);
 }
 
-/// The Limits page's app tabs: one segmented control.
-/// A Limits tab is a chip this wide.
 const USAGE_CHIP_W: f32 = 110.0;
 const USAGE_TAB_H: f32 = 22.0;
 const SET_ROW: f32 = 18.0;
 const SET_Y: f32 = 62.0;
 
-/// Width of the settled open panel; `wide` = the lyrics show beside the player.
 pub fn panel_w(wide: bool) -> f32 {
     target(Mode::Expanded, false)[0] + if wide { LYRICS_EXTRA_W } else { 0.0 }
 }
 
-/// Media controls of the music page, in window px for the settled panel centred at `cx`. The
-/// player is the left 480 px of the panel; with the lyrics open (`wide`) the panel is wider and
-/// the lyrics take the part on the right.
 pub fn buttons(cx: f32, scale: f32, wide: bool) -> [(Button, D2D_RECT_F); 7] {
     buttons_from(cx / scale - panel_w(wide) / 2.0, scale)
 }
 
-/// The same controls for a panel whose left edge is at `left` (logical px): follows the panel
-/// while it grows or shrinks.
 fn buttons_from(left: f32, scale: f32) -> [(Button, D2D_RECT_F); 7] {
     let (x0, x1) = (SIDE + COVER + COVER_GAP, target(Mode::Expanded, false)[0] - SIDE);
     let mid = (x0 + x1) / 2.0;
@@ -532,7 +414,6 @@ fn buttons_from(left: f32, scale: f32) -> [(Button, D2D_RECT_F); 7] {
     ]
 }
 
-/// Settings rows of a health card: (setting, is a switch).
 fn setting_rows(card: Card) -> &'static [(Setting, bool)] {
     match card {
         Card::Water => &[(Setting::WaterOn, true), (Setting::Cup, false), (Setting::Goal, false), (Setting::From, false), (Setting::To, false)],
@@ -541,17 +422,13 @@ fn setting_rows(card: Card) -> &'static [(Setting, bool)] {
     }
 }
 
-/// Every clickable rect of the open panel on `page`. `rows` / `scroll` place list rows,
-/// `settings` = health card showing its settings.
 pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize, settings: Option<Card>, wide: bool) -> Vec<(Button, D2D_RECT_F)> {
     let panel_h = panel_size(page)[1];
-    // Only the Music page can be wide.
     let wide = wide && page == Page::Music;
     let w = panel_size(page)[0] + if wide { LYRICS_EXTRA_W } else { 0.0 };
     let left = cx / scale - w / 2.0;
     let r = |x: f32, y: f32, bw: f32, bh: f32| rect((left + x) * scale, y * scale, (left + x + bw) * scale, (y + bh) * scale);
     let mut out = Vec::new();
-    // The arrows are hidden while the lyrics are open.
     if !wide {
         out.push((Button::PagePrev, r(10.0, arrow_y(panel_h), ARROW, ARROW)));
         out.push((Button::PageNext, r(w - 10.0 - ARROW, arrow_y(panel_h), ARROW, ARROW)));
@@ -563,7 +440,6 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             let (x0, rw) = (cl + LIST_X, cw - LIST_X);
             out.push((Button::ListInput, r(x0, INPUT_Y, rw, INPUT_H)));
             out.push((Button::ListClear, r(x0 + rw - 26.0, INPUT_Y, 26.0, INPUT_H)));
-            // The settings gear, small, in the left column under the count.
             out.push((Button::Gear(Card::Tasks), r(cl + HERO_W / 2.0 - 10.0, 152.0, 20.0, 18.0)));
             if settings == Some(Card::Tasks) {
                 out.push((Button::RemindStep(-1), r(x0 + rw - 112.0, ROW_Y, 22.0, 22.0)));
@@ -580,11 +456,8 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
         Page::Weather => {
             out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
             out.push((Button::ListClear, r(cl + cw - 26.0, INPUT_Y, 26.0, INPUT_H)));
-            // The x that switches the weather off, and the °C | °F choice beside the temperature,
-            // once there is one (`rows` = 1).
             if rows > 0 {
                 out.push((Button::CityOff, r(cl + cw - 24.0, CITY_Y, 24.0, 24.0)));
-                // The sun's path: a chip left of the unit capsule.
                 out.push((Button::SunToggle, r(cl + cw - 30.0 - 8.0 - 2.0 * UNIT_W - SUN_GAP - SUN_W, CITY_Y + 3.0, SUN_W, UNIT_H)));
                 for (k, unit) in [weather::Unit::C, weather::Unit::F].into_iter().enumerate() {
                     out.push((Button::Unit(unit), r(cl + cw - 30.0 - 8.0 - 2.0 * UNIT_W + k as f32 * UNIT_W, CITY_Y + 3.0, UNIT_W, UNIT_H)));
@@ -605,14 +478,12 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             for i in 0..42 {
                 out.push((Button::CalCell(i), r(cl + CAL_GRID_X + (i % 7) as f32 * CAL_COL_W, CAL_ROW0 + (i / 7) as f32 * CAL_ROW_H, CAL_COL_W, CAL_ROW_H)));
             }
-            // The Solar | Lunar choice under the date (only drawn, and only taken, where the region has a lunar calendar).
             let y = CAL_TOP + (CAL_BLOCK_H - CAL_LEFT_H - CAL_SWITCH_H) / 2.0 + 102.0;
             let x = cl + (CAL_LEFT_W - 2.0 * CAL_SEG_W - 4.0) / 2.0 + 2.0;
             out.push((Button::CalMode(false), r(x, y, CAL_SEG_W, 22.0)));
             out.push((Button::CalMode(true), r(x + CAL_SEG_W, y, CAL_SEG_W, 22.0)));
         }
         Page::Usage => {
-            // Only the apps found on this PC get a tab: chips side by side, from the content's left.
             let shown: Vec<usize> = (0..3).filter(|i| USAGE_APPS.load(Ordering::Relaxed) >> i & 1 == 1).collect();
             for (place, &i) in shown.iter().enumerate() {
                 out.push((Button::UsageTab(i), r(cl + place as f32 * (USAGE_CHIP_W + 4.0), CARD_TOP, USAGE_CHIP_W, USAGE_TAB_H)));
@@ -625,13 +496,11 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
                 out.push((Button::FocusMode(kind), r(x, FOCUS_CHIP_Y, w, FOCUS_CHIP_H)));
                 x += w + 6.0;
             }
-            // Right-aligned like the Music page's controls: restart, the white disc, next.
             let right = cl + cw;
             let (skip_x, play_x) = (right - FOCUS_SMALL, right - FOCUS_SMALL - 14.0 - FOCUS_PLAY);
             out.push((Button::FocusSkip, r(skip_x, 72.0 - FOCUS_SMALL / 2.0, FOCUS_SMALL, FOCUS_SMALL)));
             out.push((Button::FocusPlay, r(play_x, 72.0 - FOCUS_PLAY / 2.0, FOCUS_PLAY, FOCUS_PLAY)));
             out.push((Button::FocusReset, r(play_x - 14.0 - FOCUS_SMALL, 72.0 - FOCUS_SMALL / 2.0, FOCUS_SMALL, FOCUS_SMALL)));
-            // The strip's hit area is taller than its 5 px so it can be hit.
             for (i, (x0, x1)) in focus_segments(cw).into_iter().enumerate() {
                 out.push((Button::FocusSeg(i), r(cl + x0, FOCUS_STRIP_Y - 7.0, x1 - x0, FOCUS_STRIP_H + 14.0)));
             }
@@ -651,7 +520,6 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
                         }
                     }
                 } else if card == Card::Water {
-                    // The round + at the tile's bottom right, "later" beside it.
                     out.push((Button::Drink, r(x + card_w - 48.0, bottom - 44.0, 34.0, 34.0)));
                     out.push((Button::Snooze, r(x + card_w - 72.0, CARD_TOP + 28.0, 60.0, 18.0)));
                 } else {
@@ -663,13 +531,11 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     if nav_open() {
         out.extend(nav_cells(cx, scale, panel_h).into_iter().map(|(p, b)| (Button::GoPage(p), b)));
     } else {
-        // Under the last row, over the dots.
         out.push((Button::Dots, r(w / 2.0 - 40.0, dots_y(panel_h) - 2.0, 80.0, 14.0)));
     }
     out
 }
 
-/// The seek bar's hit area (window px).
 pub fn seek_bar(cx: f32, scale: f32, wide: bool) -> D2D_RECT_F {
     buttons(cx, scale, wide).into_iter().find(|(b, _)| *b == Button::Seek).map(|(_, r)| r).unwrap_or_default()
 }
@@ -684,9 +550,6 @@ pub fn hit_button(cx: f32, scale: f32, x: f32, y: f32, track: Option<&Track>, pa
         && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom).map(|(b, _)| b)
 }
 
-/// The x in a notification banner's top-right corner (window px) for a banner `width` px wide
-/// (logical) centred on `cx`: the glyph is 8 px, the rect around it is what a click must hit.
-/// The pill's top corners are round, so its x sits further in than the ears' square ones.
 pub fn banner_close(cx: f32, scale: f32, width: f32, pill: bool) -> D2D_RECT_F {
     let (inset, down) = if pill { (20.0, 18.0) } else { (12.0, 12.0) };
     let (x, y) = (cx + (width / 2.0 - inset) * scale, down * scale);
@@ -694,8 +557,6 @@ pub fn banner_close(cx: f32, scale: f32, width: f32, pill: bool) -> D2D_RECT_F {
     rect(x - half, y - half, x + half, y + half)
 }
 
-/// The buttons of an approval banner (window px) for a banner `width` x `height` px (logical)
-/// centred on `cx`, one per label in order, along the bottom edge and right-aligned.
 pub fn approve_buttons(cx: f32, scale: f32, width: f32, height: f32, labels: &[String]) -> Vec<D2D_RECT_F> {
     let (top, bottom) = ((height - 34.0) * scale, (height - 8.0) * scale);
     let gap = 4.0 * scale;
@@ -710,10 +571,8 @@ pub fn approve_buttons(cx: f32, scale: f32, width: f32, height: f32, labels: &[S
     out
 }
 
-/// Side in px of a banner's line icon (its grid is scaled to this).
 const LINE_ICON: f32 = 26.0;
 
-// Matrices in Direct2D's row-vector convention: `a * b` applies `a` first.
 fn translate(x: f32, y: f32) -> Matrix3x2 {
     Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: x, M32: y }
 }
@@ -727,7 +586,6 @@ fn rotation(degrees: f32) -> Matrix3x2 {
     Matrix3x2 { M11: cos, M12: sin, M21: -sin, M22: cos, M31: 0.0, M32: 0.0 }
 }
 
-/// Text styles, indexed by these constants.
 const F_SMALL: usize = 0;
 const F_BODY: usize = 1;
 const F_LABEL: usize = 2;
@@ -735,45 +593,27 @@ const F_ICON: usize = 3;
 const F_TITLE: usize = 4;
 const F_TINY_ICON: usize = 5;
 const F_BODY_WRAP: usize = 6;
-/// Text column of a notification banner: its 420 px width minus icon (18 + 36 + 12) and right pad 22.
 const BANNER_TEXT_W: f32 = 420.0 - 88.0;
 const BANNER_MIN_W: f32 = 220.0;
-/// A checklist line: its dot (15) and the gap to its text (11).
 const ROW_DOT_W: f32 = 26.0;
 const F_SMALL_ICON: usize = 7;
 const F_BIG: usize = 8;
-/// Icon of a banner: larger than the 16 px of the buttons (the banner has no ring around it).
 const F_BANNER_ICON: usize = 9;
-/// A banner that carries a picture (a screenshot) shows it in a box this wide and `BANNER_IMAGE_H`
-/// tall at the right edge, with this gap before the text.
 const BANNER_IMAGE_W: f32 = 64.0;
 const BANNER_IMAGE_H: f32 = 40.0;
 const BANNER_IMAGE_GAP: f32 = 10.0;
-/// Longest side the loader scales a banner picture to (px): the banner box at 2x.
 const BANNER_IMAGE_PX: (f32, f32) = (2.0 * BANNER_IMAGE_W, 2.0 * BANNER_IMAGE_H);
-/// A line of lyrics: wraps onto more lines instead of being cut short.
 const F_LYRIC: usize = 10;
-/// A banner's badge: the large plain number at its right end (a Bluetooth device's battery).
 const F_BADGE: usize = 11;
-/// The panel header: the page's name, and the date and time in the middle (the time bolder).
 const F_HEAD: usize = 12;
 const F_CLOCK: usize = 13;
 const F_CLOCK_BOLD: usize = 14;
-/// A page's big figure: the number in its ring.
 const F_FIGURE: usize = 15;
-/// A big faint picture behind a tile (a walking figure).
 const F_MARK: usize = 16;
-/// The temperature on the Weather page.
 const F_TEMP: usize = 17;
-/// The song's title on the Music page: large and bold, it is what the page is about.
 const F_SONG: usize = 18;
-/// The time left on the Focus page.
 const F_TIME: usize = 19;
-/// The Calendar page's big day.
 const F_DAY: usize = 20;
-/// The Calendar page (logical px from the panel's top-left, the x from the content's left): the left column
-/// (the day, its weekday, the other date, the choice) is `CAL_LEFT_W` wide and its block centred in
-/// `CAL_BLOCK_H` from `CAL_TOP`; the grid starts at `CAL_GRID_X`, seven columns, a title row, a weekday row, six rows.
 const CAL_TOP: f32 = 34.0;
 const CAL_BLOCK_H: f32 = 128.0;
 const CAL_LEFT_W: f32 = 126.0;
@@ -786,17 +626,11 @@ const CAL_TITLE_Y: f32 = 32.0;
 const CAL_HEAD_Y: f32 = 52.0;
 const CAL_ROW0: f32 = 68.0;
 const CAL_ROW_H: f32 = 16.0;
-/// A day's disc (today), ring (picked) or hover wash: a little taller than its row.
 const CAL_CHIP_H: f32 = 18.0;
-/// Lyrics area beside the player, logical px: its top and bottom in the panel, the space each side
-/// of the thin divider after the player's controls, its right margin and its width. The right
-/// margin equals the gap at the divider; the pages' clip gives way on that side while the lyrics
-/// show (`LYRIC_CLIP`), leaving room for a last letter's ink past the box.
 const LYRIC_TOP: f32 = 30.0;
 const LYRIC_BOTTOM: f32 = 168.0;
 const LYRIC_GAP: f32 = 14.0;
 const LYRIC_RIGHT: f32 = LYRIC_GAP;
-/// How far in from the panel's right edge the pages are clipped while the lyrics show (else `PAGE_CLIP`).
 const LYRIC_CLIP: f32 = 8.0;
 const LYRIC_W: f32 = LYRICS_EXTRA_W + SIDE - 2.0 * LYRIC_GAP - LYRIC_RIGHT;
 
@@ -827,12 +661,9 @@ pub const ICON_SPEAKER: &str = "\u{E7F5}";
 pub const ICON_PHONE_DEVICE: &str = "\u{E8EA}";
 pub const ICON_MOUSE: &str = "\u{E962}";
 pub const ICON_GAMEPAD: &str = "\u{E7FC}";
-/// A USB device plugged in / pulled out: line icons (not font glyphs).
 pub const ICON_USB: &str = "\u{1}usb";
 pub const ICON_USB_OUT: &str = "\u{1}usb-out";
-/// The charger was pulled out: drawn as a plug coming apart (not a font glyph).
 pub const ICON_UNPLUG: &str = "\u{1}unplug";
-/// Not a glyph: the banner draws the water drop shape for this.
 pub const ICON_DROP: &str = "\u{1}drop";
 const ICON_GEAR: &str = "\u{E713}";
 const ICON_MINUS: &str = "\u{E738}";
@@ -846,15 +677,10 @@ const ICON_LEFT: &str = "\u{E76B}";
 const ICON_RIGHT: &str = "\u{E76C}";
 const ICON_ADD: &str = "\u{E710}";
 const ICON_CHECK: &str = "\u{E73E}";
-/// A finished task: a check inside a ring (Segoe MDL2 "Completed"); the banner draws it green.
 pub const ICON_DONE: &str = "\u{E930}";
-/// A VPN (Segoe MDL2 "VPN").
 pub const ICON_VPN: &str = "\u{E705}";
-/// A task that failed: a cross in a ring (drawn red).
 pub const ICON_FAILED: &str = "\u{EA39}";
-/// Explorer deleting or recycling.
 pub const ICON_TRASH: &str = "\u{E74D}";
-/// Explorer moving files (Segoe MDL2 "MoveToFolder").
 pub const ICON_MOVE: &str = "\u{E8DE}";
 const ICON_CLOSE: &str = "\u{E711}";
 const ICON_EDIT: &str = "\u{E70F}";
@@ -862,18 +688,12 @@ const YELLOW: (f32, f32, f32) = (1.0, 0.8, 0.2);
 const GREEN: (f32, f32, f32) = (0.2, 0.84, 0.29);
 const BLUE: (f32, f32, f32) = (0.3, 0.62, 1.0);
 const ORANGE: (f32, f32, f32) = (1.0, 0.6, 0.2);
-/// The Focus page's colour for a focus segment (breaks are GREEN).
 const CORAL: (f32, f32, f32) = (1.0, 0.42, 0.30);
-/// Idle robot's LED eyes: near-white, like a small LED face.
 const LED: (f32, f32, f32) = (0.93, 0.97, 1.0);
-/// The robot's red eyes and plug when the battery is low: the battery ring's red.
 const LOW_RED: (f32, f32, f32) = (1.0, 0.27, 0.23);
-/// Height of the countdown bar on the bottom edge of an approval banner.
 const COUNTDOWN_H: f32 = 3.0;
-/// The Pomodoro line along the pill's bottom, thinner than the approval countdown.
 const FOCUS_LINE_H: f32 = 2.0;
 
-/// Banner icon for a Bluetooth device.
 pub fn device_icon(kind: DeviceKind) -> &'static str {
     use DeviceKind::*;
     match kind {
@@ -890,66 +710,45 @@ pub fn device_icon(kind: DeviceKind) -> &'static str {
 struct CoverCache {
     track_key: u64,
     bytes: Option<Arc<Vec<u8>>>,
-    /// Pixel sizes the bitmaps were made for.
     sizes: (u32, u32),
-    /// Page-size and pill-size copies of the cover.
     bitmaps: Option<(ID2D1Bitmap, ID2D1Bitmap)>,
-    /// Colour the Music page fades into while this cover is up (None: no cover).
     glow: Option<(f32, f32, f32)>,
-    /// The aurora band's two colours for this cover.
     aurora: [(f32, f32, f32); 2],
 }
 
-/// A track change in progress on the Music page: the cover that is leaving (None: there was no art, so the note
-/// placeholder is under it) and how far the new one has faded in, 0..1 over `anim::COVER_FADE_S`.
 struct CoverFade {
     from: Option<(ID2D1Bitmap, ID2D1Bitmap)>,
     t: f32,
 }
 
-/// Shadow of the open panel: reaches SHADOW_STEPS * SHADOW_STEP px past the edge (the window has
-/// 24+ px of margin below), SHADOW_ALPHA dark at the edge, shifted SHADOW_DY px down.
-/// Ten wide strokes instead of fourteen narrow ones: the reach is the same 12.6 px, so the
-/// falloff keeps its shape, for 4 fewer stroked outlines a frame. Fewer steps than this put more
-/// than SHADOW_ALPHA * 0.2 on the innermost stroke, which reads as a line (see the shadow test).
 const SHADOW_STEPS: u32 = 10;
 const SHADOW_STEP: f32 = 1.26;
 const SHADOW_ALPHA: f32 = 0.20;
 const SHADOW_DY: f32 = 2.0;
 
-/// Opacity of the k-th (1 = narrowest) shadow stroke. Together they make the darkness at distance
-/// d from the edge fall off as SHADOW_ALPHA * (1 - d / reach)^2: soft all the way out, with no
-/// visible line where the shadow starts.
 fn shadow_layer_alpha(k: u32) -> f32 {
     let n = SHADOW_STEPS as f32;
     let inside = |j: u32| (1.0 - j as f32 / n).max(0.0).powi(2);
     SHADOW_ALPHA * (inside(k - 1) - inside(k))
 }
 
-/// Largest centred square of a `w` x `h` image: (x, y, side).
 fn square_crop(w: u32, h: u32) -> (u32, u32, u32) {
     let side = w.min(h);
     ((w - side) / 2, (h - side) / 2, side)
 }
 
-/// Relative luminance of an sRGB colour (WCAG).
 fn luminance(r: f32, g: f32, b: f32) -> f32 {
     let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
     0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-/// The cover's shadow, a blurred dark square (`Renderer::cover_shadow`): how far it reaches past the
-/// cover, how far it drops, how dark it is, and how much smaller it is drawn before being stretched
-/// (the blur). Short enough to end above the pages' bottom clip (see the test).
 const COVER_SHADOW_PAD: f32 = 8.0;
 const COVER_SHADOW_DROP: f32 = 2.0;
 const COVER_SHADOW_ALPHA: f32 = 0.55;
 const COVER_SHADOW_SHRINK: f32 = 4.0;
 
-/// Brightest the glow may get at the bottom of the panel: white text on it stays above 4.5:1.
 const GLOW_MAX_LUM: f32 = 0.17;
 
-/// `c` dimmed until its luminance is at most `max`.
 fn dim_to_lum((r, g, b): (f32, f32, f32), max: f32) -> (f32, f32, f32) {
     let mut k = 0.75;
     while k > 0.05 && luminance(r * k, g * k, b * k) > max {
@@ -958,21 +757,16 @@ fn dim_to_lum((r, g, b): (f32, f32, f32), max: f32) -> (f32, f32, f32) {
     (r * k, g * k, b * k)
 }
 
-/// Secondary text: grey, shifting with `level` (0..1, the glow's strength) to white leaning
-/// towards the cover's tint, so it sits in the glow instead of looking pasted on.
 fn soft_text((r, g, b): (f32, f32, f32), level: f32, grey_v: f32, a: f32) -> D2D1_COLOR_F {
     let mix = |tinted: f32| grey_v + (0.8 + 0.2 * tinted - grey_v) * level;
     color(mix(r), mix(g), mix(b), a)
 }
 
-/// One animation step of the Music-page glow towards `target` (None: fade out, keeping the last
-/// colour). Returns the new (colour, level) and whether it still has somewhere to go.
 fn glow_step(color: (f32, f32, f32), level: f32, target: Option<(f32, f32, f32)>, dt: f32) -> ((f32, f32, f32), f32, bool) {
     let k = anim::approach(dt, anim::GLOW_FADE_S);
     let lerp = |a: f32, b: f32| a + (b - a) * k;
     match target {
         Some(t) => {
-            // From invisible the colour is simply set; otherwise it slides to the new one.
             let from = if level < 0.02 { t } else { color };
             let c = (lerp(from.0, t.0), lerp(from.1, t.1), lerp(from.2, t.2));
             let l = lerp(level, 1.0);
@@ -987,17 +781,11 @@ fn glow_step(color: (f32, f32, f32), level: f32, target: Option<(f32, f32, f32)>
 }
 
 
-/// Tint for covers with no colour to speak of (black, white, grey): a light grey.
 const GLOW_NEUTRAL: (f32, f32, f32) = (0.8, 0.8, 0.8);
 
-/// A small copy of the cover (premultiplied BGRA pixels) -> glow colour: its most prominent hue
-/// at full brightness. Pixels vote for their 30-degree hue bin by how vivid and bright they are;
-/// the winning bin's colours are averaged, so one strong colour beats a muddy overall average.
-/// Covers that are nearly all black or grey get GLOW_NEUTRAL.
 fn glow_tint(pixels: &[u8]) -> (f32, f32, f32) {
     let bins = hue_bins(pixels);
     let (weight, sum) = bins.into_iter().fold((0.0, [0.0; 3]), |best, bin| if bin.0 > best.0 { bin } else { best });
-    // Under ~1% of the pixels at a pale tint: not enough colour to bother with.
     if weight <= pixels.len() as f32 / 4.0 * 0.0005 {
         return GLOW_NEUTRAL;
     }
@@ -1011,8 +799,6 @@ fn full_bright([r, g, b]: [f32; 3]) -> (f32, f32, f32) {
 
 
 
-/// Pixels (premultiplied BGRA) voting for their 30-degree hue bin by how vivid and bright they
-/// are: (weight, weighted colour sum) per bin.
 fn hue_bins(pixels: &[u8]) -> [(f32, [f32; 3]); 12] {
     let mut bins = [(0.0f32, [0.0f32; 3]); 12];
     for px in pixels.chunks_exact(4).filter(|p| p[3] > 0) {
@@ -1034,12 +820,9 @@ fn hue_bins(pixels: &[u8]) -> [(f32, [f32; 3]); 12] {
     bins
 }
 
-/// Fetches app icons on a worker thread: the shell takes tens of ms for an app's first icon, which
-/// showed as a stutter when the Notifications page opened. Answers are (id, width, height, premultiplied BGRA).
 struct IconLoader {
     ask: Sender<String>,
     got: Receiver<LoadedIcon>,
-    /// Asked for, not answered yet.
     pending: HashSet<String>,
     page_open: Arc<AtomicBool>,
     hwnd: Arc<AtomicIsize>,
@@ -1080,7 +863,6 @@ impl IconLoader {
     }
 }
 
-/// The icon Windows shows for this app id (the shell's AppsFolder knows packaged and Start-menu apps alike).
 unsafe fn app_icon_pixels(wic: &IWICImagingFactory, id: &str) -> Option<(u32, u32, Vec<u8>)> {
     let item: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(format!("shell:AppsFolder\\{id}")), None).ok()?;
     let hbmp = item.GetImage(SIZE { cx: 64, cy: 64 }, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY).ok()?;
@@ -1089,7 +871,6 @@ unsafe fn app_icon_pixels(wic: &IWICImagingFactory, id: &str) -> Option<(u32, u3
     bgra_pixels(wic, &src.ok()?.into())
 }
 
-/// A picture file scaled down to fit the banner's picture box (at 2x), for the loader.
 unsafe fn image_pixels(wic: &IWICImagingFactory, path: &str) -> Option<(u32, u32, Vec<u8>)> {
     let decoder = wic.CreateDecoderFromFilename(&HSTRING::from(path), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).ok()?;
     let frame = decoder.GetFrame(0).ok()?;
@@ -1101,7 +882,6 @@ unsafe fn image_pixels(wic: &IWICImagingFactory, path: &str) -> Option<(u32, u32
     bgra_pixels(wic, &scaler.into())
 }
 
-/// Any WIC bitmap as premultiplied BGRA bytes.
 unsafe fn bgra_pixels(wic: &IWICImagingFactory, src: &IWICBitmapSource) -> Option<(u32, u32, Vec<u8>)> {
     let conv = wic.CreateFormatConverter().ok()?;
     conv.Initialize(src, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
@@ -1112,7 +892,6 @@ unsafe fn bgra_pixels(wic: &IWICImagingFactory, src: &IWICBitmapSource) -> Optio
     Some((w, h, pixels))
 }
 
-/// What the frame prepared before drawing: line icons with their geometry, the lyrics' layout and the cover's colours.
 #[derive(Clone, Copy)]
 struct Prep<'a> {
     weather_line: &'a Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
@@ -1129,8 +908,6 @@ struct Prep<'a> {
     fonts: &'a [IDWriteTextFormat],
 }
 
-/// What each part of a frame (the pill, a banner, the panel) is drawn with: the view, the notch's geometry in window px
-/// and the shared drawing helpers.
 #[derive(Clone, Copy)]
 struct Ctx<'a> {
     v: &'a View<'a>,
@@ -1139,7 +916,6 @@ struct Ctx<'a> {
     r: f32,
     cx: f32,
     nh: f32,
-    /// How far down a floating pill is drawn.
     gy: f32,
     shape: &'a ID2D1PathGeometry,
     text: &'a dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
@@ -1157,73 +933,44 @@ enum Owner {
 }
 
 pub struct Renderer {
-    /// What owns the notch now: it stays the panel (or the banner) while the pill shrinks back, until it is a pill again.
-    /// Only the panel draws pages and the glow, so a banner that shrinks back shows none of them, however tall it was.
     owner: Owner,
     factory: ID2D1Factory,
     d3d: ID3D11Device,
-    /// The Direct2D context on `d3d`: binds the swap chain's buffer as the target.
     ctx: ID2D1DeviceContext,
-    /// The same context seen as a plain render target, which all the drawing uses.
     rt: ID2D1RenderTarget,
     dw: IDWriteFactory,
     wic: Option<IWICImagingFactory>,
-    /// The window's swap chain and its composition tree (None until the first frame, and after the
-    /// GPU was lost).
     surface: Option<Surface>,
     w: i32,
     h: i32,
-    /// Where the window was last put and its region, to touch them only when they change.
     placed: (i32, i32, i32, i32),
     region: (i32, i32, i32, i32),
-    /// What the Limits page shows and the app it is on (set by the window when either changes).
     pub usage: crate::usage::Snapshot,
     pub usage_tab: usize,
-    /// The mouse is over the x of a notification banner (a soft disc shows behind it).
     pub close_hot: bool,
-    /// Ears (v1) or floating pill (v2).
     pub style: notch::Style,
-    /// Copy each frame back to `grabbed` (preview tests only).
     #[cfg(test)]
     grab: bool,
     #[cfg(test)]
     grabbed: Vec<u8>,
     fonts: Option<(f32, Vec<IDWriteTextFormat>)>,
-    /// Decoded cover of the current track (keyed by Track::art_key).
     cover: Option<CoverCache>,
-    /// The cover change being faded, if any (see `CoverFade`).
     cover_fade: Option<CoverFade>,
-    /// The cover's blurred shadow, made once per scale: (scale, bitmap).
     cover_shadow: Option<(f32, ID2D1Bitmap)>,
-    /// The aurora's two blur targets (small, mid) for one small-target size, kept across frames:
-    /// a new GPU texture pair every frame stalls integrated GPUs.
     aurora_rts: RefCell<Option<((u32, u32), ID2D1BitmapRenderTarget, ID2D1BitmapRenderTarget)>>,
-    /// The Music page's glow: (colour, strength 0..1, time of the last frame), see glow_step.
     glow: ((f32, f32, f32), f32, Instant),
-    /// How far the pill's equaliser is "up" (0 flat .. 1 dancing): eases both ways on play / pause.
     bars: f32,
-    /// The last frame showed the lyrics scrolling with the song: frames at a relaxed pace will do.
     pub slow_frames: bool,
-    /// Geometry of each line-icon path, by its path data.
     line_geoms: HashMap<&'static str, ID2D1PathGeometry>,
-    /// Height of each lyric line wrapped to the lyrics area, for one song (the lyrics' address)
-    /// and width: measured once, not every frame.
     lyric_heights: Option<(usize, u32, Vec<f32>)>,
     lyric_motion: lyrics::Motion,
-    /// Start-menu icon per app id (None: Windows has none for it); asked once per app.
     app_icons: HashMap<String, Option<ID2D1Bitmap>>,
     icon_loader: IconLoader,
-    /// Icon slots that just changed glyph: (current, previous, when) for the morph.
     morphs: RefCell<HashMap<&'static str, (&'static str, &'static str, Instant)>>,
-    /// The Weather page's sun view: whether the sun was up at the last frame, and when it last rose or set while the view stayed
-    /// open (None: not yet, or the view has been closed since). See `sun_swap`.
     sun_seen: std::cell::Cell<Option<(bool, Option<Instant>)>>,
-    /// Round caps and joins for the robot face's strokes.
     round: ID2D1StrokeStyle,
 }
 
-/// Colours of the battery icon, (bolt or first path, the rest): a green bolt on a white case while
-/// charging, all yellow in battery saver (like iPhone's low power mode), all red at 20 % or less.
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
 }
@@ -1232,18 +979,15 @@ fn grey(v: f32, a: f32) -> D2D1_COLOR_F {
     color(v, v, v, a)
 }
 
-/// First letter or digit of an app name, upper-cased; "?" when it has none.
 fn app_initial(app: &str) -> String {
     app.chars().find(|c| c.is_alphanumeric()).map_or_else(|| "?".to_string(), |c| c.to_uppercase().collect())
 }
 
-/// Tile colour of an app: hue from its name, lightness fixed so white text stays readable.
 fn app_tint(app: &str) -> (f32, f32, f32) {
     let hash = app.to_lowercase().bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
     hue_tint((hash % 360) as f32)
 }
 
-/// HSL (saturation 0.55, lightness 0.30) at `hue` degrees.
 fn hue_tint(hue: f32) -> (f32, f32, f32) {
     let (s, l) = (0.55, 0.30);
     let c = (1.0 - (2.0 * l - 1.0f32).abs()) * s;
@@ -1257,7 +1001,6 @@ fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {
     D2D_RECT_F { left: l, top: t, right: r, bottom: b }
 }
 
-/// 83_000 ms -> "01:23"
 fn clock(ms: u64) -> String {
     let s = ms / 1000;
     format!("{:02}:{:02}", s / 60, s % 60)
@@ -1267,7 +1010,6 @@ fn rounded(r: D2D_RECT_F, radius: f32) -> D2D1_ROUNDED_RECT {
     D2D1_ROUNDED_RECT { rect: r, radiusX: radius, radiusY: radius }
 }
 
-/// A window's swap chain, shown by a DirectComposition visual.
 struct Surface {
     hwnd: HWND,
     swap: IDXGISwapChain1,
@@ -1278,12 +1020,6 @@ struct Surface {
 
 const PIXELS: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED };
 
-/// A D3D11 device on Windows' default GPU (WARP, the CPU rasteriser, when the driver gives none) and
-/// a Direct2D context drawing with it. The default is the GPU showing the primary monitor, where the
-/// notch sits: on a laptop with integrated + discrete GPUs that is the integrated one, so nothing is
-/// copied across GPUs and the discrete one stays asleep. Only a "High performance" choice for the app
-/// (Windows graphics settings, NVIDIA/AMD panel) moves it to the discrete GPU, and Windows then
-/// reports the monitor there too, so no app can pick otherwise (checked 2026-10-29, UHD + RTX 4060).
 fn gpu_device(factory: &ID2D1Factory) -> Result<(ID3D11Device, ID2D1DeviceContext, ID2D1RenderTarget)> {
     unsafe {
         let make = |driver: D3D_DRIVER_TYPE| -> Result<ID3D11Device> {
@@ -1297,7 +1033,6 @@ fn gpu_device(factory: &ID2D1Factory) -> Result<(ID3D11Device, ID2D1DeviceContex
             let name = String::from_utf16_lossy(&desc.Description);
             crate::system::log(&format!("GPU: {}", name.trim_end_matches('\0')));
         }
-        // One frame in flight: a frame shows on the next refresh instead of queueing behind others.
         dxgi.SetMaximumFrameLatency(1)?;
         let ctx = factory.cast::<ID2D1Factory1>()?.CreateDevice(&dxgi)?.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
         ctx.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
@@ -1324,8 +1059,6 @@ impl Renderer {
         }
     }
 
-    /// The GPU was reset or removed (driver update, sleep): start over on a new device. Every bitmap
-    /// belonged to the old one, so they are made again as they are needed.
     fn lose_device(&mut self) -> Result<()> {
         (self.d3d, self.ctx, self.rt) = gpu_device(&self.factory)?;
         self.surface = None;
@@ -1337,7 +1070,6 @@ impl Renderer {
         Ok(())
     }
 
-    /// A `w` x `h` swap chain composed onto `hwnd`, bound as the drawing target.
     fn ensure_surface(&mut self, hwnd: HWND, w: i32, h: i32) -> Result<()> {
         let same_window = self.surface.as_ref().is_some_and(|s| s.hwnd == hwnd);
         if same_window && (w, h) == (self.w, self.h) {
@@ -1389,7 +1121,6 @@ impl Renderer {
         Ok(())
     }
 
-    /// Put the window at (x, y, w, h) and limit it to `region` (window px), each only on a change.
     fn place(&mut self, hwnd: HWND, at: (i32, i32, i32, i32), region: (i32, i32, i32, i32)) {
         unsafe {
             if at != self.placed {
@@ -1398,13 +1129,11 @@ impl Renderer {
             }
             if region != self.region {
                 self.region = region;
-                // The window owns the region from here on.
                 SetWindowRgn(hwnd, Some(CreateRectRgn(region.0, region.1, region.2, region.3)), false);
             }
         }
     }
 
-    /// The frame just drawn, as top-down BGRA rows (preview tests).
     #[cfg(test)]
     fn grab_frame(&mut self) -> Result<()> {
         unsafe {
@@ -1445,8 +1174,6 @@ impl Renderer {
                     Ok(f)
                 }
             };
-            // Same body text, but wrapping onto more lines (top-aligned). Text past the box's last
-            // line ends with "…" after a whole word, never mid-word.
             let wrap = |f: IDWriteTextFormat| -> Result<IDWriteTextFormat> {
                 unsafe {
                     f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
@@ -1458,8 +1185,6 @@ impl Renderer {
                 Ok(f)
             };
             let ui = w!("Segoe UI");
-            // The header uses Windows 11's display cut of Segoe UI (drawn for large sizes, finer than the text
-            // cut at 18 px) when it is installed, else the plain one.
             let display = unsafe {
                 let (mut collection, mut index, mut found) = (None, 0u32, false.into());
                 let has = self.dw.GetSystemFontCollection(&mut collection, false).is_ok()
@@ -1502,9 +1227,6 @@ impl Renderer {
         Ok(self.fonts.as_ref().unwrap().1.clone())
     }
 
-    /// Decode again when the track's asynchronous artwork arrives.
-    /// The cover as two square bitmaps resampled to exactly `big` and `small` px (the Music page
-    /// and the pill), so it is drawn 1:1 instead of being shrunk by the GPU's plain linear filter.
     fn cover(&mut self, t: &Track, big: u32, small: u32) -> Option<(ID2D1Bitmap, ID2D1Bitmap)> {
         let cached = self.cover.as_ref().is_some_and(|cache| cache.track_key == t.art_key && cache.sizes == (big, small)
             && match (&cache.bytes, &t.art) { (None, None) => true, (Some(a), Some(b)) => Arc::ptr_eq(a, b), _ => false });
@@ -1517,12 +1239,10 @@ impl Renderer {
                 let frame = decoder.GetFrame(0).ok()?;
                 let conv = wic.CreateFormatConverter().ok()?;
                 conv.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
-                // Glow colour: from the cover scaled down to 16x16.
                 let tiny = wic.CreateBitmapScaler().ok()?;
                 tiny.Initialize(&conv, 16, 16, WICBitmapInterpolationModeFant).ok()?;
                 let mut px = [0u8; 16 * 16 * 4];
                 tiny.CopyPixels(std::ptr::null(), 16 * 4, &mut px).ok()?;
-                // Centre square, then Fant (area averaging) down or cubic up to the drawn size.
                 let (mut w, mut h) = (0, 0);
                 conv.GetSize(&mut w, &mut h).ok()?;
                 let (x, y, side) = square_crop(w, h);
@@ -1537,8 +1257,6 @@ impl Renderer {
                 Some(((fit(big)?, fit(small)?), glow_tint(&px), aurora::tints(&px)))
             });
             let (bitmaps, glow, aurora) = match decoded { Some((b, g, au)) => (Some(b), Some(g), au), None => (None, None, [GLOW_NEUTRAL; 2]) };
-            // Fade when the picture changes: a new track, or art that arrives late for the same track (over the note until
-            // then); re-making the same picture at another size does not.
             let same_art = |old: &CoverCache| match (&old.bytes, &t.art) { (None, None) => true, (Some(a), Some(b)) => Arc::ptr_eq(a, b), _ => false };
             self.cover_fade = match (&self.cover, &bitmaps) {
                 (Some(old), Some(_)) if old.track_key != t.art_key || !same_art(old) => Some(CoverFade { from: old.bitmaps.clone(), t: 0.0 }),
@@ -1549,8 +1267,6 @@ impl Renderer {
         self.cover.as_ref().and_then(|c| c.bitmaps.clone())
     }
 
-    /// The path `d` of a line icon as geometry (stroked, never filled), built once. None when it
-    /// cannot be parsed or built.
     fn line_geometry(&mut self, d: &'static str) -> Option<ID2D1PathGeometry> {
         if let Some(g) = self.line_geoms.get(d) {
             return Some(g.clone());
@@ -1595,7 +1311,6 @@ impl Renderer {
         Some(geo)
     }
 
-    /// Height in px of each lyric line wrapped to `width` px (at least `min_h`, for blank lines).
     fn lyric_heights(&mut self, lines: &Arc<Vec<(u64, String)>>, width: f32, min_h: f32, fonts: &[IDWriteTextFormat]) -> Vec<f32> {
         let (key, w) = (Arc::as_ptr(lines) as usize, width.round() as u32);
         if let Some((k, kw, heights)) = &self.lyric_heights {
@@ -1619,15 +1334,11 @@ impl Renderer {
         heights
     }
 
-    /// The icon Windows shows for this app id, once its loader has it (None until then, and for
-    /// apps Windows has no icon for). First asking starts the fetch.
     fn app_icon(&mut self, id: &str) -> Option<ID2D1Bitmap> {
         self.prefetch_icon(id);
         self.app_icons.get(id).cloned().flatten()
     }
 
-    /// The icon of the app a notification banner comes from: asked for when the banner shows, whichever page is open
-    /// (the banner keeps its bell until it arrives).
     fn banner_icon(&mut self, aumid: &str) -> Option<ID2D1Bitmap> {
         let key = format!("now:{aumid}");
         if !self.app_icons.contains_key(&key) && self.icon_loader.pending.insert(key.clone()) {
@@ -1636,7 +1347,6 @@ impl Renderer {
         self.app_icons.get(&key).cloned().flatten()
     }
 
-    /// Ask for an app's icon ahead of time, so the Notifications page finds it ready.
     pub fn set_page_open(&self, open: bool) {
         self.icon_loader.page_open.store(open, Ordering::Relaxed);
     }
@@ -1648,7 +1358,6 @@ impl Renderer {
         }
     }
 
-    /// Turn the icons the loader has finished into bitmaps.
     fn take_icons(&mut self) {
         while let Ok(LoadedIcon { id, pixels, deferred }) = self.icon_loader.got.try_recv() {
             self.icon_loader.pending.remove(&id);
@@ -1661,14 +1370,10 @@ impl Renderer {
         }
     }
 
-    /// A solid brush of this colour. D2D makes them cheaply (measured: caching them saved
-    /// nothing), so nothing is kept between frames.
     fn brush(&self, c: D2D1_COLOR_F) -> Result<ID2D1SolidColorBrush> {
         unsafe { self.rt.CreateSolidColorBrush(&c, None) }
     }
 
-    /// iPhone-style notch: flat top on the screen edge, concave "ears" flaring into it,
-    /// straight sides, round bottom corners.
     fn notch_shape(&self, l: f32, r: f32, h: f32, radius: f32, ear: f32) -> Result<ID2D1PathGeometry> {
         if self.style == notch::Style::Pill {
             return self.pill_shape(l, r, h, radius);
@@ -1699,8 +1404,6 @@ impl Renderer {
         }
     }
 
-    /// The floating pill: all four corners round, a capsule while it is short; `radius` (the
-    /// notch's own, a little under half the pill's height) caps the rounding once it opens.
     fn pill_shape(&self, l: f32, r: f32, h: f32, radius: f32) -> Result<ID2D1PathGeometry> {
         let p = |x: f32, y: f32| Vector2 { X: x, Y: y };
         let rad = (h / 2.0).min(radius * 1.1).min((r - l) / 2.0).max(0.0);
@@ -1729,13 +1432,8 @@ impl Renderer {
         }
     }
 
-    /// Idle robot's LED face centred on (cx, cy): eyes 14 px either side, the whole face shifted along
-    /// `e.gaze`. Strokes have round ends like the glowing lines of an LED face, and each eye sits in a halo
-    /// of three widening, fainter layers that reads as a blur. Asleep a pixel "z" drifts up beside the
-    /// face, cheering two sparkles twinkle there.
     fn draw_face(&self, e: &Eyes, cx: f32, cy: f32, s: f32, a: f32) -> Result<()> {
         let rt = &self.rt;
-        // The cheering face is green, like the battery ring while it charges; the sad one red, like it at 20 %.
         let ink = match e.face {
             Face::Happy => GREEN,
             Face::Sad => LOW_RED,
@@ -1743,10 +1441,8 @@ impl Renderer {
         };
         let led = |alpha: f32| unsafe { rt.CreateSolidColorBrush(&color(ink.0, ink.1, ink.2, alpha), None) };
         let lit = led(a)?;
-        // (how far the layer grows past the shape in logical px, its opacity), the widest and faintest last.
         let halo: Vec<(f32, ID2D1SolidColorBrush)> = [(1.2, 0.16), (2.6, 0.09), (4.4, 0.045)].into_iter().map(|(grow, alpha)| led(a * alpha).map(|b| (grow, b))).collect::<Result<_>>()?;
         let p = |x: f32, y: f32| Vector2 { X: x, Y: y };
-        // Quadratic curve from `a` through control `c` to `b`, as points.
         let quad = |a: Vector2, c: Vector2, b: Vector2| -> Vec<Vector2> {
             (0..=8).map(|i| {
                 let t = i as f32 / 8.0;
@@ -1782,9 +1478,7 @@ impl Renderer {
             }
             rt.FillRoundedRectangle(&rounded(rect(x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0), 1.5 * s), &lit);
         };
-        // The eyes sit on the pill's centre line; the face moves along the gaze.
         let (fx, ey) = (cx + e.gaze.0 * 3.0 * s, cy + e.gaze.1 * 2.4 * s);
-        // An open eye `h` logical px tall, squeezed by a blink (never below a thin bar).
         let lid = |h: f32| (h * e.open).max(1.6) * s;
         let u = s;
         for side in [-1.0f32, 1.0] {
@@ -1794,17 +1488,15 @@ impl Renderer {
                 Face::Curious => {
                     let (left, right) = curious_eyes(e.curious);
                     let h = if side < 0.0 { left } else { right };
-                    // Bottoms line up (half the mean height below the centre), so the big eye grows upward.
                     block(x, ey + ((left + right) / 4.0 - h / 2.0) * s, 7.0 * s, lid(h))
                 }
                 Face::Greet => stroke(&[p(x - 4.0 * u, ey + 2.5 * u), p(x, ey - 2.5 * u), p(x + 4.0 * u, ey + 2.5 * u)], 2.0)?,
                 Face::Happy => {
-                    let d = -side; // '>' on the left, '<' on the right
+                    let d = -side;
                     stroke(&[p(x - 3.0 * d * u, ey - 4.0 * u), p(x + 3.0 * d * u, ey), p(x - 3.0 * d * u, ey + 4.0 * u)], 2.0)?
                 }
                 Face::Sad => {
-                    let d = -side; // inner corner lower: droopy eyes
-                    // Blinking squeezes the eye toward its middle (ey + 1).
+                    let d = -side;
                     let v = |dy: f32| ey + 1.0 * u + (dy - 1.0) * u * e.open.max(0.18);
                     let pts = [p(x - 3.5 * u, v(-2.0 - d * 1.5)), p(x + 3.5 * u, v(-2.0 + d * 1.5)), p(x + 3.5 * u, v(4.0)), p(x - 3.5 * u, v(4.0))];
                     let geo = path(&pts, true)?;
@@ -1819,7 +1511,6 @@ impl Renderer {
             }
         }
         if e.face == Face::Happy {
-            // Two white sparkles beside the green eyes, twinkling out of step.
             let white = |alpha: f32| unsafe { rt.CreateSolidColorBrush(&color(LED.0, LED.1, LED.2, alpha), None) };
             let (spark, glow) = (white(a)?, white(a * 0.14)?);
             for (k, (dx, dy, size)) in [(35.0f32, -4.0f32, 3.2f32), (42.0, 4.0, 2.4)].into_iter().enumerate() {
@@ -1833,7 +1524,6 @@ impl Renderer {
             }
         }
         if e.face == Face::Sad {
-            // A plug beside the face that fades in and out slowly: plug in the charger.
             let k = 0.55 + 0.45 * (0.5 + 0.5 * (e.time * std::f32::consts::TAU / 1.5).sin());
             let (plug, glow) = (led(a * k)?, led(a * k * 0.16)?);
             let at = |dx: f32, dy: f32| p(cx + dx * s, cy + dy * s);
@@ -1849,10 +1539,8 @@ impl Renderer {
             }
         }
         if e.face == Face::Sleep {
-            // Pixel "z" on a 4x4 grid: top row, two steps down the diagonal, bottom row.
             for k in 0..2 {
                 let t = (e.time * 0.45 + k as f32 * 0.5).fract();
-                // Whole device pixels keep the little squares crisp.
                 let q = ((1.5 + t * 0.5) * s).round().max(1.0);
                 let (x, y) = ((cx + (30.0 + t * 12.0) * s).round(), (cy + (1.0 - t * 15.0) * s).round());
                 let zb = led(a * (1.0 - t))?;
@@ -1865,11 +1553,10 @@ impl Renderer {
         Ok(())
     }
 
-    /// Water drop icon `size` tall centred on (cx, cy): pointed top, round bottom.
     fn water_drop(&self, cx: f32, cy: f32, size: f32) -> Result<ID2D1PathGeometry> {
         let p = |x: f32, y: f32| Vector2 { X: cx + x * size, Y: cy + y * size };
         let r = 0.33;
-        let bottom = 0.5 - r; // centre of the round part
+        let bottom = 0.5 - r;
         let arc = |to: Vector2| D2D1_ARC_SEGMENT { point: to, size: D2D_SIZE_F { width: r * size, height: r * size }, rotationAngle: 0.0, sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE, arcSize: D2D1_ARC_SIZE_SMALL };
         unsafe {
             let geo = self.factory.CreatePathGeometry()?;
@@ -1886,10 +1573,6 @@ impl Renderer {
     }
 
 
-    /// Draw one frame and push it to `hwnd` placed at screen (x, y), window size (w, h) device px.
-    /// Returns true while an icon morph is still playing (the caller keeps frames coming).
-    /// Width (design px) a status banner needs to hold its title and body beside the icon, never
-    /// narrower than `BANNER_MIN_W` (the level bar of volume and brightness needs room).
     pub fn status_banner_width(&mut self, title: &str, body: &str, rows: &[Row], scale: f32) -> f32 {
         let Ok(fonts) = self.fonts(scale) else { return notch::alert_size(0)[0] };
         let line = |text: &str, font: usize| -> f32 {
@@ -1902,19 +1585,14 @@ impl Renderer {
                 }
             }
         };
-        // Left margin, icon and its gap, the text, the right margin.
-        // A line of a checklist has its dot (and the gap to its text) in front of the text.
-        // A device's line keeps room for its battery, which may arrive after the line does.
         let text = rows.iter().map(|r| line(&r.text, F_BODY) + ROW_DOT_W + if r.icon.is_some() { 58.0 } else { 0.0 }).fold(line(title, F_TITLE).max(line(body, F_BODY)), f32::max);
         (18.0 + 36.0 + 12.0 + text.ceil() + 22.0).clamp(BANNER_MIN_W, 420.0)
     }
 
-    /// Lines `text` wraps to in a notification banner (its body font and width, at `scale`).
     pub fn banner_lines(&mut self, text: &str, scale: f32, with_image: bool, choice: bool) -> u32 {
         let Ok(fonts) = self.fonts(scale) else { return 1 };
         let u: Vec<u16> = text.encode_utf16().collect();
         let mut m = DWRITE_TEXT_METRICS::default();
-        // A question with buttons is wider than a notification; its text has that room.
         let width = BANNER_TEXT_W + if choice { notch::alert_size_choice(1)[0] - notch::alert_size(1)[0] } else { 0.0 } - if with_image { BANNER_IMAGE_W + BANNER_IMAGE_GAP } else { 0.0 };
         unsafe {
             match self.dw.CreateTextLayout(&u, &fonts[F_BODY_WRAP], width * scale, 10_000.0) {
@@ -1924,9 +1602,6 @@ impl Renderer {
         }
     }
 
-    /// The big cover's shadow at `scale`: a dark rounded square COVER_SHADOW_PAD larger all round,
-    /// drawn COVER_SHADOW_SHRINK times smaller and stretched back in two linear steps, which blurs
-    /// it into one smooth falloff. Made once; drawn at twice its size.
     fn cover_shadow(&mut self, scale: f32) -> Option<ID2D1Bitmap> {
         if let Some((s, bmp)) = &self.cover_shadow {
             if *s == scale {
@@ -1955,13 +1630,9 @@ impl Renderer {
         Some(bmp)
     }
 
-    /// One frame. A failure other than the handled device loss (the GPU switching with the power
-    /// plan or battery saver, a driver reset) used to stop all drawing silently: it is logged, and
-    /// the device is made again so the next frame draws.
     pub fn present(&mut self, hwnd: HWND, x: i32, y: i32, w: i32, h: i32, scale: f32, v: &View) -> Result<bool> {
         match self.present_frame(hwnd, x, y, w, h, scale, v) {
             Err(e) => {
-                // Once a second at most: a GPU that stays gone must not make a device every frame.
                 static LAST_MS: AtomicU64 = AtomicU64::new(0);
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
                 if now.saturating_sub(LAST_MS.load(Ordering::Relaxed)) < 1000 {
@@ -1993,8 +1664,6 @@ impl Renderer {
         let dt = elapsed.min(0.1);
         let (tint, level, glow_busy) = glow_step(self.glow.0, self.glow.1, target, dt);
         self.glow = (tint, level, now);
-        // A new cover fades in over the old one for COVER_FADE_S, then the fade is dropped (and the old bitmaps with it).
-        // It plays while the Music page is open or while music is visible on the pill; a change seen elsewhere is not replayed later.
         let music_showing = (page == Some(Page::Music) && v.mode == Mode::Expanded)
             || (v.live && matches!(v.mode, Mode::Collapsed | Mode::Peek));
         if !music_showing {
@@ -2008,7 +1677,6 @@ impl Renderer {
         }
         let cover_fading = self.cover_fade.is_some();
         let cover_fade = self.cover_fade.as_ref().map(|f| (f.from.clone(), anim::cover_fade(f.t)));
-        // The equaliser rises when playing starts and settles flat when it stops, not in one frame.
         let bars_to = if v.music.is_some_and(|t| t.playing) { 1.0 } else { 0.0 };
         self.bars = anim::follow(self.bars, bars_to, dt, anim::BARS_RATE);
         let bars_busy = (bars_to - self.bars).abs() > 0.01;
@@ -2016,21 +1684,18 @@ impl Renderer {
             self.bars = bars_to;
         }
         let bars_level = self.bars;
-        // The banner's line icon (status / device) with its paths as geometry.
         let banner_line = (|| {
             let icon = if v.mode == Mode::Alert { v.banner?.icon.unwrap_or(ICON_BELL) } else { return None };
             let ic = icons::lookup(icon)?;
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();
-        // The weather's line icon with its paths as geometry (pill and Weather page).
         let weather_line = (|| {
             let n = v.weather.now?;
             let ic = icons::weather(n.sky, n.day);
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();
-        // Every third hour of the day ahead with its icon, while the Weather page shows.
         let hour_lines: Vec<_> = if page == Some(Page::Weather) {
             v.weather.hours.iter().step_by(3).filter_map(|h| {
                 let ic = icons::weather(h.sky, h.day);
@@ -2038,34 +1703,26 @@ impl Renderer {
                 Some((*h, ic, geoms))
             }).collect()
         } else { Vec::new() };
-        // The pill's battery icon (Lucide) with its paths as geometry.
-        // The Weather page's own icon, a sun behind a cloud (a bare sun reads as brightness or as the sun's path), for the page
-        // while there is no city or conditions yet (muted, like Tasks' ring) and for its place in the row of page icons.
         let weather_empty = (|| {
             let ic = icons::weather(weather::Sky::PartlyCloudy, true);
             let geoms = ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?;
             Some((ic, geoms))
         })();
-        // The Music page's player icons (shuffle, previous, next, repeat all, repeat one) with their paths as geometry.
         let player_icons: Vec<(&'static icons::Icon, Vec<ID2D1PathGeometry>)> = if page == Some(Page::Music) {
             [&icons::PLAYER_SHUFFLE, &icons::PLAYER_PREV, &icons::PLAYER_NEXT, &icons::PLAYER_REPEAT, &icons::PLAYER_REPEAT_ONE].into_iter()
                 .filter_map(|ic| Some((ic, ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?))).collect()
         } else { Vec::new() };
-        // The sun view's memory of the last frame is only kept while the view is open, so opening it later does not play a sunrise.
         if !(page == Some(Page::Weather) && v.sun_view) {
             self.sun_seen.set(None);
         }
-        // The moon of the Weather page's sun path, drawn at night.
         let moon_line = if page == Some(Page::Weather) && v.sun_view {
             let ic = icons::weather(weather::Sky::Clear, false);
             ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>().map(|geoms| (ic, geoms))
         } else { None };
-        // The Focus page's restart and next icons.
         let focus_icons: Vec<(&'static icons::Icon, Vec<ID2D1PathGeometry>)> = if page == Some(Page::Focus) || v.leaving.is_some_and(|(p, _, _)| p == Page::Focus) {
             [&icons::FOCUS_RESET, &icons::PLAYER_NEXT].into_iter()
                 .filter_map(|ic| Some((ic, ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?))).collect()
         } else { Vec::new() };
-        // Height of each wrapped lyric line, while the panel is wider than the player.
         let lyric_heights: Vec<f32> = match v.music {
             Some(t) if page == Some(Page::Music) && v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 && !t.lyrics.is_empty() =>
                 self.lyric_heights(&t.lyrics, LYRIC_W * scale, 20.0 * scale, &fonts),
@@ -2080,21 +1737,17 @@ impl Renderer {
                 self.lyric_motion.step(focus, phase, position, elapsed, if t.playing { t.rate } else { 0.0 })
             }
             _ => {
-                // Keep the measured layout cached, but do no lyric animation behind a closed page.
                 self.lyric_motion = lyrics::Motion::default();
                 false
             }
         };
-        // Also while the panel shows another page: the icons are then ready (and stay while the page slides out).
         let note_icons: Vec<Option<ID2D1Bitmap>> = if page.is_some() { v.notes.iter().map(|n| self.app_icon(&n.id)).collect() } else { Vec::new() };
-        // The picture a banner carries (a screenshot), loaded like an icon: the banner shows without it first.
         let banner_image: Option<ID2D1Bitmap> = v.banner.filter(|_| v.mode == Mode::Alert).and_then(|b| b.image.as_deref()).and_then(|p| self.app_icon(&format!("img:{p}")));
         let banner_app: Option<ID2D1Bitmap> = v.banner.filter(|b| v.mode == Mode::Alert && b.kind() == BannerKind::Notification)
             .and_then(|b| b.app_id.clone()).and_then(|id| self.banner_icon(&id));
         match v.mode {
             Mode::Expanded => self.owner = Owner::Panel,
             Mode::Alert => self.owner = Owner::Banner,
-            // Back to a resting pill (the size at which the panel's content has faded out).
             _ if v.size[1] <= 39.0 => self.owner = Owner::Pill,
             _ => {}
         }
@@ -2111,17 +1764,13 @@ impl Renderer {
                 rt.DrawText(&t, &fonts[f], &b, &self.brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
                 Ok(())
             };
-            // Cover art clipped to a rounded square, or a note glyph when there is none.
             let draw_cover = |box_: D2D_RECT_F, radius: f32, a: f32| -> Result<()> {
-                // The big cover gets a soft shadow all round, a little lower, so it stands off the glow.
                 if let (true, Some(shadow)) = (box_.right - box_.left > 40.0 * s, &cover_shadow) {
                     let (pad, drop) = (COVER_SHADOW_PAD * s, COVER_SHADOW_DROP * s);
                     let area = rect(box_.left - pad, box_.top + drop - pad, box_.right + pad, box_.bottom + drop + pad);
                     rt.DrawBitmap(shadow, Some(&area), COVER_SHADOW_ALPHA * a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
                 }
                 let big_box = box_.right - box_.left > 40.0 * s;
-                // The picture at `k` times its size about the box's centre, `a` opaque. At full size it is placed on whole
-                // pixels, 1:1 (made at exactly the drawn size), so it stays sharp.
                 let paint = |bmp: &ID2D1Bitmap, a: f32, k: f32| -> Result<()> {
                     let size = bmp.GetSize();
                     let (w, h) = (size.width * k, size.height * k);
@@ -2140,7 +1789,6 @@ impl Renderer {
                     Some((big, small)) => {
                         let bmp = if big_box { big } else { small };
                         match &cover_fade {
-                            // A new track: the old cover (or the note) stays at full strength, the new one fades and grows in on top.
                             Some((from, (fade, k))) => {
                                 match from {
                                     Some((old_big, old_small)) => {
@@ -2158,8 +1806,6 @@ impl Renderer {
                 }
                 Ok(())
             };
-            // A weather line icon at (x, y), `size` px square, `age` seconds into its motion. `tint` =
-            // (colour of the first path, colour of the rest); None draws it white.
             let draw_wx_icon = |ic: &icons::Icon, geoms: &[ID2D1PathGeometry], x: f32, y: f32, size: f32, tint: Option<((f32, f32, f32), (f32, f32, f32))>, a: f32, age: f32| -> Result<()> {
                 let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                 let view = scaling(size / ic.vb) * translate(x, y);
@@ -2177,7 +1823,6 @@ impl Renderer {
                 Ok(())
             };
             let center = DWRITE_TEXT_ALIGNMENT_CENTER;
-            // Width of a run in font `f` (caret placement, strike-through).
             let dw = &self.dw;
             let width = |t: &str, f: usize| -> f32 {
                 let u: Vec<u16> = t.encode_utf16().collect();
@@ -2188,8 +1833,6 @@ impl Renderer {
                 }
             };
 
-            // Icon in a named slot; when the glyph changes the old one shrinks away and the new one
-            // pops in past full size and settles (anim::ICON_MORPH_S).
             let morphing = std::cell::Cell::new(false);
             let micon = |slot: &'static str, icon: &'static str, f: usize, b: D2D_RECT_F, c: D2D1_COLOR_F| -> Result<()> {
                 let (prev, t) = {
@@ -2219,7 +1862,6 @@ impl Renderer {
             rt.BeginDraw();
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
-            // A floating pill is drawn lower in the window, on whole pixels so covers stay sharp.
             let gy = (self.style.gap_at(v.size[1]) * s).round();
             rt.SetTransform(&Matrix3x2::translation(0.0, gy));
             let ear = if self.style == notch::Style::Pill { 0.0 } else { notch::ear(v.size[1]) * s };
@@ -2227,11 +1869,7 @@ impl Renderer {
             let prep = Prep { weather_line: &weather_line, weather_empty: &weather_empty, hour_lines: &hour_lines, focus_icons: &focus_icons, player_icons: &player_icons,
                 note_icons: &note_icons, lyric_heights: &lyric_heights, lyric_tops: &lyric_tops, moon_line: &moon_line, tint, level, fonts: &fonts };
             let ctx = Ctx { v, s, l, r, cx, nh, gy, shape: &shape, text: &text, width: &width, micon: &micon, wx_icon: &draw_wx_icon, cover: &draw_cover };
-            // How far the pill has grown into the panel (0: pill, 1: open).
             let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
-            // A thin soft shadow under the open panel and the banners (the resting pill has none):
-            // faint black strokes of the outline, widest first, drawn a little lower; the fill
-            // covers the inside.
             if open > 0.0 {
                 let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                 rt.SetTransform(&(Matrix3x2::translation(0.0, SHADOW_DY * s) * base));
@@ -2241,10 +1879,6 @@ impl Renderer {
                 rt.SetTransform(&base);
             }
             rt.FillGeometry(&shape, &self.brush(grey(0.0, 1.0))?, None);
-            // Music page: the cover's colour rises from the bottom, black at the top. The pill stays
-            // black; the glow grows in with the panel.
-            // During a page change the glow follows the Music page's own fade, so it never shows
-            // under the Health or Tasks page it is replacing (or lingers under one arriving).
             let gate = match v.leaving {
                 Some((_, t, _)) if v.page == Page::Music => page_fades(t).1,
                 Some((Page::Music, t, _)) => page_fades(t).0,
@@ -2257,13 +1891,11 @@ impl Renderer {
                 let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
                 rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
             }
-            // Aurora over the glow: a thin glowing line in the cover's two colours, swaying slowly.
             let aurora_a = open * level * gate;
             if aurora_a > 0.01 && panel_ok {
                 self.draw_aurora(&shape, (l, r, nh), w, s, v.phase, aurora_a, panel_size(v.page)[1] * s);
             }
 
-            // Each layout fades in as the pill reaches its size.
             let fade = |from: f32, span: f32| ((nh - from * s) / (span * s)).clamp(0.0, 1.0);
             let small_a = 1.0 - fade(39.0, 20.0);
             if nh >= 20.0 * s && small_a > 0.0 && v.mode != Mode::Alert {
@@ -2271,8 +1903,6 @@ impl Renderer {
             }
 
             let mut icon_busy = false;
-            // A banner is one of three things, each drawn on its own: a status (an icon and its line), a
-            // notification (an app's message), an approval (a question with buttons and a countdown).
             if let (Mode::Alert, Some(t)) = (v.mode, v.banner) {
                 icon_busy = self.draw_banner(&ctx, t, &banner_line, &banner_image, &banner_app)?;
             }
@@ -2295,28 +1925,18 @@ impl Renderer {
             if self.grab {
                 self.grab_frame()?;
             }
-            // No wait for the refresh: the frame pacing (vsync thread) already asks once per refresh.
             let shown = self.surface.as_ref().unwrap().swap.Present(0, DXGI_PRESENT(0));
             if shown == DXGI_ERROR_DEVICE_REMOVED || shown == DXGI_ERROR_DEVICE_RESET {
                 self.lose_device()?;
                 return Ok(true);
             }
             shown.ok()?;
-            // The mouse belongs to the drawn shape: the pill or panel, its ears, and the shadow under it.
             let reach = if open > 0.0 { (SHADOW_STEPS as f32 * SHADOW_STEP + SHADOW_DY) * s } else { 0.0 };
-            // While the row of page icons is open its cells take clicks at once, though the panel is still
-            // growing down to them: the region reaches their bottom from the first frame.
             let nh_hit = if nav_open() && v.mode == Mode::Expanded { nh.max((panel_size(v.page)[1] + NAV_EXTRA) * s) } else { nh };
             let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((gy + nh_hit + reach).ceil() as i32).min(h));
             self.place(hwnd, (x, y, w, h), region);
-            // Poll the media clock between lines; the spring requests vsync until it settles,
-            // including after pausing in the middle of a transition.
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
             self.slow_frames = lyrics_run;
-            // Icon completion posts WM_ICONS; waiting for I/O never keeps animation alive.
-            // The Weather page's icon moves for a moment when the panel or the page opens.
-            // The Weather page's icon moves for a moment when the panel or the page opens; the sun path keeps the frames
-            // coming while it is open (the halo of the sun, or of the moon at night, breathes and blinks).
             let sun_moving = v.sun_view && v.weather.sun.is_some();
             let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && (v.page_age < anim::ICON_MOTION_S || sun_moving);
             Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving || cover_fading)
@@ -2352,7 +1972,6 @@ mod tests {
     fn the_focus_page_buttons_do_not_overlap_and_the_whole_strip_is_hittable() {
         let (cx, scale) = (300.0, 1.0);
         let list = page_buttons(cx, scale, Page::Focus, 0, 0, None, false);
-        // 3 chips, 3 controls, 8 segments.
         assert_eq!(list.iter().filter(|(b, _)| matches!(b, Button::FocusMode(_) | Button::FocusPlay | Button::FocusReset | Button::FocusSkip | Button::FocusSeg(_))).count(), 3 + 3 + 8);
         let overlap = |a: &D2D_RECT_F, b: &D2D_RECT_F| a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
         let ones: Vec<_> = list.iter().filter(|(b, _)| matches!(b, Button::FocusMode(_) | Button::FocusPlay | Button::FocusReset | Button::FocusSkip)).collect();
@@ -2366,7 +1985,6 @@ mod tests {
             let (x, y) = mid(b);
             assert_eq!(hit_button(cx, scale, x, y, None, Page::Focus, 0, 0, None, false), Some(b));
         }
-        // The strip's segments are as long as their minutes: the long break (15) is 3x a short one (5).
         let segs = focus_segments(392.0);
         assert!(((segs[7].1 - segs[7].0) / (segs[1].1 - segs[1].0) - 3.0).abs() < 0.01);
         assert!((segs[7].1 - 392.0).abs() < 0.01, "the strip fills the width");
@@ -2388,17 +2006,14 @@ mod tests {
                 banner_age: 2.0, lyrics: false, hovered: None, page: Page::Health, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
-            // Bright pixels below the pill's own 40 rows: the page's cards and text would put some there.
             let lit = |r: &Renderer| r.grabbed.chunks(4).enumerate().filter(|(i, p)| (i / w as usize) >= 40 && p[3] > 0 && (p[0] > 40 || p[1] > 40 || p[2] > 40)).count();
             for _ in 0..3 {
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(Mode::Alert, Some(&toast))).unwrap();
             }
-            // The banner ended: the pill is still 139 tall on its way down, as the approval banner's shrink is.
             for _ in 0..3 {
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(Mode::Collapsed, None)).unwrap();
             }
             assert_eq!(lit(&renderer), 0, "the page showed while the banner shrank");
-            // A panel that opens afterwards does show its page.
             for _ in 0..3 {
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(Mode::Expanded, None)).unwrap();
             }
@@ -2436,7 +2051,6 @@ mod tests {
                 focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
             let cells = nav_cells(450.0, 1.0, ph);
             let (from, to) = (cells.iter().find(|(p, _)| *p == Page::Music).unwrap().1, cells.iter().find(|(p, _)| *p == Page::Todo).unwrap().1);
-            // The gap between the two cells: dark when the square rests on either, lit when it is passing through.
             let (gx, gy) = (((from.right + to.left) / 2.0) as usize, ((from.top + from.bottom) / 2.0) as usize);
             let lit_in_gap = |t: Option<f32>| {
                 let mut renderer = Renderer::new().unwrap();
@@ -2484,9 +2098,7 @@ mod tests {
                 renderer.grabbed.clone()
             };
             let (with, without) = (state(Some(202611050813)), state(None));
-            // Row open: the credit is not drawn, so the frame is the same with or without a fetch time to credit.
             assert!(frame(true, &with) == frame(true, &without), "the credit text lies under the page icons");
-            // Row closed: it is drawn (the frames differ).
             assert!(frame(false, &with) != frame(false, &without), "the credit shows when the row is closed");
             set_nav_open(false);
             DestroyWindow(hwnd).unwrap();
@@ -2511,13 +2123,11 @@ mod tests {
                 leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: true, cal: Default::default(),
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: $minute, settings: None } } }; }
-            // How many pixels in the arc's area are blue (the lit path).
             let blue = |r: &Renderer| r.grabbed.chunks(4).enumerate().filter(|(i, p)| {
                 let (x, y) = (i % w as usize, i / w as usize);
                 (88..140).contains(&y) && (330..620).contains(&x) && p[3] > 0 && p[0] > p[2] / 2 + 60 && p[0] > 120 && p[1] < p[0]
             }).count();
             let present = |r: &mut Renderer, minute: u32| { for _ in 0..3 { r.present(hwnd, 0, 0, w, h, 1.0, &view!(minute)).unwrap(); } };
-            // Watched through the sunset: the blue path is still drawn (on its way to grey) in the first frames after it.
             let mut watched = Renderer::new().unwrap();
             watched.grab = true;
             present(&mut watched, 1000);
@@ -2525,7 +2135,6 @@ mod tests {
             present(&mut watched, 1100);
             let just_set = blue(&watched);
             drop(watched);
-            // Opened after dark: the path is grey from the start.
             let mut late = Renderer::new().unwrap();
             late.grab = true;
             present(&mut late, 1100);
@@ -2572,7 +2181,6 @@ mod tests {
         renderer.set_page_open(false);
         assert!(renderer.banner_icon("PuwNotch.BannerIconTest").is_none(), "nothing until the loader answers");
         assert!(renderer.icon_loader.pending.contains("now:PuwNotch.BannerIconTest"));
-        // The loader treats it as asked for now: not deferred like a page's icon.
         let loader = IconLoader::start();
         loader.ask.send("now:PuwNotch.BannerIconTest".into()).unwrap();
         let result = loader.got.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
@@ -2655,11 +2263,9 @@ mod tests {
         assert_eq!(glow_tint(&px(0, 0, 100, 255, 4)), (1.0, 0.0, 0.0), "dark red -> full red");
         assert_eq!(glow_tint(&px(0, 50, 100, 255, 4)), (1.0, 0.5, 0.0), "orange keeps its mix");
         assert_eq!(glow_tint(&px(0, 0, 50, 100, 4)), (1.0, 0.0, 0.0), "premultiplied alpha is undone");
-        // Mostly grey with a little vivid blue: the blue wins, not a grey-blue average.
         let mixed = [px(120, 120, 120, 255, 200), px(255, 40, 0, 255, 5)].concat();
         let (r, _, b) = glow_tint(&mixed);
         assert!(b == 1.0 && r < 0.3, "blue, got r={r} b={b}");
-        // Red beats the blue when there is more of it.
         let two = [px(255, 0, 0, 255, 2), px(0, 0, 255, 255, 6)].concat();
         assert_eq!(glow_tint(&two), (1.0, 0.0, 0.0));
         for dull in [px(10, 10, 10, 255, 256), px(128, 128, 128, 255, 256), px(255, 255, 255, 255, 256), px(0, 0, 0, 0, 256), Vec::new()] {
@@ -2698,15 +2304,12 @@ mod tests {
 
     #[test]
     fn cover_shadow_ends_above_the_page_clip() {
-        // The shadow reaches PAD past the dropped cover; pages are cut at dots_y - 3.
         let bottom = COVER_TOP + COVER + COVER_SHADOW_DROP + COVER_SHADOW_PAD;
         assert!(bottom <= dots_y(186.0) - 3.0, "shadow ends at {bottom}, clipped at {}", dots_y(186.0) - 3.0);
     }
 
     #[test]
     fn lyrics_fit_inside_the_page_clip() {
-        // Right edge of the lyrics box, from the panel's left: past the controls, the divider gaps
-        // and the column. A last letter's ink may run a few px further and must not be clipped.
         let right = target(Mode::Expanded, false)[0] - SIDE + 2.0 * LYRIC_GAP + LYRIC_W;
         assert!(right + 4.0 <= panel_w(true) - LYRIC_CLIP, "{right} vs {}", panel_w(true) - LYRIC_CLIP);
     }
@@ -2741,18 +2344,14 @@ mod tests {
     #[test]
     fn glow_step_fades_in_slides_between_covers_and_settles() {
         let (red, blue) = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0));
-        // From nothing: takes the colour at once, fades the strength in.
         let (c, l, busy) = glow_step(GLOW_NEUTRAL, 0.0, Some(red), 0.016);
         assert_eq!(c, red);
         assert!(l > 0.0 && l < 0.3 && busy);
-        // Reaches the end and stops asking for frames.
         let (mut c, mut l, mut busy) = (red, l, true);
         for _ in 0..120 { (c, l, busy) = glow_step(c, l, Some(red), 0.016); }
         assert_eq!((c, l, busy), (red, 1.0, false));
-        // A new cover while lit: the colour slides, it does not jump.
         let (c2, l2, busy2) = glow_step(red, 1.0, Some(blue), 0.016);
         assert!(busy2 && l2 == 1.0 && c2.0 < 1.0 && c2.0 > 0.8 && c2.2 > 0.0 && c2.2 < 0.2, "{c2:?}");
-        // No cover: fades out, keeps the colour, then stops.
         let (c3, l3, busy3) = glow_step(red, 1.0, None, 0.016);
         assert!(c3 == red && l3 < 1.0 && l3 > 0.8 && busy3);
         let (mut l, mut busy) = (1.0, true);
@@ -2779,7 +2378,6 @@ mod tests {
             track.art = Some(std::sync::Arc::new(bmp));
             assert!(renderer.cover(&track, 120, 20).is_some(), "late cover data must invalidate the cached empty image");
             assert!(renderer.cover_fade.as_ref().is_some_and(|f| f.from.is_none()), "late art fades in over the note");
-            // The same picture made again at another size is not a new cover: no fade.
             assert!(renderer.cover(&track, 140, 20).is_some());
             assert!(renderer.cover_fade.is_none());
             assert!(renderer.cover(&track, 120, 20).is_some());
@@ -2805,20 +2403,17 @@ mod tests {
             assert_eq!(hit_button(cx, scale, mid(lyr).0, mid(lyr).1, Some(&track), Page::Music, 0, 0, None, false), Some(Button::Lyrics));
             assert_eq!(hit_button(cx, scale, px, py, None, Page::Music, 0, 0, None, false), None);
             assert!(buttons(cx, scale, false).iter().all(|(_, r)| r.bottom <= dots_y(186.0) * scale));
-            // Controls live in the right column: right of the cover, left of the side arrow, no overlaps.
             let left = cx - 240.0 * scale;
             let cover_right = left + (SIDE + COVER) * scale;
             for r in [shuffle, prev, play, next, repeat, seek, lyr] {
                 assert!(r.left > cover_right && r.right <= left + (480.0 - SIDE) * scale, "{r:?}");
             }
             assert!(shuffle.right <= prev.left && prev.right <= play.left && play.right <= next.left && next.right <= repeat.left && repeat.right <= lyr.left, "buttons must not overlap");
-            // Shuffle and repeat answer only when the player can do them.
             assert_eq!(hit_button(cx, scale, mid(shuffle).0, mid(shuffle).1, Some(&track), Page::Music, 0, 0, None, false), None);
             let both = Track { can_shuffle: true, can_repeat: true, ..track.clone() };
             assert_eq!(hit_button(cx, scale, mid(shuffle).0, mid(shuffle).1, Some(&both), Page::Music, 0, 0, None, false), Some(Button::Shuffle));
             assert_eq!(hit_button(cx, scale, mid(repeat).0, mid(repeat).1, Some(&both), Page::Music, 0, 0, None, false), Some(Button::Repeat));
             assert!(seek.bottom <= prev.top.min(play.top).min(lyr.top), "bar above the buttons");
-            // The lyrics button works only when the song has lyrics.
             let bare = Track { lyrics: Arc::new(Vec::new()), ..track.clone() };
             assert_eq!(hit_button(cx, scale, mid(lyr).0, mid(lyr).1, Some(&bare), Page::Music, 0, 0, None, false), None);
         }
@@ -2831,7 +2426,6 @@ mod tests {
         assert!(NOTE_Y + NOTE_H * NOTE_ROWS as f32 <= dots_y(ph) - 3.0, "the rows end inside the pages' clip");
         for scale in [1.0, 1.5] {
             let cx = 265.0 * scale;
-            // The left column starts one SIDE in from the panel's left edge (it is 480 wide).
             let (x, y) = (cx + (-240.0 + SIDE + CLEAR_W / 2.0) * scale, (CLEAR_Y + CLEAR_H / 2.0) * scale);
             assert_eq!(hit_button(cx, scale, x, y, None, Page::Notify, 2, 0, None, false), Some(Button::NotesClear));
             assert_eq!(hit_button(cx, scale, x, y, None, Page::Notify, 0, 0, None, false), None, "nothing to clear: no button");
@@ -2843,18 +2437,16 @@ mod tests {
         let track = Track { duration_ms: 120_000, can_seek: true, can_toggle: true, can_previous: true, can_next: true,
             lyrics: Arc::new(vec![(0, "la la".into())]), ..Default::default() };
         for scale in [1.0, 1.5] {
-            let cx = 400.0 * scale; // the panel stays centred on the same point
+            let cx = 400.0 * scale;
             let (narrow, wide) = (buttons(cx, scale, false), buttons(cx, scale, true));
             let shift = LYRICS_EXTRA_W / 2.0 * scale;
             for ((b, n), (_, w)) in narrow.iter().zip(wide.iter()) {
                 assert!((n.left - shift - w.left).abs() < 0.01 && (n.right - shift - w.right).abs() < 0.01 && n.top == w.top, "{b:?}: moves left by half the extra width");
             }
-            // Clicks follow it.
             let (_, play) = wide[2];
             let (px, py) = ((play.left + play.right) / 2.0, (play.top + play.bottom) / 2.0);
             assert_eq!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, true), Some(Button::PlayPause));
             assert_ne!(hit_button(cx, scale, px, py, Some(&track), Page::Music, 0, 0, None, false), Some(Button::PlayPause), "the old place is no longer the button");
-            // The page arrows are gone while the lyrics are open, and back when they close.
             let has_arrows = |wide| page_buttons(cx, scale, Page::Music, 0, 0, None, wide).iter().any(|(b, _)| matches!(b, Button::PagePrev | Button::PageNext));
             assert!(!has_arrows(true));
             assert!(has_arrows(false));
@@ -2870,7 +2462,6 @@ mod tests {
             let (w, h) = (820, 210);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Lyrics preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let lines = [
-                // Made-up lines about the feature itself (no song's lyrics in the README pictures).
                 (0, "Lời mẫu cho ảnh xem trước"), (6_000, "Lời lấy từ LRCLIB và chạy theo đúng thời gian của bài đang phát trên máy"),
                 (12_000, "Dòng đang hát sáng lên ở giữa"), (18_000, "Dòng dài tự xuống dòng cho vừa khung lời bên phải, không bị cắt mất chữ"),
                 (24_000, "Bấm nút lời để mở hoặc đóng khung này"), (30_000, "Tua bài thì lời nhảy theo"),
@@ -2879,7 +2470,6 @@ mod tests {
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 14_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true,
                 lyrics: Arc::new(lines.iter().map(|(t, s)| (*t as u64, s.to_string())).collect()),
-                // A cover image for the glow and the cover slot: PUW_PREVIEW_COVER=path.
                 art: std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new), art_key: 1, ..Default::default() };
             let mut size = target(Mode::Expanded, false);
             size[0] += LYRICS_EXTRA_W;
@@ -2890,7 +2480,6 @@ mod tests {
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
-            // The cover loads and the glow fades in over a second or two.
             let frames = std::env::var("PUW_PREVIEW_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(120);
             for _ in 0..(if track.art.is_some() { frames } else { 1 }) {
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
@@ -2930,7 +2519,6 @@ mod tests {
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             let mut renderer = Renderer::new().unwrap();
-            // Let the cover decode and the glow reach its steady strength.
             for _ in 0..400 {
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
             }
@@ -2967,7 +2555,6 @@ mod tests {
                 item("Khám răng", false, Some(stamp(20261030, 9, 0))),
                 item("Gọi cho khách hàng", true, None),
             ];
-            // (tasks, counts, typed text)
             let frames: Vec<(Vec<Item>, (usize, usize), &str)> = vec![(vec![], (0, 0), ""), (tasks.clone(), (3, 1), ""), (tasks, (3, 1), "Họp 20:00 mai")];
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
@@ -3011,11 +2598,9 @@ mod tests {
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
-            // (mode, music?, page, state, typed text)
             let frames: Vec<(Mode, bool, Page, State, &str, weather::Unit)> = vec![
                 (Mode::Collapsed, false, Page::Music, state(Sky::Clear, true, 31.0), "", weather::Unit::F),
                 (Mode::Expanded, false, Page::Weather, state(Sky::Cloudy, true, 28.0), "", weather::Unit::F),
-                // Conditions fetched over 90 minutes ago: dimmed and marked "old".
                 (Mode::Expanded, false, Page::Weather, State { updated: Some(202610290020), ..state(Sky::Rain, true, 26.0) }, "", weather::Unit::C),
                 (Mode::Collapsed, false, Page::Music, state(Sky::PartlyCloudy, true, 29.0), "", weather::Unit::C),
                 (Mode::Collapsed, true, Page::Music, state(Sky::Rain, true, 26.0), "", weather::Unit::C),
@@ -3023,7 +2608,6 @@ mod tests {
                 (Mode::Expanded, false, Page::Weather, state(Sky::Clear, false, 24.0), "", weather::Unit::C),
                 (Mode::Expanded, false, Page::Weather, State::default(), "Đà Nẵ", weather::Unit::C),
                 (Mode::Expanded, false, Page::Weather, State { not_found: Some("Xyz".into()), ..State::default() }, "", weather::Unit::C),
-                // The other skies, for the icons.
                 (Mode::Expanded, false, Page::Weather, state(Sky::PartlyCloudy, true, 30.0), "", weather::Unit::C),
                 (Mode::Expanded, false, Page::Weather, state(Sky::PartlyCloudy, false, 25.0), "", weather::Unit::C),
                 (Mode::Expanded, false, Page::Weather, state(Sky::Cloudy, true, 28.0), "", weather::Unit::C),
@@ -3122,7 +2706,6 @@ mod tests {
                 list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                 focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
-            // The banner icon morphs from the previous banner's; picture it settled.
             std::thread::sleep(std::time::Duration::from_secs_f32(anim::ICON_MORPH_S + 0.05));
             renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
             sheet.extend_from_slice(&renderer.grabbed[..]);
@@ -3159,7 +2742,6 @@ mod tests {
                     phase: t, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Music, leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 0.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
-                // The first frame waits for the cover and the fade-in.
                 for _ in 0..(if i == 0 { 80 } else { 1 }) {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -3187,7 +2769,6 @@ mod tests {
             let scale = 2.0;
             let (w, h) = ((crate::notch::MAX_W * scale) as i32, (crate::notch::MAX_H * scale) as i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Frame time"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
-            // Playing, with a lyric line every 0.4 s so the lyrics keep moving while timed.
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true, art_key: 1, at: Some(Instant::now()),
                 lyrics: Arc::new((0..600).map(|k| (k * 400, format!("Dòng lời mẫu số {k} chạy theo bài đang phát"))).collect()),
@@ -3204,7 +2785,6 @@ mod tests {
                     phase, banner_age: 0.0, lyrics, hovered: None, page, leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 5.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: &idle_focus, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
-                // Settle first: the cover loads and the Music page's glow fades in.
                 for i in 0..120 {
                     renderer.present(hwnd, 0, 0, w, h, scale, &view(i as f32 / 60.0)).unwrap();
                     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -3242,8 +2822,6 @@ mod tests {
         let first = cells[0].1;
         assert_eq!(first.top, dots_y(ph), "they open where the dots are");
         assert_eq!(first.bottom - first.top, 22.0);
-        // The dots rest 7 px above the panel's bottom (ph - (dots_y + 5)); the opened panel leaves 5 px under the cells
-        // (7 was too thick to the eye: the glyph is 16 px in a 22 px cell).
         assert_eq!(ph - (dots_y(ph) + 5.0), 7.0);
         assert_eq!(ph + NAV_EXTRA - first.bottom, 5.0);
     }
@@ -3256,14 +2834,12 @@ mod tests {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (900, 340);
-            // PUW_README_LANG=en draws the English set (into target/readme-en) with English sample content.
             let english = std::env::var("PUW_README_LANG").is_ok_and(|v| v == "en");
             crate::i18n::set_english(english);
             let tl = |vi: &'static str, en: &'static str| if english { en } else { vi };
             let en_date = |d: &'static str| if english { match d { "T7, 24/10" => "Sat, 24/10", "T2, 26/10" => "Mon, 26/10", "T5, 29/10" => "Thu, 29/10", d => d } } else { d };
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("README shots"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let lines = [
-                // Made-up lines about the feature itself (no song's lyrics in the README pictures).
                 (0, tl("Lời mẫu cho ảnh xem trước", "Sample lyrics for the preview")),
                 (6_000, tl("Lời lấy từ LRCLIB và chạy theo đúng thời gian của bài đang phát trên máy", "Lyrics come from LRCLIB and follow the song playing on this PC")),
                 (12_000, tl("Dòng đang hát sáng lên ở giữa", "The line being sung lights up in the middle")),
@@ -3271,7 +2847,6 @@ mod tests {
                 (24_000, tl("Bấm nút lời để mở hoặc đóng khung này", "Press the lyrics button to open or close this panel")),
                 (30_000, tl("Tua bài thì lời nhảy theo", "Seek the song and the lyrics jump along")),
             ];
-            // A cover image for the glow and the cover slot: PUW_PREVIEW_COVER=path.
             let art = std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new);
             let song = |position_ms| Track { title: tl("Bài hát mẫu", "Sample song").into(), artist: tl("Nghệ sĩ mẫu", "Sample artist").into(), duration_ms: 210_000, position_ms, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true, can_shuffle: true, can_repeat: true,
@@ -3281,25 +2856,19 @@ mod tests {
             let place = Some(Place { name: tl("Đà Nẵng", "Da Nang").into(), lat: 16.0, lon: 108.0 });
             let sky = |sky, temp: f32| State { place: place.clone(), now: Some(Now { temp, feels: temp + 3.0, humidity: 82.0, wind: 11.0, sky, day: true }), updated: Some(202610290140), ..State::default() };
             let (none, partly, rain) = (State::default(), sky(Sky::PartlyCloudy, 29.0), sky(Sky::Rain, 26.0));
-            // With the next 24 hours: a shower late in the afternoon, so the outlook line has rain.
             let hours: Vec<weather::Hour> = (0..24).map(|i| {
                 let hour = ((2 + i) % 24) as u8;
                 let rain = match hour { 16 => 40, 17 => 70, _ => 0 };
                 weather::Hour { hour, temp: if (6..18).contains(&hour) { 26.0 + (hour.min(13) - 6) as f32 } else { 25.0 }, rain, wind: 12.0, sky: if rain >= 50 { Sky::Rain } else { Sky::PartlyCloudy }, day: (6..18).contains(&hour) }
             }).collect();
             let partly_30 = State { hours, ..sky(Sky::PartlyCloudy, 30.0) };
-            // The sun's path on a day with sunrise at 05:42 and sunset at 17:48 (the clock of the pictures reads 14:00).
             let sunny = State { sun: Some(weather::Sun { rise: 342, set: 1068 }), ..partly_30.clone() };
-            // The same day when the sun has set (the pictures' clock reads 14:00): sunrise 04:30, sunset 13:15.
             let night = State { sun: Some(weather::Sun { rise: 270, set: 795 }), ..partly_30.clone() };
-            // The third focus round, 7 min 18 s in.
             let running_focus = Focus::demo(4, std::time::Duration::from_secs(7 * 60 + 18));
             let mut health = Health::default();
-            // A mid-afternoon day: 750 ml of 2000 so far, 42 minutes at the desk.
             (health.water_on, health.sit_on, health.taken_ml, health.water_mark, health.sitting_since) = (true, true, 750, Some(999_970), Some(999_958));
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
             let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
-            // (file, mode, music, page, lyrics open, weather, battery, time, date)
             let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 18] = [
                 ("page-nav", Mode::Expanded, Some(&playing), Page::Music, false, &none, charging(70), "23:16", "T7, 24/10"),
                 ("pill-idle", Mode::Collapsed, None, Page::Music, false, &none, charging(76), "20:50", ""),
@@ -3333,21 +2902,17 @@ mod tests {
                 if lyrics {
                     size[0] += LYRICS_EXTRA_W;
                 }
-                // The mouse on the page dots: they open into a row of page icons (the panel grows by NAV_EXTRA), one under the mouse.
                 let nav = name == "page-nav";
                 set_nav_open(nav);
                 if nav {
                     size[1] += NAV_EXTRA;
                 }
-                // The idle robot: plain eyes looking around below, and the cheer for a full battery.
                 let eyes = |face, gaze: (f32, f32)| Some(Eyes { face, alpha: 1.0, gaze, curious: 0.0, open: 1.0, time: 0.4 });
                 let robot = match name { "robot" => eyes(Face::Normal, (0.5, 0.9)), "robot-happy" => eyes(Face::Happy, (0.0, 0.0)), _ => None };
                 let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: nav.then_some(Button::GoPage(Page::Todo)), page,
                     leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C, cal: crate::calendar::CalView { year: 2026, month: 11, sel: 7, today: (2026, 11, 7), zone: name.starts_with("page-calendar").then_some(7.0), lunar_on: name == "page-calendar-lunar" }, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: if name.ends_with("-focus") { &running_focus } else { &Focus::default() }, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
-                // A fresh renderer per picture, run for a second and a half: the cover decodes, the
-                // glow and the equaliser reach their resting strength.
                 let mut renderer = Renderer::new().unwrap();
                 renderer.grab = true;
                 for _ in 0..90 {
@@ -3363,7 +2928,6 @@ mod tests {
                 bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(pixels);
                 std::fs::write(dir.join(format!("{name}.bmp")), bytes).unwrap();
             }
-            // The newer pictures: the floating pill, the Limits page and the approval banners.
             {
                 use crate::usage::{Bar, Snapshot};
                 let now = crate::usage::now_secs();
@@ -3379,11 +2943,9 @@ mod tests {
                     image: None, open: None, badge: None, choices: choices.iter().map(|c| c.to_string()).collect(), app_id: None, rows: Vec::new() };
                 let claude_ask = toast("Claude", tl("Duyệt lệnh", "Approve command"), tl("Cho phép chạy công cụ get_architecture của codebase-memory-mcp cho project này (chỉ đọc)?", "Allow the get_architecture tool of codebase-memory-mcp to run for this project (read only)?"),
                     if english { &["Allow", "Deny", "In the app"] } else { &["Đồng ý", "Không đồng ý", "Trong app"] });
-                // powershell's own icon (the shell's AppsFolder knows it by this id) stands in the banner.
                 let notification = Toast { app: "powershell".into(), title: tl("Anh Minh", "Alex").into(), body: tl("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop.").into(),
                     level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(),
                     app_id: Some(r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe".into()), rows: Vec::new() };
-                // The reminders of the Health page: a status banner each (icon, title, a bar of today's water or a second line).
                 let status = |app: &str, title: &str, body: &str, level: Option<f32>, icon: &'static str| Toast { app: app.into(), title: title.into(), body: body.into(), level,
                     icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() };
                 let water = status(tl("Uống nước", "Water"), tl("Đến giờ uống 250 ml nước", "Time to drink 250 ml"), "", Some(0.375), ICON_DROP);
@@ -3391,7 +2953,6 @@ mod tests {
                 let stand = status(tl("Đứng dậy đi lại", "Stand up and move"), tl("Bạn đã ngồi 45 phút liền", "You have been sitting for 45 min"),
                     tl("Vận động vài phút nhé", "Walk around for a few minutes"), None, ICON_WALK);
                 let antigravity_ask = toast("Antigravity", tl("Cho phép mcp", "Allow mcp"), "codebase-memory-mcp/get_architecture", if english { &["Allow", "Deny"] } else { &["Đồng ý", "Không"] });
-                // The Tasks and Notifications pages with made-up entries.
                 let item = |text: &str, done: bool, at: Option<u64>| crate::todo::Item { text: text.into(), done: done.then_some(20261029), at, told_soon: false, told_now: false };
                 let stamp = crate::todo::stamp;
                 let tasks = vec![
@@ -3403,7 +2964,6 @@ mod tests {
                 let notes = vec![note("ScreenSketch", "Screenshot copied to clipboard", "Automatically saved to screenshots folder.", 202610291557),
                     note("Zalo", tl("Anh Minh", "Alex"), tl("Tối nay 8h họp nhóm nhé", "Team call at 8 tonight"), 202610291402), note("DolbySettings", "Headphones (UGREEN HiTune Max5c)", "", 202610290207),
                     note("Outlook", tl("Lịch họp tuần", "Weekly planning"), tl("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610281730)];
-                // The network banners: the list of steps (Wi-Fi on), airplane mode off partway and on, two Bluetooth devices.
                 let now = Instant::now();
                 let net = |title: &str, icon: &'static str, rows: Vec<Row>| Toast { app: "Network".into(), title: title.into(), body: String::new(), level: None, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows };
                 let device = |name: &str, kind, battery: &str| Row { text: name.into(), at: now, icon: Some(device_icon(kind)), value: Some(battery.into()), low: false, state: RowState::Done, key: None };
@@ -3412,7 +2972,6 @@ mod tests {
                     Row::step(tl("Kết nối mạng", "Network connection").into(), RowState::Wait, now), Row::step("VPN".into(), RowState::Todo, now)]);
                 let air_on = net(tl("Chế độ máy bay Bật", "Airplane mode On"), ICON_AIRPLANE, vec![Row::line(tl("VPN tắt", "VPN off").into(), now), Row::line(tl("Bluetooth tắt", "Bluetooth off").into(), now), Row::line(tl("Wi-Fi tắt", "Wi-Fi off").into(), now)]);
                 let bluetooth = net(tl("2 thiết bị Bluetooth", "2 Bluetooth devices"), ICON_BT, vec![device("UGREEN HiTune Max5c", crate::connectivity::DeviceKind::Headphones, "80%"), device(tl("Chuột không dây", "Wireless mouse"), crate::connectivity::DeviceKind::Mouse, "56%")]);
-                // (file, style, mode, music, page, Limits tab, banner)
                 let extra: [(&str, notch::Style, Mode, Option<&Track>, Page, usize, Option<&Toast>); 18] = [
                     ("banner", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&notification)),
                     ("banner-water", notch::Style::Ears, Mode::Alert, None, Page::Music, 0, Some(&water)),
@@ -3569,10 +3128,6 @@ mod tests {
         crate::i18n::set_english(false);
     }
 
-    /// The promo's notch, 30 s at 30 fps and 2x, driven by the app's own state machine and painter
-    /// in real time (the painter's own motion runs on the clock): the pill grows, music starts, the
-    /// mouse opens the panel and clicks through the five pages, a notification banner drops in, then
-    /// the idle robot. Premultiplied BGRA, 960 x 420, piped into ffmpeg as PNG frames in a .mov.
     fn promo_layer(english: bool) {
         use crate::notch::Notch;
         use crate::robot::{Mood, Robot};
@@ -3598,7 +3153,6 @@ mod tests {
         let item = |text: String, at: Option<u64>| Item { text, done: None, at, told_soon: false, told_now: false };
         let todos = vec![item(t("Gửi báo cáo tuần", "Send the weekly report"), Some(stamp(20261029, 9, 0))), item(t("Uống thuốc", "Take vitamins"), Some(stamp(20261029, 10, 15))),
             item(t("Họp nhóm dự án", "Project sync"), Some(stamp(20261029, 20, 0))), item(t("Khám răng", "Dentist"), Some(stamp(20261030, 9, 0)))];
-        // Ids Windows has no icon for: each row gets its app's coloured initial, the same on every PC.
         let note = |app: &str, title: String, body: String, at: u64| Note { id: format!("promo.{app}"), app: app.into(), title, body, at, open: None };
         let notes = [note("Zalo", t("Anh Minh", "Alex"), t("Tối nay 8h họp nhóm nhé", "Team call at 8 tonight"), 202610290938),
             note("Outlook", t("Lịch họp tuần", "Weekly planning"), t("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610290910),

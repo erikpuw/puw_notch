@@ -1,5 +1,3 @@
-//! The panel's pages: each one drawn by its own file, shifted and faded while the page changes (the old one slides out, the new one in).
-
 use super::*;
 
 impl Renderer {
@@ -16,7 +14,6 @@ impl Renderer {
         let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
         let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
         unsafe {
-            // Page content sits between the side arrows.
             let (cl, cr) = (l + SIDE * s, r - SIDE * s);
             let lv = &v.list;
             let rows_of = |page: Page| match page {
@@ -28,7 +25,6 @@ impl Renderer {
             let minutes = todo::minutes;
             let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
 
-            // One page, shifted by `dx` and faded by `pa` (the page switch morph).
             let draw_page = |page: Page, dx: f32, pa: f32| -> Result<()> {
                 let a = a * pa;
                 if a <= 0.01 {
@@ -40,8 +36,6 @@ impl Renderer {
                 let hovered = if current { v.hovered } else { None };
                 let btns = page_buttons(cx, s, page, rows_of(page), scroll, settings, v.lyrics);
                 let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
-                // A soft disc behind an icon-only button under the mouse: the colour change alone
-                // does not say "this can be clicked".
                 let hover_disc = |b: Button| -> Result<()> {
                     if let (true, Some(r)) = (hovered == Some(b), rect_of(b)) {
                         let point = Vector2 { X: (r.left + r.right) / 2.0, Y: (r.top + r.bottom) / 2.0 };
@@ -51,7 +45,6 @@ impl Renderer {
                 };
                 rt.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: dx, M32: gy });
 
-                // Add / edit box shared by the list pages.
                 let draw_input = |placeholder: &str| -> Result<()> {
                     let Some(ib) = rect_of(Button::ListInput) else { return Ok(()) };
                     let editing = current && lv.editing;
@@ -70,7 +63,6 @@ impl Renderer {
                     let icon_box = rect(ib.left + 8.0 * s, ib.top, ib.left + 26.0 * s, ib.bottom);
                     text(ICON_ADD, F_SMALL_ICON, icon_box, center, grey(0.6, a))?;
                     let draft = if current { lv.draft } else { "" };
-                    // The x that wipes the text, while there is some (the "Editing" tag has the room otherwise).
                     let clear = !draft.is_empty() && edit_row.is_none();
                     if clear {
                         if let Some(cb) = rect_of(Button::ListClear) {
@@ -82,7 +74,6 @@ impl Renderer {
                     if draft.is_empty() && !editing {
                         text(placeholder, F_BODY, tb, lead, grey(0.55, a))?;
                     } else {
-                        // Long drafts keep their end in view.
                         let tw = width(draft, F_BODY);
                         let room = tb.right - tb.left - 4.0 * s;
                         text(draft, F_BODY, tb, if tw > room { trail } else { lead }, grey(1.0, a))?;
@@ -94,8 +85,6 @@ impl Renderer {
                     }
                     Ok(())
                 };
-                // Edit / delete on every list row, so they are there without a pointer to hover
-                // with (touch, pen); lit while the row is hovered or being edited.
                 let row_tools = |i: usize, lit: bool| -> Result<()> {
                     let rest = if lit { 0.65 } else { 0.4 };
                     let edit_hot = hovered == Some(Button::ListEdit(i)) || (current && lv.edit_item == Some(i));
@@ -114,7 +103,6 @@ impl Renderer {
                     matches!(hovered, Some(Button::ListToggle(j)) | Some(Button::ListEdit(j)) | Some(Button::ListDelete(j)) if j == i)
                         || (current && lv.edit_item == Some(i))
                 };
-                // Scroll position of `n` rows shown `rows` at a time from `y0`, `row_h` apart.
                 let scrollbar = |n: usize, rows: usize, y0: f32, row_h: f32| -> Result<()> {
                     if n > rows {
                         let (top, bottom) = (y0 * s, (y0 + row_h * rows as f32) * s);
@@ -126,7 +114,6 @@ impl Renderer {
                     }
                     Ok(())
                 };
-                // Time label coloured by how close it is: orange within the early reminder, red when past.
                 let time_color = |due: u64, quiet: bool| {
                     let left = minutes(due) - minutes(lv.now);
                     if quiet { grey(0.4, a) } else if left <= 0 { color(1.0, 0.35, 0.3, a) }
@@ -147,7 +134,6 @@ impl Renderer {
                 Ok(())
             };
 
-            // Pages slide inside the space between the arrows.
             let ph = panel_size(v.page)[1];
             let clip_r = if v.size[0] > notch::target(Mode::Expanded, false)[0] + 1.0 { LYRIC_CLIP } else { PAGE_CLIP };
             rt.PushAxisAlignedClip(&rect(l + PAGE_CLIP * s, 30.0 * s, r - clip_r * s, (dots_y(ph) - 3.0) * s), D2D1_ANTIALIAS_MODE_ALIASED);

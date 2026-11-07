@@ -1,6 +1,3 @@
-//! The Calendar page: the day picked, big, with its weekday on the left (and the Solar | Lunar choice where the
-//! region keeps a lunar calendar); the month on the right, weeks from Monday.
-
 use super::*;
 use crate::calendar::{self as cal, CalView};
 
@@ -21,10 +18,8 @@ impl Renderer {
         let center = DWRITE_TEXT_ALIGNMENT_CENTER;
         let english = crate::i18n::english();
         let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
-        // The lunar numbers show only where the region has them and they are chosen.
         let zone = c.zone.filter(|_| c.lunar_on);
         unsafe {
-            // Left column: the day picked, its weekday, the other calendar's date, the choice.
             let sel = c.sel.max(1);
             let big = zone.map_or(sel, |z| cal::lunar(c.year, c.month, sel, z).day);
             let total = CAL_LEFT_H + if c.zone.is_some() { CAL_SWITCH_H } else { 0.0 };
@@ -53,7 +48,6 @@ impl Renderer {
                 }
             }
 
-            // Right column: the month's title between its two arrows, the weekday heads, the days.
             let gx = cl + CAL_GRID_X * s;
             let head = rect(gx + CAL_COL_W * s, CAL_TITLE_Y * s, gx + 6.0 * CAL_COL_W * s, (CAL_TITLE_Y + 20.0) * s);
             let title = match zone {
@@ -81,7 +75,6 @@ impl Renderer {
                 let (col, row) = ((i % 7) as f32, (i / 7) as f32);
                 let cell = rect(gx + col * CAL_COL_W * s, (CAL_ROW0 + row * CAL_ROW_H) * s, gx + (col + 1.0) * CAL_COL_W * s, (CAL_ROW0 + (row + 1.0) * CAL_ROW_H) * s);
                 let l = zone.map(|z| cal::lunar(c.year, c.month, day, z));
-                // A new lunar month says which one it is ("1/10"); every other day is its number.
                 let label = match l {
                     Some(l) if l.day == 1 => format!("1/{}", l.month),
                     Some(l) => l.day.to_string(),
@@ -100,8 +93,6 @@ impl Renderer {
                 } else if hovered == Some(Button::CalCell(i)) {
                     rt.FillRoundedRectangle(&rounded(chip, CAL_CHIP_H * s / 2.0), &self.brush(grey(0.14, a))?);
                 }
-                // Today is dark on its green disc; the first day of a lunar month ("1/10") is yellow, so it stands out where a
-                // bolder weight at 14 px would not.
                 let ink = if today { color(0.02, 0.13, 0.04, a) } else if l.is_some_and(|l| l.day == 1) { color(YELLOW.0, YELLOW.1, YELLOW.2, a) } else { grey(1.0, a) };
                 text(&label, if today { F_CLOCK_BOLD } else { font }, cell, center, ink)?;
             }
