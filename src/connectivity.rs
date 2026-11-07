@@ -22,7 +22,9 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 /// Posted when events are queued; read them with `take_events`.
 pub const WM_CONN: u32 = WM_APP + 6;
-const POLL: Duration = Duration::from_secs(30);
+/// The watcher looks this often when nothing wakes it (Windows tells most changes, but a radio that was
+/// re-created after airplane mode may stop telling, so this is the safety net).
+const POLL: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum RadioType {
@@ -312,43 +314,73 @@ pub fn watch(hwnd: HWND) {
             }
         }
         let mut quick = 0;
-        let mut radio_off_at: Option<Instant> = None;
-        let mut bt_on_at: Option<Instant> = None;
-        let mut limited_since: Option<Instant> = None;
+        let mut pump = Pump::default();
+        let mut devices_at = Instant::now();
         loop {
-            if wait(if quick > 0 { QUICK } else { POLL }) {
-                quick = QUICK_POLLS;
-            } else {
-                quick = quick.saturating_sub(1);
+            let nudged = wait(if quick > 0 { QUICK } else { POLL });
+            quick = if nudged { QUICK_POLLS } else { quick.saturating_sub(1) };
+            // The radios, the airplane switch, the network and the VPN are cheap to read and are told first. The
+            // devices (a lookup of each one's battery, seconds while Bluetooth is coming up) are read after, so a slow
+            // one never holds back what was already known.
+            let mut now = Snapshot { radios: radios(), airplane: airplane(), net: Net::Offline, vpn: false, devices: last.devices.clone() };
+            let profiles = profiles();
+            (now.net, now.vpn) = (net_of(&profiles), vpn_of(&profiles));
+            let bt_off = now.airplane || now.radios.get(&RadioType::Bluetooth) == Some(&false);
+            if bt_off {
+                now.devices.clear();
             }
-            let mut now = snapshot(&mut kinds);
-            let settled = settle(now.net.clone(), &last.net, &mut limited_since, Instant::now());
-            if settled != now.net {
-                // Look again soon: the limited network will be told, or turn out online.
+            if pump.step(&mut last, now, target) {
                 quick = quick.max(2);
             }
-            now.net = settled;
-            let mut events = changes(&last, &now);
-            last = now;
-            if events.iter().any(|e| matches!(e, Event::Radio(RadioType::Bluetooth, true) | Event::Airplane(false))) {
-                bt_on_at = Some(Instant::now());
+            if !bt_off && (nudged || quick > 0 || devices_at.elapsed() >= DEVICES_EVERY) {
+                devices_at = Instant::now();
+                let mut now = last.clone();
+                now.devices = devices(&mut kinds);
+                pump.step(&mut last, now, target);
             }
-            drop_knock_on(&mut events, radio_off_at.is_some_and(|t| t.elapsed() < KNOCK_ON), bt_on_at.is_some_and(|t| t.elapsed() < DEVICE_SETTLE));
-            if events.iter().any(|e| matches!(e, Event::Radio(_, false))) {
-                radio_off_at = Some(Instant::now());
-            }
-            if let Ok(mut known) = KNOWN.lock() {
-                remember(&mut known, &events);
-            }
-            if events.is_empty() {
-                continue;
-            }
+        }
+    });
+}
+
+/// How often the devices are read when nothing woke the watcher: each costs lookups of its battery.
+const DEVICES_EVERY: Duration = Duration::from_secs(30);
+
+/// What the watcher remembers between two looks: when a radio went off and when Bluetooth came on (the
+/// knock-on noise that follows is left out), and since when the network has been limited.
+#[derive(Default)]
+struct Pump {
+    radio_off_at: Option<Instant>,
+    bt_on_at: Option<Instant>,
+    limited_since: Option<Instant>,
+}
+
+impl Pump {
+    /// Tells what changed from `last` to `now` (and `last` becomes `now`): the events are queued and the window
+    /// woken. True when a limited network is being waited on, so the next look should come soon.
+    fn step(&mut self, last: &mut Snapshot, mut now: Snapshot, target: isize) -> bool {
+        let settled = settle(now.net.clone(), &last.net, &mut self.limited_since, Instant::now());
+        let waiting = settled != now.net;
+        now.net = settled;
+        let mut events = changes(last, &now);
+        *last = now;
+        if events.iter().any(|e| matches!(e, Event::Radio(RadioType::Bluetooth, true) | Event::Airplane(false))) {
+            self.bt_on_at = Some(Instant::now());
+        }
+        drop_knock_on(&mut events, self.radio_off_at.is_some_and(|t| t.elapsed() < KNOCK_ON), self.bt_on_at.is_some_and(|t| t.elapsed() < DEVICE_SETTLE));
+        if events.iter().any(|e| matches!(e, Event::Radio(_, false))) {
+            self.radio_off_at = Some(Instant::now());
+        }
+        if let Ok(mut known) = KNOWN.lock() {
+            remember(&mut known, &events);
+        }
+        if !events.is_empty() {
             if let Ok(mut q) = EVENTS.lock() {
                 q.extend(events);
             }
             unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_CONN, WPARAM(0), LPARAM(0)); }
         }
-    });
+        waiting
+    }
 }
 
 fn snapshot(kinds: &mut BTreeMap<String, DeviceKind>) -> Snapshot {
@@ -585,6 +617,22 @@ mod tests {
         let mut e = vec![down.clone()];
         drop_knock_on(&mut e, false, false);
         assert_eq!(e, vec![down]);
+    }
+
+    #[test]
+    fn a_radio_is_told_before_the_devices_are_read() {
+        // The first look carries the radios and the network only (the devices as they were), the second the devices:
+        // a slow device lookup does not hold back that Wi-Fi went off.
+        let mut last = snap(true, true, false, home(), &[("h", "UGREEN", Headphones)]);
+        let mut pump = Pump::default();
+        EVENTS.lock().unwrap().clear();
+        let first = Snapshot { radios: [(RadioType::Wifi, false), (RadioType::Bluetooth, true)].into_iter().collect(), net: Net::Offline, ..last.clone() };
+        pump.step(&mut last, first, 0);
+        assert_eq!(*EVENTS.lock().unwrap(), vec![Event::Radio(RadioType::Wifi, false)]);
+        EVENTS.lock().unwrap().clear();
+        let second = Snapshot { devices: Default::default(), ..last.clone() };
+        pump.step(&mut last, second, 0);
+        assert_eq!(take_events(), vec![Event::Device { name: "UGREEN".into(), kind: Headphones, up: false, battery: None }]);
     }
 
     #[test]
