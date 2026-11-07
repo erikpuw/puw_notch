@@ -300,7 +300,6 @@ pub fn watch(hwnd: HWND) {
             if nudged {
                 coalesce();
             }
-            let fast_started = Instant::now();
             let switch = airplane();
             if switch != last.airplane {
                 let early = Snapshot { airplane: switch, ..last.clone() };
@@ -318,7 +317,6 @@ pub fn watch(hwnd: HWND) {
             if pump.step(&mut last, now, target) {
                 quick = quick.max(2);
             }
-            let fast_ms = fast_started.elapsed().as_millis();
             let due = devices_at.elapsed();
             let dirty = DEVICES_DIRTY.load(std::sync::atomic::Ordering::Relaxed);
             if !bt_off && (due >= DEVICES_EVERY || (due >= DEVICES_MIN && dirty)) {
@@ -326,13 +324,7 @@ pub fn watch(hwnd: HWND) {
                 devices_at = Instant::now();
                 let mut now = last.clone();
                 now.devices = devices(&mut kinds);
-                let devices_ms = devices_at.elapsed().as_millis();
-                if devices_ms >= 40 || fast_ms >= 40 {
-                    crate::system::log(&format!("watcher: radios, airplane and network {fast_ms} ms, {} devices read in {devices_ms} ms", now.devices.len()));
-                }
                 pump.step(&mut last, now, target);
-            } else if fast_ms >= 40 {
-                crate::system::log(&format!("watcher: radios, airplane and network {fast_ms} ms"));
             }
         }
     });
@@ -471,28 +463,11 @@ fn devices(kinds: &mut BTreeMap<String, DeviceKind>) -> BTreeMap<String, (String
                 let (major, minor) = class_of(&id);
                 device_kind(major, minor, &name)
             });
-            let battery = cached_battery(&id, || container_of(&d).and_then(battery_of));
+            let battery = container_of(&d).and_then(battery_of);
             out.insert(id, (name, kind, battery));
         }
     }
     out
-}
-
-static BATTERIES: Mutex<BTreeMap<String, (Instant, Option<u8>)>> = Mutex::new(BTreeMap::new());
-const BATTERY_KEPT: Duration = Duration::from_secs(10);
-const BATTERY_MISSING_KEPT: Duration = Duration::from_millis(1500);
-
-fn cached_battery(id: &str, read: impl FnOnce() -> Option<u8>) -> Option<u8> {
-    if let Some(&(at, value)) = BATTERIES.lock().ok().and_then(|m| m.get(id).copied()).as_ref() {
-        if at.elapsed() < if value.is_some() { BATTERY_KEPT } else { BATTERY_MISSING_KEPT } {
-            return value;
-        }
-    }
-    let value = read();
-    if let Ok(mut m) = BATTERIES.lock() {
-        m.insert(id.to_string(), (Instant::now(), value));
-    }
-    value
 }
 
 const CONTAINER_KEY: &str = "System.Devices.Aep.ContainerId";
