@@ -58,12 +58,11 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 
 ## Tác vụ nền trực tiếp
 
-Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặc định tắt, lựa chọn được lưu). Việc quét chạy trên luồng nền, không chặn luồng vẽ.
+Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặc định tắt). Mỗi lần hiện một tác vụ, ưu tiên Explorer, rồi tải file, rồi build; còn tác vụ khác thì tiêu đề có thêm **+N**.
 
-- **Explorer:** đọc cửa sổ tiến trình sao chép, di chuyển, xóa và giải nén. Banner có tên thao tác, phần trăm (đọc từ tiêu đề cửa sổ) và thanh tiến trình. Không bắt được thao tác quá nhanh, không mở cửa sổ tiến trình, hoặc công cụ quản lý file khác.
-- **Tải file:** theo dõi file tạm `.crdownload`, `.part`, `.opdownload` trong thư mục Downloads do Windows cấu hình và thư mục tải riêng của Edge, Chrome, Brave (mọi profile). Banner ghi tên file, MB đã tải và MB/s. Chromium đặt tên tạm "Chưa xác nhận 12345" thì tên thật đọc từ lịch sử tải của trình duyệt (chỉ đọc; InPrivate không có lịch sử nên chỉ hiện "Đang tải xuống"). Tải xong banner chuyển thành "Tải xuống hoàn tất" với dấu tích xanh trong 5 giây, bấm vào để mở thư mục với file đã chọn sẵn. Không có phần trăm vì file tạm không cho biết tổng dung lượng. Chưa hỗ trợ Firefox hay trình duyệt hỏi nơi lưu từng file.
-- **Build:** cargo, msbuild, dotnet, make, cmake, ninja, go chạy từ terminal. Kết thúc báo hoàn tất (dấu tích xanh) hoặc thất bại (dấu ✕ đỏ) theo mã thoát, nếu notch mở được tiến trình đó; không thì chỉ có "Đã kết thúc".
-- **Hiển thị:** mỗi lần một tác vụ, ưu tiên Explorer, rồi tải file, rồi build. Còn tác vụ khác thì tiêu đề có thêm **+N**; tác vụ bị che vẫn được theo dõi và báo khi xong. Banner nhường thông báo khác và câu hỏi duyệt.
+- **Explorer:** sao chép, di chuyển, xóa và giải nén, kèm phần trăm và thanh tiến trình. Không bắt được thao tác quá nhanh hoặc không có cửa sổ tiến trình.
+- **Tải file:** thư mục Downloads của Windows và thư mục tải của Edge, Chrome, Brave. Hiện tên file, MB đã tải và MB/s; tải xong bấm banner để mở thư mục. Không có phần trăm, chưa hỗ trợ Firefox.
+- **Build:** cargo, msbuild, dotnet, make, cmake, ninja, go chạy từ terminal. Kết thúc báo dấu tích xanh hoặc dấu ✕ đỏ theo mã thoát.
 
 ## Ảnh chụp
 

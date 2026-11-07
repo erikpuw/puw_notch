@@ -58,12 +58,11 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 ## Live tasks
 
-Turn on in **tray → More features → Live tasks** (off by default, the choice is saved). The scan runs on a background thread and never blocks drawing.
+Turn on in **tray → More features → Live tasks** (off by default). One task shows at a time, Explorer first, then downloads, then builds; with more running, the title gets a **+N**.
 
-- **Explorer:** reads the progress window for copying, moving, deleting and extracting. The banner shows the operation, the percent (read from the window's title) and a progress bar. It cannot catch an operation that is too quick, one with no progress window, or another file manager.
-- **Downloads:** watches the temporary files `.crdownload`, `.part` and `.opdownload` in the Downloads folder Windows is set to and in the own download folders of Edge, Chrome and Brave (every profile). The banner shows the file name, the MB downloaded and MB/s. When Chromium uses a temporary name like "Unconfirmed 12345", the real name is read from the browser's download history (read only; InPrivate keeps no history, so it only says "Downloading"). When it finishes the banner turns into "Download complete" with a green tick for 5 s, and a click opens the folder with the file selected. There is no percent, since a temporary file does not say the total size. Firefox and browsers that ask where to save each file are not supported yet.
-- **Builds:** cargo, msbuild, dotnet, make, cmake, ninja and go run from a terminal. The end says complete (green tick) or failed (red ✕) by the exit code, when the notch can open the process; otherwise it only says "Ended".
-- **Display:** one task at a time, Explorer first, then downloads, then builds. With more tasks running, the title gets a **+N**; a task out of sight is still followed and reported when done. The banner gives way to other notifications and to approval questions.
+- **Explorer:** copying, moving, deleting and extracting, with the percent and a progress bar. It cannot catch an operation that is too quick or has no progress window.
+- **Downloads:** the Downloads folder Windows is set to and the download folders of Edge, Chrome and Brave. Shows the file name, MB downloaded and MB/s; when it finishes, click the banner to open the folder. No percent, and Firefox is not supported yet.
+- **Builds:** cargo, msbuild, dotnet, make, cmake, ninja and go run from a terminal. The end shows a green tick or a red ✕ by the exit code.
 
 ## Screenshots
 
