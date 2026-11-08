@@ -42,7 +42,7 @@ A page hidden in the tray stops completely.
 | **Focus** | Pomodoro: the whole cycle (4 rounds of 25 min, breaks of 5 and 15) on one strip. When a segment ends a banner says so and the next one starts by itself. |
 | **Notifications** | The ~30 latest Windows notifications, click to open the app. "Clear all" only hides them in the notch. |
 | **Health** | Water and stand-up reminders, a round button to log them, settings under ⚙. |
-| **Weather** | Type a city once: temperature, the next 5 slots, humidity, wind, °C \| °F. The sun button switches to the sun's path. Open-Meteo data. |
+| **Weather** | Type a city once: temperature, the next 5 slots on a curve with the chance of rain, feels like, humidity, wind, °C \| °F. The sun button switches to the sun's path. Open-Meteo data. |
 | **Calendar** | One month, weeks from Monday, the picked day large on the left. No holidays. On a PC set to Vietnam, China, Hong Kong, Macao, Taiwan or Korea, a **Solar \| Lunar** choice shows the lunar calendar. |
 | **Limits** | 5-hour and weekly limits of Claude, Codex and Antigravity, a tab per app, only for the apps on the PC. A banner warns at 80 % and 95 %. |
 
@@ -71,7 +71,7 @@ Turn on in **tray → More features → Live tasks** (off by default). One task 
 
 ![Quick page picker](assets/screenshots/en/page-nav.png)<br>**Quick page picker**: put the mouse on the page dots and they open into a row of icons, click one to jump straight to that page
 
-| ![Weather](assets/screenshots/en/page-weather.png)<br>**Weather**: large icon, temperature, the next 5 slots, °C / °F buttons | ![The sun's path by day](assets/screenshots/en/page-weather-sun.png)<br>**By day**: a blue arc from sunrise to sunset, the sun standing at the time now | ![The sun's path by night](assets/screenshots/en/page-weather-night.png)<br>**By night**: a crescent moon walks the arc from sunset to sunrise |
+| ![Weather](assets/screenshots/en/page-weather.png)<br>**Weather**: large icon, temperature, a curve over the next 5 slots with the chance of rain, a blue dot at the current hour, °C / °F buttons | ![The sun's path by day](assets/screenshots/en/page-weather-sun.png)<br>**By day**: a blue arc from sunrise to sunset, the sun standing at the time now | ![The sun's path by night](assets/screenshots/en/page-weather-night.png)<br>**By night**: a crescent moon walks the arc from sunset to sunrise |
 |---|---|---|
 
 | ![Calendar](assets/screenshots/en/page-calendar.png)<br>**Calendar**: the day large, weeks from Monday, ‹ › change the month | ![Lunar calendar](assets/screenshots/en/page-calendar-lunar.png)<br>**Lunar**: the Solar \| Lunar choice swaps the grid's numbers (only where the region has one) |

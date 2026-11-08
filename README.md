@@ -42,7 +42,7 @@ Trang ẩn ở tray thì ngừng hẳn.
 | **Tập trung** | Pomodoro: cả chu kỳ (4 vòng 25 phút, nghỉ 5 và 15) trên một thanh. Hết đoạn thì banner báo và đoạn kế tự chạy. |
 | **Thông báo** | ~30 thông báo Windows gần nhất, bấm để mở app. "Xóa hết" chỉ ẩn trong notch. |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy, nút tròn để ghi nhận, chỉnh ở ⚙. |
-| **Thời tiết** | Gõ tên thành phố một lần: nhiệt độ, 5 mốc giờ tới, độ ẩm, gió, °C \| °F. Nút mặt trời đổi sang đường đi của mặt trời. Dữ liệu Open-Meteo. |
+| **Thời tiết** | Gõ tên thành phố một lần: nhiệt độ, 5 mốc giờ tới trên một đường cong kèm khả năng mưa, cảm giác, độ ẩm, gió, °C \| °F. Nút mặt trời đổi sang đường đi của mặt trời. Dữ liệu Open-Meteo. |
 | **Lịch** | Một tháng, tuần từ thứ Hai, ngày chọn hiện lớn bên trái. Không có ngày lễ. Ở máy đặt vùng Việt Nam, Trung Quốc, Hồng Kông, Ma Cao, Đài Loan hoặc Hàn Quốc có nút **Dương \| Âm** để xem âm lịch. |
 | **Giới hạn** | Hạn mức 5 giờ và tuần của Claude, Codex, Antigravity, mỗi app một tab, chỉ hiện app có trên máy. Banner báo khi qua 80% và 95%. |
 
@@ -71,7 +71,7 @@ Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặ
 
 ![Chọn trang nhanh](assets/screenshots/page-nav.png)<br>**Chọn trang nhanh**: rê chuột vào chấm trang, chấm mở thành hàng biểu tượng, bấm một biểu tượng để sang thẳng trang đó
 
-| ![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, 5 mốc giờ tới, nút °C / °F | ![Đường đi của mặt trời ban ngày](assets/screenshots/page-weather-sun.png)<br>**Ban ngày**: cung xanh từ lúc mọc đến lặn, mặt trời đứng đúng giờ hiện tại | ![Đường đi của mặt trời ban đêm](assets/screenshots/page-weather-night.png)<br>**Ban đêm**: trăng khuyết đi dọc cung từ lúc lặn đến lúc mọc |
+| ![Thời tiết](assets/screenshots/page-weather.png)<br>**Thời tiết**: icon lớn, nhiệt độ, đường cong 5 mốc giờ tới kèm khả năng mưa, chấm xanh ở giờ hiện tại, nút °C / °F | ![Đường đi của mặt trời ban ngày](assets/screenshots/page-weather-sun.png)<br>**Ban ngày**: cung xanh từ lúc mọc đến lặn, mặt trời đứng đúng giờ hiện tại | ![Đường đi của mặt trời ban đêm](assets/screenshots/page-weather-night.png)<br>**Ban đêm**: trăng khuyết đi dọc cung từ lúc lặn đến lúc mọc |
 |---|---|---|
 
 | ![Lịch](assets/screenshots/page-calendar.png)<br>**Lịch**: ngày lớn, tuần từ thứ Hai, ‹ › đổi tháng | ![Lịch âm](assets/screenshots/page-calendar-lunar.png)<br>**Âm lịch**: nút Dương \| Âm đổi số trên lưới (chỉ ở vùng có âm lịch) |
