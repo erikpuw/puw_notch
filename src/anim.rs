@@ -27,11 +27,15 @@ pub fn curve_label(age: f32, i: usize) -> f32 {
 }
 
 pub fn ping(age: f32) -> Option<(f32, f32)> {
+    ping_every(age, CURVE_PING_S)
+}
+
+pub fn ping_every(age: f32, period: f32) -> Option<(f32, f32)> {
     let t = age - CURVE_DRAW_S;
     if t < 0.0 {
         return None;
     }
-    let k = lerp_in(t % CURVE_PING_S, 0.0, CURVE_PING_S * 0.7);
+    let k = lerp_in(t % period, 0.0, CURVE_PING_S * 0.7);
     Some((ease_out(k), 0.55 * (1.0 - k)))
 }
 
@@ -170,6 +174,9 @@ mod tests {
         assert!(k0 == 0.0 && k1 > k0 && k1 <= 1.0 && a0 > a1, "spreads and fades");
         assert!(ping(CURVE_DRAW_S + CURVE_PING_S * 0.9).is_some_and(|(k, a)| k == 1.0 && a == 0.0), "gone before the next ping starts");
         assert!(CURVE_ENTRY_S >= CURVE_DRAW_S);
+        let lit = |period: f32| (0..1000).filter(|i| ping_every(CURVE_DRAW_S + *i as f32 * period / 1000.0, period).is_some_and(|(_, a)| a > 0.0)).count();
+        assert!(lit(3.0) < lit(CURVE_PING_S), "a longer period rests longer between pings");
+        assert_eq!(ping_every(CURVE_DRAW_S + 2.0, 3.0), Some((1.0, 0.0)), "at rest between two slow pings");
     }
 
     #[test]
