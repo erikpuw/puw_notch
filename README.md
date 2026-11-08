@@ -8,7 +8,7 @@
 
 <p align="center">
   Nhạc, việc, thông báo, thời tiết, lịch và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
-  Viết bằng Rust, exe ~895 KB, không WebView.
+  Viết bằng Rust, exe ~899 KB, không WebView.
 </p>
 
 <p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a></p>
