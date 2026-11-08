@@ -2887,7 +2887,7 @@ mod tests {
             let (none, partly, rain) = (State::default(), sky(Sky::PartlyCloudy, 29.0), sky(Sky::Rain, 26.0));
             let hours: Vec<weather::Hour> = (0..24).map(|i| {
                 let hour = ((2 + i) % 24) as u8;
-                let rain = match hour { 16 => 40, 17 => 70, _ => 0 };
+                let rain = match hour { 5 => 15, 11 => 25, 14 => 40, 16 => 40, 17 => 70, _ => 0 };
                 weather::Hour { hour, temp: if (6..18).contains(&hour) { 26.0 + (hour.min(13) - 6) as f32 } else { 25.0 }, rain, wind: 12.0, sky: if rain >= 50 { Sky::Rain } else { Sky::PartlyCloudy }, day: (6..18).contains(&hour) }
             }).collect();
             let partly_30 = State { hours, ..sky(Sky::PartlyCloudy, 30.0) };

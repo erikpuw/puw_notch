@@ -122,6 +122,10 @@ impl Sun {
     pub fn daylight_left(self, minute: u32) -> u32 {
         (self.set as u32).saturating_sub(minute)
     }
+
+    pub fn dark_left(self, minute: u32) -> u32 {
+        (self.rise as u32 + 1440).saturating_sub(minute) % 1440
+    }
 }
 
 pub fn parse_clock(stamp: &str) -> Option<u16> {
@@ -628,6 +632,7 @@ mod tests {
         assert_eq!(sun.pos(705), SunPos::Day(0.5));
         assert_eq!(sun.pos(1068), SunPos::Dusk);
         assert_eq!((sun.daylight_left(1000), sun.daylight_left(1068), sun.daylight_left(1300)), (68, 0, 0));
+        assert_eq!((sun.dark_left(0), sun.dark_left(100), sun.dark_left(1068), sun.dark_left(1300)), (342, 242, 714, 482), "minutes to the next sunrise, across midnight");
         assert_eq!(sun.night_progress(1068), 0.0);
         assert!((sun.night_progress(1068 + 357) - 0.5).abs() < 1e-6, "half way at the middle of the night (midnight is 372 min in)");
         assert!((sun.night_progress(341) - (1.0 - 1.0 / 714.0)).abs() < 1e-4, "a minute before sunrise it is nearly at the end");

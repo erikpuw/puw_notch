@@ -5,6 +5,7 @@ const ARC_H: f32 = 50.0;
 const SUN: (f32, f32, f32) = (1.0, 0.82, 0.3);
 const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
 const WALK_S: f32 = 1.4;
+const PING_REACH: f32 = 16.0;
 pub(super) const SWAP_STEP_S: f32 = 0.8;
 pub(super) const MOVING_S: f32 = WALK_S - anim::CURVE_DRAW_S + anim::CURVE_END_S;
 const ARC_STEPS: usize = 64;
@@ -63,9 +64,9 @@ impl Renderer {
             unsafe { rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: at.0, Y: at.1 }, radiusX: r, radiusY: r }, &self.brush(color(c.0, c.1, c.2, alpha))?) };
             Ok(())
         };
-        let halo = |at: (f32, f32), c: (f32, f32, f32), strength: f32| -> Result<()> {
+        let halo = |at: (f32, f32), c: (f32, f32, f32), inner: f32, strength: f32| -> Result<()> {
             match anim::ping(age - WALK_S + anim::CURVE_DRAW_S) {
-                Some((radius, alpha)) => disc(at, c, radius * s, alpha * strength),
+                Some((reach, alpha)) => disc(at, c, (inner + (PING_REACH - inner) * reach) * s, alpha * strength),
                 None => Ok(()),
             }
         };
@@ -91,7 +92,7 @@ impl Renderer {
                 Ok(())
             };
             let draw_sun = |at: (f32, f32), alpha: f32| -> Result<()> {
-                halo(at, SUN, alpha * a)?;
+                halo(at, SUN, 4.2, alpha * a)?;
                 disc(at, SUN, 4.2 * s, alpha * a)
             };
             let draw_moon = |t: f32, alpha: f32| -> Result<()> {
@@ -99,7 +100,7 @@ impl Renderer {
                     let size = 12.0 * s;
                     let at = pt(t);
                     disc(at, (0.0, 0.0, 0.0), 6.5 * s, alpha * a)?;
-                    halo(at, MOON, alpha * a * 0.8)?;
+                    halo(at, MOON, 6.5, alpha * a * 0.8)?;
                     wx_icon(ic, geoms, at.0 - size / 2.0, at.1 - size / 2.0, size, Some((MOON, MOON)), alpha * a, 9.0)?;
                 }
                 Ok(())
@@ -117,13 +118,13 @@ impl Renderer {
                     let left_min = sun.daylight_left(minute_of_day);
                     let words = match (left_min / 60, left_min % 60, crate::i18n::english()) {
                         (0, m, false) => format!("Nắng còn {m} phút"),
-                        (h, m, false) => format!("Nắng còn {h} giờ {m}"),
+                        (h, m, false) => format!("Nắng còn {h}:{m:02}"),
                         (0, m, true) => format!("{m} min of daylight left"),
-                        (h, m, true) => format!("{h} h {m} min of daylight left"),
+                        (h, m, true) => format!("{h}:{m:02} of daylight left"),
                     };
                     text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 20.0) * s, mid + 80.0 * s, BASELINE_Y * s), center, grey(0.7, a * sun_a))?;
                 }
-                pos => {
+                _ => {
                     let (blue_a, sun_a, moon_a) = swap.map_or((0.0, 0.0, ease_out(age / 0.6)), |secs| (1.0 - step(secs, 0.0), 1.0 - step(secs, 1.0), step(secs, 2.0)));
                     if blue_a > 0.0 {
                         lit_path(1.0, blue_a)?;
@@ -132,11 +133,12 @@ impl Renderer {
                         draw_sun(pt(1.0), sun_a)?;
                     }
                     draw_moon(sun.night_progress(minute_of_day) * ease_out(age / WALK_S), moon_a)?;
-                    let words = match (pos, crate::i18n::english()) {
-                        (weather::SunPos::Dawn, false) => format!("Mặt trời mọc lúc {}", health::hhmm(sun.rise as u32)),
-                        (weather::SunPos::Dawn, true) => format!("Sunrise at {}", health::hhmm(sun.rise as u32)),
-                        (_, false) => format!("Mặt trời lặn lúc {}", health::hhmm(sun.set as u32)),
-                        (_, true) => format!("Sunset was at {}", health::hhmm(sun.set as u32)),
+                    let dark_min = sun.dark_left(minute_of_day);
+                    let words = match (dark_min / 60, dark_min % 60, crate::i18n::english()) {
+                        (0, m, false) => format!("Mặt trời mọc sau {m} phút"),
+                        (h, m, false) => format!("Mặt trời mọc sau {h}:{m:02}"),
+                        (0, m, true) => format!("Sunrise in {m} min"),
+                        (h, m, true) => format!("Sunrise in {h}:{m:02}"),
                     };
                     text(&words, F_LABEL, rect(mid - 80.0 * s, (BASELINE_Y - 20.0) * s, mid + 80.0 * s, BASELINE_Y * s), center, grey(0.7, a * moon_a))?;
                 }

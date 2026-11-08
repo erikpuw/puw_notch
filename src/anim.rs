@@ -34,7 +34,7 @@ pub fn ping(age: f32) -> Option<(f32, f32)> {
         return None;
     }
     let k = lerp_in(t % CURVE_PING_S, 0.0, CURVE_PING_S * 0.7);
-    Some((3.0 + 5.0 * ease_out(k), 0.55 * (1.0 - k)))
+    Some((ease_out(k), 0.55 * (1.0 - k)))
 }
 
 pub fn now_column(first_hour: u8, hour_now: u32, columns: usize) -> Option<usize> {
@@ -165,10 +165,10 @@ mod tests {
         assert_eq!((curve_label(0.0, 0), curve_label(9.0, 4)), (0.0, 1.0));
         assert_eq!(ping(0.0), None, "no ping while the line is drawing");
         assert_eq!(ping(CURVE_END_S), None, "rests after the third");
-        let (r0, a0) = ping(CURVE_DRAW_S).unwrap();
-        let (r1, a1) = ping(CURVE_DRAW_S + CURVE_PING_S * 0.5).unwrap();
-        assert!(r0 == 3.0 && r1 > r0 && r1 <= 8.0 && a0 > a1, "grows and fades");
-        assert!(ping(CURVE_DRAW_S + CURVE_PING_S * 0.9).is_some_and(|(r, a)| r == 8.0 && a == 0.0), "gone before the next ping starts");
+        let (k0, a0) = ping(CURVE_DRAW_S).unwrap();
+        let (k1, a1) = ping(CURVE_DRAW_S + CURVE_PING_S * 0.5).unwrap();
+        assert!(k0 == 0.0 && k1 > k0 && k1 <= 1.0 && a0 > a1, "spreads and fades");
+        assert!(ping(CURVE_DRAW_S + CURVE_PING_S * 0.9).is_some_and(|(k, a)| k == 1.0 && a == 0.0), "gone before the next ping starts");
         assert!(CURVE_ENTRY_S >= CURVE_DRAW_S && CURVE_ENTRY_S < CURVE_END_S);
     }
 
