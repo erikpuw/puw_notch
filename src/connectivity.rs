@@ -221,6 +221,34 @@ fn wait(period: Duration) -> bool {
 }
 
 const COALESCE: Duration = Duration::from_millis(300);
+const STAGGER: Duration = Duration::from_millis(300);
+const AIRPLANE_HOLD: Duration = Duration::from_millis(550);
+const RADIO_SETTLE: Duration = Duration::from_millis(1000);
+
+fn pauses(events: &[Event], since_airplane_off: Option<Duration>, bluetooth_returns: bool) -> Vec<Duration> {
+    let mut slept = Duration::ZERO;
+    let mut first = true;
+    events
+        .iter()
+        .map(|e| {
+            let pause = match e {
+                Event::Airplane(false) if bluetooth_returns => AIRPLANE_HOLD,
+                Event::Airplane(_) | Event::Device { .. } | Event::DeviceBattery { .. } => Duration::ZERO,
+                _ => {
+                    if !std::mem::take(&mut first) {
+                        STAGGER
+                    } else if bluetooth_returns {
+                        since_airplane_off.map_or(Duration::ZERO, |s| RADIO_SETTLE.saturating_sub(s + slept))
+                    } else {
+                        Duration::ZERO
+                    }
+                }
+            };
+            slept += pause;
+            pause
+        })
+        .collect()
+}
 const DEVICES_MIN: Duration = Duration::from_millis(1500);
 
 fn coalesce() {
@@ -297,13 +325,13 @@ pub fn watch(hwnd: HWND) {
         let mut devices_at = Instant::now();
         loop {
             let nudged = wait(if quick > 0 { QUICK } else { POLL });
-            if nudged {
-                coalesce();
-            }
             let switch = airplane();
             if switch != last.airplane {
                 let early = Snapshot { airplane: switch, ..last.clone() };
                 pump.step(&mut last, early, target);
+            }
+            if nudged {
+                coalesce();
             }
             quick = if nudged { QUICK_POLLS } else { quick.saturating_sub(1) };
             let read = radios();
@@ -334,6 +362,8 @@ const DEVICES_EVERY: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct Pump {
+    bluetooth_before_airplane: bool,
+    airplane_off_at: Option<Instant>,
     radio_off_at: Option<Instant>,
     bt_on_at: Option<Instant>,
     limited_since: Option<Instant>,
@@ -345,6 +375,9 @@ impl Pump {
         let waiting = settled != now.net;
         now.net = settled;
         let mut events = changes(last, &now);
+        if events.iter().any(|e| matches!(e, Event::Airplane(true))) {
+            self.bluetooth_before_airplane = last.radios.get(&RadioType::Bluetooth) == Some(&true);
+        }
         *last = now;
         if events.iter().any(|e| matches!(e, Event::Radio(RadioType::Bluetooth, true) | Event::Airplane(false))) {
             self.bt_on_at = Some(Instant::now());
@@ -353,15 +386,24 @@ impl Pump {
         if events.iter().any(|e| matches!(e, Event::Radio(_, false))) {
             self.radio_off_at = Some(Instant::now());
         }
+        if events.iter().any(|e| matches!(e, Event::Airplane(false))) {
+            self.airplane_off_at = Some(Instant::now());
+        }
         if let Ok(mut known) = KNOWN.lock() {
             remember(&mut known, &events);
         }
         if !events.is_empty() {
             crate::system::log(&format!("connectivity: {events:?}"));
-            if let Ok(mut q) = EVENTS.lock() {
-                q.extend(events);
+            let pauses = pauses(&events, self.airplane_off_at.map(|t| t.elapsed()), self.bluetooth_before_airplane);
+            for (event, pause) in events.into_iter().zip(pauses) {
+                if !pause.is_zero() {
+                    std::thread::sleep(pause);
+                }
+                if let Ok(mut q) = EVENTS.lock() {
+                    q.push(event);
+                }
+                unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_CONN, WPARAM(0), LPARAM(0)); }
             }
-            unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_CONN, WPARAM(0), LPARAM(0)); }
         }
         waiting
     }
@@ -543,6 +585,32 @@ mod tests {
             changes(&a, &with_vpn(b)),
             vec![Event::Airplane(true), Event::Radio(RadioType::Wifi, false), Event::Radio(RadioType::Bluetooth, false), Event::Vpn(false)]
         );
+    }
+
+    #[test]
+    fn events_of_one_batch_come_one_after_the_other_but_devices_do_not_wait() {
+        let radios = [Event::Radio(RadioType::Wifi, true), Event::Radio(RadioType::Bluetooth, true)];
+        assert_eq!(pauses(&radios, None, false), [Duration::ZERO, STAGGER], "Wi-Fi first, Bluetooth a moment later");
+        let network = [Event::Net(home()), Event::Vpn(true)];
+        assert_eq!(pauses(&network, None, false), [Duration::ZERO, STAGGER]);
+        let device = |n: &str| Event::Device { name: n.into(), kind: Headphones, up: true, battery: None };
+        let mixed = [Event::Radio(RadioType::Bluetooth, true), device("a"), device("b")];
+        assert_eq!(pauses(&mixed, None, false), [Duration::ZERO, Duration::ZERO, Duration::ZERO]);
+        assert!(pauses(&[], None, false).is_empty() && pauses(&[Event::Vpn(true)], None, false) == [Duration::ZERO]);
+    }
+
+    #[test]
+    fn when_bluetooth_comes_back_with_the_airplane_the_system_gets_to_settle_first() {
+        let ms = Duration::from_millis;
+        assert_eq!(pauses(&[Event::Airplane(false)], Some(Duration::ZERO), true), [AIRPLANE_HOLD], "the airplane banner waits out the stall");
+        assert_eq!(pauses(&[Event::Airplane(false)], Some(Duration::ZERO), false), [Duration::ZERO], "no Bluetooth coming: no wait");
+        assert_eq!(pauses(&[Event::Airplane(true)], None, true), [Duration::ZERO], "turning airplane mode on is never held");
+        let radios = [Event::Radio(RadioType::Wifi, true), Event::Radio(RadioType::Bluetooth, true)];
+        assert_eq!(pauses(&radios, Some(ms(560)), true), [RADIO_SETTLE - ms(560), STAGGER], "told at 560 ms, shown at the settle mark");
+        assert_eq!(pauses(&radios, Some(ms(1500)), true), [Duration::ZERO, STAGGER], "after the mark nothing is held");
+        assert_eq!(pauses(&radios, Some(ms(340)), false), [Duration::ZERO, STAGGER], "no Bluetooth coming: Wi-Fi is not held");
+        let together = [Event::Airplane(false), Event::Radio(RadioType::Wifi, true), Event::Radio(RadioType::Bluetooth, true)];
+        assert_eq!(pauses(&together, Some(Duration::ZERO), true), [AIRPLANE_HOLD, RADIO_SETTLE - AIRPLANE_HOLD, STAGGER], "one clock for the whole batch");
     }
 
     #[test]
