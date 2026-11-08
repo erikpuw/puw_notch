@@ -5,7 +5,7 @@ const ARC_H: f32 = 50.0;
 const SUN: (f32, f32, f32) = (1.0, 0.82, 0.3);
 const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
 const WALK_S: f32 = 1.4;
-const PING_REACH: f32 = 12.0;
+const PING_REACH: f32 = 10.0;
 const PING_EVERY_S: f32 = 3.0;
 pub(super) const SWAP_STEP_S: f32 = 0.8;
 const ARC_STEPS: usize = 64;
@@ -63,12 +63,7 @@ impl Renderer {
         };
         let halo = |at: (f32, f32), c: (f32, f32, f32), inner: f32, strength: f32| -> Result<()> {
             match anim::ping_every(age - WALK_S + anim::CURVE_DRAW_S, PING_EVERY_S) {
-                Some((reach, alpha)) => {
-                    let radius = (inner + (PING_REACH - inner) * reach) * s;
-                    let ring = D2D1_ELLIPSE { point: Vector2 { X: at.0, Y: at.1 }, radiusX: radius, radiusY: radius };
-                    unsafe { rt.DrawEllipse(&ring, &self.brush(color(c.0, c.1, c.2, alpha * strength * 1.5))?, 1.2 * s, None) };
-                    Ok(())
-                }
+                Some((reach, alpha)) => disc(at, c, (inner + (PING_REACH - inner) * reach) * s, alpha * strength),
                 None => Ok(()),
             }
         };
