@@ -2537,6 +2537,39 @@ mod tests {
     }
 
     #[test]
+    fn many_devices_back_after_airplane_mode_are_left_out_while_it_shows_then_one_list() {
+        use connectivity::DeviceKind::{Headphones, Keyboard, Mouse};
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let air = Expect { vpn: true, devices: &[] };
+        let dev = |n: &str, k| Event::Device { name: n.into(), kind: k, up: true, battery: Some(70) };
+        let names = [("Tai nghe", Headphones), ("Chuột", Mouse), ("Bàn phím", Keyboard), ("Loa", Headphones), ("Bút", Mouse), ("Tay cầm", Mouse)];
+        let mut l = conn_list_add(None, &Event::Airplane(false), t0, air);
+        for (ms, e) in [(1000, Event::Radio(RadioType::Wifi, true)), (1300, Event::Radio(RadioType::Bluetooth, true))] {
+            l = conn_list_add(Some(l), &e, at(ms), air);
+        }
+        let rows_before = l.rows_shown().len();
+        for i in 0..3 {
+            assert!(l.hushes_devices(at(2000 + 1000 * i)), "a device that comes back while the airplane banner shows is left out");
+        }
+        assert_eq!(l.rows_shown().len(), rows_before, "the airplane list does not grow with the devices");
+        for (ms, e) in [(6000, Event::Net(Net::Online { name: "W".into(), wifi: true })), (6300, Event::Vpn(true))] {
+            l = conn_list_add(Some(l), &e, at(ms), air);
+        }
+        assert!(!l.pending());
+        let end = at(6300 + ALERT_MS as u64);
+        assert!(!l.hushes_devices(end), "once the airplane banner is over the devices are told again");
+        let mut next: Option<ConnList> = None;
+        for (i, (name, kind)) in names.iter().enumerate() {
+            next = Some(conn_list_add(next.take(), &dev(name, *kind), end + Duration::from_millis(1000 * i as u64), Expect::default()));
+        }
+        let list = next.unwrap();
+        assert_eq!((list.domain, list.devices_head, list.devices), (Domain::Bt, true, names.len()), "six devices in a row are one list that counts them");
+        assert!(list.rows_shown().len() <= MAX_ROWS);
+        assert_eq!(list.head.title, devices_title(names.len()));
+    }
+
+    #[test]
     fn airplane_off_is_one_list_whatever_order_the_events_come_in() {
         use connectivity::DeviceKind::{Gamepad, Headphones, Keyboard, Mouse};
         let t0 = Instant::now();
