@@ -76,7 +76,7 @@ impl Renderer {
                     let columns = if v.sun_view { 0 } else { hour_lines.len().min(5) };
                     if v.sun_view {
                         match wx.sun {
-                            Some(sun) => self.draw_sun_path(text, wx_icon, moon_line, sun, v.health.minute_of_day, (bl, cr), s, a * fade, v.phase, if current { v.page_age } else { 9.0 })?,
+                            Some(sun) => self.draw_sun_path(text, wx_icon, moon_line, sun, v.health.minute_of_day, (bl, cr), s, a * fade, if current { v.page_age } else { 9.0 })?,
                             None => text(tr("Đang lấy giờ mặt trời…", "Getting the sun's times…"), F_LABEL, rect(bl, SUN_WAIT_Y * s, cr, (SUN_WAIT_Y + 20.0) * s), center, grey(0.55, a))?,
                         }
                     }
@@ -89,29 +89,52 @@ impl Renderer {
                         let points: Vec<(f32, f32)> = shown.iter().enumerate()
                             .map(|(i, (h, _, _))| (bl + (i as f32 + 0.5) * sw, (mid - (h.temp - (lo + hi) / 2.0) * per_degree) * s))
                             .collect();
+                        let age = if current { v.page_age } else { 9.0 };
+                        let now_column = anim::now_column(shown[0].0.hour, v.health.minute_of_day / 60, columns);
                         let ink = self.brush(grey(1.0, a * fade))?;
-                        if points.len() > 1 {
+                        let drawn = anim::curve_drawn(age) * (points.len() - 1) as f32;
+                        if points.len() > 1 && drawn > 0.0 {
                             let at = |i: isize| points[i.clamp(0, points.len() as isize - 1) as usize];
                             let geo = self.factory.CreatePathGeometry()?;
                             let sink = geo.Open()?;
                             sink.BeginFigure(Vector2 { X: points[0].0, Y: points[0].1 }, D2D1_FIGURE_BEGIN_HOLLOW);
-                            for i in 0..points.len() as isize - 1 {
+                            let whole = drawn.floor() as isize;
+                            for i in 0..(points.len() as isize - 1).min(whole + 1) {
                                 let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+                                let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
+                                let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
+                                let f = if i < whole { 1.0 } else { drawn - whole as f32 };
+                                if f <= 0.0 {
+                                    break;
+                                }
+                                let mix = |u: (f32, f32), w: (f32, f32)| (u.0 + (w.0 - u.0) * f, u.1 + (w.1 - u.1) * f);
+                                let (m0, m1, m2) = (mix(p1, c1), mix(c1, c2), mix(c2, p2));
+                                let (n0, n1) = (mix(m0, m1), mix(m1, m2));
+                                let end = mix(n0, n1);
                                 sink.AddBezier(&D2D1_BEZIER_SEGMENT {
-                                    point1: Vector2 { X: p1.0 + (p2.0 - p0.0) / 6.0, Y: p1.1 + (p2.1 - p0.1) / 6.0 },
-                                    point2: Vector2 { X: p2.0 - (p3.0 - p1.0) / 6.0, Y: p2.1 - (p3.1 - p1.1) / 6.0 },
-                                    point3: Vector2 { X: p2.0, Y: p2.1 },
+                                    point1: Vector2 { X: m0.0, Y: m0.1 },
+                                    point2: Vector2 { X: n0.0, Y: n0.1 },
+                                    point3: Vector2 { X: end.0, Y: end.1 },
                                 });
                             }
                             sink.EndFigure(D2D1_FIGURE_END_OPEN);
                             sink.Close()?;
                             rt.DrawGeometry(&geo, &ink, 2.0 * s, &self.round);
                         }
+                        if let (Some(column), Some((radius, alpha))) = (now_column, anim::ping(age)) {
+                            let (px, py) = points[column];
+                            rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: px, Y: py }, radiusX: radius * s, radiusY: radius * s }, &self.brush(solid(BLUE, a * fade * alpha))?);
+                        }
                         for (i, ((h, ic, geoms), (px, py))) in shown.iter().zip(&points).enumerate() {
-                            rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: *px, Y: *py }, radiusX: 3.0 * s, radiusY: 3.0 * s }, &ink);
+                            let (pop, pop_alpha) = icons::pop(anim::curve_dot_age(age, i));
+                            if anim::curve_dot_age(age, i) >= 0.0 {
+                                let dot = if now_column == Some(i) { solid(BLUE, a * fade * pop_alpha) } else { grey(1.0, a * fade * pop_alpha) };
+                                rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: *px, Y: *py }, radiusX: 3.0 * pop * s, radiusY: 3.0 * pop * s }, &self.brush(dot)?);
+                            }
                             let x = bl + i as f32 * sw;
-                            text(&format!("{}h", h.hour), F_LABEL, rect(x, HOURS_Y * s, x + sw, (HOURS_Y + 14.0) * s), center, grey(0.55, a * fade))?;
-                            text(&format!("{}°", v.unit.number(h.temp)), F_LABEL, rect(x, py - 19.0 * s, x + sw, py - 5.0 * s), center, grey(1.0, a * fade))?;
+                            let rise = anim::curve_label(age, i);
+                            text(&format!("{}h", h.hour), F_LABEL, rect(x, HOURS_Y * s, x + sw, (HOURS_Y + 14.0) * s), center, grey(if now_column == Some(i) { 1.0 } else { 0.55 }, a * fade))?;
+                            text(&format!("{}°", v.unit.number(h.temp)), F_LABEL, rect(x, py - 19.0 * s + 3.0 * s * (1.0 - rise), x + sw, py - 5.0 * s + 3.0 * s * (1.0 - rise)), center, grey(1.0, a * fade * rise))?;
                             wx_icon(ic, geoms, px - HOUR_ICON / 2.0 * s, HOUR_ICON_Y * s, HOUR_ICON * s, Some(weather::tints(h.sky, h.day)), a * fade, 9.0)?;
                             if h.rain >= 20 {
                                 text(&format!("{}%", h.rain), F_LABEL, rect(x, RAIN_Y * s, x + sw, (RAIN_Y + 13.0) * s), center, solid(BLUE, a * fade))?;

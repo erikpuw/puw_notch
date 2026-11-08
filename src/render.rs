@@ -1952,8 +1952,10 @@ impl Renderer {
             self.place(hwnd, (x, y, w, h), region);
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
             self.slow_frames = lyrics_run;
-            let sun_moving = v.sun_view && v.weather.sun.is_some();
-            let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && (v.page_age < anim::ICON_MOTION_S || sun_moving);
+            let sun_moving = v.sun_view && v.weather.sun.is_some() && (v.page_age < sun_path::MOVING_S || self.sun_swapping());
+            let curve_until = if v.weather.hours.first().is_some_and(|h| anim::now_column(h.hour, v.health.minute_of_day / 60, 5).is_some()) { anim::CURVE_END_S } else { anim::CURVE_ENTRY_S };
+            let curve_moving = v.weather.now.is_some() && !v.sun_view && v.page_age < curve_until;
+            let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && (v.page_age < anim::ICON_MOTION_S || sun_moving || curve_moving);
             Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving || cover_fading)
         }
     }
@@ -2937,7 +2939,7 @@ mod tests {
                 let eyes = |face, gaze: (f32, f32)| Some(Eyes { face, alpha: 1.0, gaze, curious: 0.0, open: 1.0, time: 0.4 });
                 let robot = match name { "robot" => eyes(Face::Normal, (0.5, 0.9)), "robot-happy" => eyes(Face::Happy, (0.0, 0.0)), _ => None };
                 let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: nav.then_some(Button::GoPage(Page::Todo)), page,
-                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: 9.0, unit: weather::Unit::C, cal: crate::calendar::CalView { year: 2026, month: 11, sel: 7, today: (2026, 11, 7), zone: name.starts_with("page-calendar").then_some(7.0), lunar_on: name == "page-calendar-lunar" }, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
+                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: std::env::var("PUW_PREVIEW_AGE").ok().and_then(|s| s.parse().ok()).unwrap_or(9.0), unit: weather::Unit::C, cal: crate::calendar::CalView { year: 2026, month: 11, sel: 7, today: (2026, 11, 7), zone: name.starts_with("page-calendar").then_some(7.0), lunar_on: name == "page-calendar-lunar" }, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: if name.ends_with("-focus") { &running_focus } else { &Focus::default() }, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 let mut renderer = Renderer::new().unwrap();

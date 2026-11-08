@@ -7,6 +7,42 @@ pub const PAGE_MORPH_S: f32 = 0.32;
 pub const COVER_FADE_S: f32 = 0.35;
 pub const COVER_FADE_FROM: f32 = 0.96;
 
+pub const CURVE_DRAW_S: f32 = 0.7;
+pub const CURVE_ENTRY_S: f32 = 0.9;
+pub const CURVE_PING_S: f32 = 1.8;
+pub const CURVE_PINGS: f32 = 3.0;
+pub const CURVE_END_S: f32 = CURVE_DRAW_S + CURVE_PING_S * CURVE_PINGS;
+const CURVE_DOT_FROM_S: f32 = 0.06;
+const CURVE_LABEL_FROM_S: f32 = 0.14;
+const CURVE_STEP_S: f32 = 0.115;
+
+pub fn curve_drawn(age: f32) -> f32 {
+    ease_out(age / CURVE_DRAW_S)
+}
+
+pub fn curve_dot_age(age: f32, i: usize) -> f32 {
+    age - CURVE_DOT_FROM_S - i as f32 * CURVE_STEP_S
+}
+
+pub fn curve_label(age: f32, i: usize) -> f32 {
+    lerp_in(age, CURVE_LABEL_FROM_S + i as f32 * CURVE_STEP_S, 0.22)
+}
+
+pub fn ping(age: f32) -> Option<(f32, f32)> {
+    let t = age - CURVE_DRAW_S;
+    if t < 0.0 || t >= CURVE_PING_S * CURVE_PINGS {
+        return None;
+    }
+    let k = lerp_in(t % CURVE_PING_S, 0.0, CURVE_PING_S * 0.7);
+    Some((3.0 + 5.0 * ease_out(k), 0.55 * (1.0 - k)))
+}
+
+pub fn now_column(first_hour: u8, hour_now: u32, columns: usize) -> Option<usize> {
+    let elapsed = (hour_now % 24 + 24 - first_hour as u32 % 24) % 24;
+    let column = (elapsed / 3) as usize;
+    (column < columns).then_some(column)
+}
+
 pub fn cover_fade(t: f32) -> (f32, f32) {
     let e = ease_out(t);
     (e, COVER_FADE_FROM + (1.0 - COVER_FADE_FROM) * e)
@@ -119,6 +155,32 @@ mod tests {
         assert!((0..100).all(|i| ease_out(i as f32 / 100.0) <= 1.0), "the slide never does");
         assert_eq!((lerp_in(0.5, 1.0, 2.0), lerp_in(2.0, 1.0, 2.0), lerp_in(9.0, 1.0, 2.0)), (0.0, 0.5, 1.0));
         assert!(bump(0.0, 0.0, 1.0).abs() < 1e-6 && (bump(0.5, 0.0, 1.0) - 1.0).abs() < 1e-6 && bump(1.0, 0.0, 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_temperature_curve_draws_in_then_pings_three_times_and_rests() {
+        assert_eq!((curve_drawn(0.0), curve_drawn(CURVE_DRAW_S), curve_drawn(9.0)), (0.0, 1.0, 1.0));
+        assert!(curve_dot_age(0.0, 0) < 0.0 && curve_dot_age(0.2, 0) > 0.0, "a dot starts after the line is under way");
+        assert!(curve_dot_age(0.5, 4) < curve_dot_age(0.5, 0), "later dots start later");
+        assert_eq!((curve_label(0.0, 0), curve_label(9.0, 4)), (0.0, 1.0));
+        assert_eq!(ping(0.0), None, "no ping while the line is drawing");
+        assert_eq!(ping(CURVE_END_S), None, "rests after the third");
+        let (r0, a0) = ping(CURVE_DRAW_S).unwrap();
+        let (r1, a1) = ping(CURVE_DRAW_S + CURVE_PING_S * 0.5).unwrap();
+        assert!(r0 == 3.0 && r1 > r0 && r1 <= 8.0 && a0 > a1, "grows and fades");
+        assert!(ping(CURVE_DRAW_S + CURVE_PING_S * 0.9).is_some_and(|(r, a)| r == 8.0 && a == 0.0), "gone before the next ping starts");
+        assert!(CURVE_ENTRY_S >= CURVE_DRAW_S && CURVE_ENTRY_S < CURVE_END_S);
+    }
+
+    #[test]
+    fn the_blue_dot_is_the_column_of_the_hour_it_is_now() {
+        assert_eq!(now_column(2, 2, 5), Some(0));
+        assert_eq!(now_column(2, 4, 5), Some(0), "between two columns it stays on the one just passed");
+        assert_eq!(now_column(2, 5, 5), Some(1));
+        assert_eq!(now_column(2, 14, 5), Some(4));
+        assert_eq!(now_column(2, 17, 5), None, "data older than the last column: none");
+        assert_eq!(now_column(22, 1, 5), Some(1), "across midnight");
+        assert_eq!(now_column(2, 2, 0), None);
     }
 
     #[test]

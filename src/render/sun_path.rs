@@ -1,12 +1,12 @@
 use super::*;
 
 const BASELINE_Y: f32 = 122.0;
-const ARC_H: f32 = 32.0;
+const ARC_H: f32 = 50.0;
 const SUN: (f32, f32, f32) = (1.0, 0.82, 0.3);
 const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
 const WALK_S: f32 = 1.4;
-const GLOW_PERIOD_S: f32 = 3.0;
 pub(super) const SWAP_STEP_S: f32 = 0.8;
+pub(super) const MOVING_S: f32 = WALK_S - anim::CURVE_DRAW_S + anim::CURVE_END_S;
 const ARC_STEPS: usize = 64;
 const ARC_FADE: f32 = 0.16;
 
@@ -21,11 +21,11 @@ fn edge_fade(t: f32) -> f32 {
     0.15 + 0.85 * k * k * (3.0 - 2.0 * k)
 }
 
-fn glow(phase: f32, lag: f32) -> f32 {
-    0.5 - 0.5 * (std::f32::consts::TAU * (phase / GLOW_PERIOD_S - lag)).cos()
-}
-
 impl Renderer {
+    pub(super) fn sun_swapping(&self) -> bool {
+        matches!(self.sun_seen.get(), Some((_, Some(at))) if at.elapsed().as_secs_f32() < 3.0 * SWAP_STEP_S)
+    }
+
     pub(super) fn sun_swap(&self, day: bool) -> Option<f32> {
         let at = match self.sun_seen.get() {
             Some((was, at)) if was == day => at,
@@ -46,7 +46,6 @@ impl Renderer {
         (left, right): (f32, f32),
         s: f32,
         a: f32,
-        phase: f32,
         age: f32,
     ) -> Result<()> {
         let rt = &self.rt;
@@ -65,8 +64,10 @@ impl Renderer {
             Ok(())
         };
         let halo = |at: (f32, f32), c: (f32, f32, f32), strength: f32| -> Result<()> {
-            disc(at, c, 12.5 * s, (0.05 + 0.13 * glow(phase, 0.0)) * strength)?;
-            disc(at, c, 8.0 * s, (0.14 + 0.18 * glow(phase, 0.33)) * strength)
+            match anim::ping(age - WALK_S + anim::CURVE_DRAW_S) {
+                Some((radius, alpha)) => disc(at, c, radius * s, alpha * strength),
+                None => Ok(()),
+            }
         };
         unsafe {
             rt.FillRectangle(&rect(x0 - 4.0 * s, yb, x1 + 4.0 * s, yb + 1.0 * s), &self.brush(grey(0.14, a))?);
@@ -182,13 +183,10 @@ mod tests {
     }
 
     #[test]
-    fn the_rings_fade_in_and_out_smoothly_with_no_blink() {
-        assert!(glow(0.0, 0.0).abs() < 1e-6 && (glow(GLOW_PERIOD_S / 2.0, 0.0) - 1.0).abs() < 1e-6, "dark, then fully lit half a period on");
-        assert!((glow(GLOW_PERIOD_S, 0.0)).abs() < 1e-5, "and back to dark: one fade in and out per period");
-        for lag in [0.0, 0.33] {
-            let step = (0..600).map(|i| (glow(i as f32 * 0.016, lag) - glow((i + 1) as f32 * 0.016, lag)).abs()).fold(0.0f32, f32::max);
-            assert!(step < 0.05, "lag {lag}: a jump of {step} between frames");
-        }
-        assert!((0..300).all(|i| (0.0..=1.0).contains(&glow(i as f32 * 0.05, 0.33))));
+    fn the_sun_and_moon_ping_only_after_they_have_walked_in_and_then_rest() {
+        assert!(anim::ping(0.0 - WALK_S + anim::CURVE_DRAW_S).is_none(), "no ping while it is still walking");
+        assert!(anim::ping(WALK_S - WALK_S + anim::CURVE_DRAW_S).is_some(), "the first ping starts as it arrives");
+        assert!(anim::ping(MOVING_S + 0.01 - WALK_S + anim::CURVE_DRAW_S).is_none(), "and the frames may stop at MOVING_S");
+        assert!(MOVING_S > WALK_S);
     }
 }
