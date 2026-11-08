@@ -5,7 +5,7 @@ const ARC_H: f32 = 50.0;
 const SUN: (f32, f32, f32) = (1.0, 0.82, 0.3);
 const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
 const WALK_S: f32 = 1.4;
-const PING_REACH: f32 = 16.0;
+const PING_REACH: f32 = 12.0;
 const PING_EVERY_S: f32 = 3.0;
 pub(super) const SWAP_STEP_S: f32 = 0.8;
 const ARC_STEPS: usize = 64;
@@ -66,7 +66,7 @@ impl Renderer {
                 Some((reach, alpha)) => {
                     let radius = (inner + (PING_REACH - inner) * reach) * s;
                     let ring = D2D1_ELLIPSE { point: Vector2 { X: at.0, Y: at.1 }, radiusX: radius, radiusY: radius };
-                    unsafe { rt.DrawEllipse(&ring, &self.brush(color(c.0, c.1, c.2, alpha * strength * 1.5))?, 1.4 * s, None) };
+                    unsafe { rt.DrawEllipse(&ring, &self.brush(color(c.0, c.1, c.2, alpha * strength * 1.5))?, 1.2 * s, None) };
                     Ok(())
                 }
                 None => Ok(()),
