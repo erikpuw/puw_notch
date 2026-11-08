@@ -1948,6 +1948,11 @@ impl Renderer {
 mod tests {
     use super::*;
 
+    fn preview_cover() -> Option<Arc<Vec<u8>>> {
+        let bytes = std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).unwrap_or_else(|| include_bytes!("../assets/sample-cover.jpg").to_vec());
+        Some(Arc::new(bytes))
+    }
+
     #[test]
     fn lyric_layout_cache_resets_motion_for_tracks_and_dpi() {
         let mut renderer = Renderer::new().unwrap();
@@ -2470,7 +2475,7 @@ mod tests {
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 14_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true,
                 lyrics: Arc::new(lines.iter().map(|(t, s)| (*t as u64, s.to_string())).collect()),
-                art: std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new), art_key: 1, ..Default::default() };
+                art: preview_cover(), art_key: 1, ..Default::default() };
             let mut size = target(Mode::Expanded, false);
             size[0] += LYRICS_EXTRA_W;
             let view = View { mode: Mode::Expanded, size, time: "23:16", date: "T7, 24/10", battery: Some(Battery { percent: 70, charging: true, saver: false }),
@@ -2508,7 +2513,7 @@ mod tests {
             let track = Track { title: "Bản nhạc đang phát".into(), artist: "YouTube / foobar2000".into(),
                 duration_ms: 210_000, position_ms: 14_000, playing: true, can_toggle: true, can_next: true,
                 can_previous: true, can_seek: true,
-                art: std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new), art_key: 1,
+                art: preview_cover(), art_key: 1,
                 lyrics: Arc::new(vec![(0, "la la".into())]), ..Default::default() };
             let mut size = target(Mode::Expanded, false);
             size[0] += LYRICS_EXTRA_W;
@@ -2732,7 +2737,7 @@ mod tests {
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Aurora preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let track = Track { title: "Bài hát mẫu".into(), artist: "Nghệ sĩ mẫu".into(), duration_ms: 210_000, position_ms: 64_000, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true,
-                art: std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new), art_key: 1, ..Default::default() };
+                art: preview_cover(), art_key: 1, ..Default::default() };
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
@@ -2847,7 +2852,7 @@ mod tests {
                 (24_000, tl("Bấm nút lời để mở hoặc đóng khung này", "Press the lyrics button to open or close this panel")),
                 (30_000, tl("Tua bài thì lời nhảy theo", "Seek the song and the lyrics jump along")),
             ];
-            let art = std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new);
+            let art = preview_cover();
             let song = |position_ms| Track { title: tl("Bài hát mẫu", "Sample song").into(), artist: tl("Nghệ sĩ mẫu", "Sample artist").into(), duration_ms: 210_000, position_ms, playing: true,
                 can_toggle: true, can_next: true, can_previous: true, can_seek: true, can_shuffle: true, can_repeat: true,
                 repeat: crate::music::Repeat::All, art: art.clone(), art_key: 1,
@@ -3146,7 +3151,7 @@ mod tests {
             .stdin(std::process::Stdio::piped()).spawn().expect("ffmpeg (set PUW_FFMPEG)");
         let pipe = enc.stdin.as_mut().unwrap();
 
-        let art = std::env::var("PUW_PREVIEW_COVER").ok().and_then(|p| std::fs::read(p).ok()).map(Arc::new);
+        let art = preview_cover();
         let lines: Vec<(u64, String)> = vec![(0, t("Lời chạy theo bài đang phát", "Lyrics follow the song")), (90_000, t("Ngay trên notch của bạn", "Right in your notch"))];
         let song = |ms| Track { title: t("Bài hát mẫu", "Sample song"), artist: t("Nghệ sĩ mẫu", "Sample artist"), duration_ms: 210_000, position_ms: ms, playing: true,
             can_toggle: true, can_next: true, can_previous: true, can_seek: true, art: art.clone(), art_key: 1, lyrics: Arc::new(lines.clone()), ..Default::default() };
