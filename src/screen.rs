@@ -13,22 +13,45 @@ static HOOK_TARGET: AtomicIsize = AtomicIsize::new(0);
 
 unsafe extern "system" fn on_event(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
     let _ = PostMessageW(Some(HWND(HOOK_TARGET.load(Ordering::Relaxed) as _)), WM_SCREENEVENT, WPARAM(0), LPARAM(0));
+    SHELL_ASK.store(true, Ordering::Relaxed);
+    if let Some(thread) = SHELL_THREAD.get() {
+        thread.unpark();
+    }
 }
+
+const OBJID_WINDOW: i32 = 0;
+const EVENT_OBJECT_SHOW: u32 = 0x8002;
+unsafe extern "system" fn on_window_shown(_: HWINEVENTHOOK, _: u32, hwnd: HWND, id_object: i32, _: i32, _: u32, _: u32) {
+    if id_object == OBJID_WINDOW && crate::activity::is_operation_window(hwnd) {
+        crate::system::log("a file operation window was shown");
+        crate::activity::wake();
+    }
+}
+
+static SHELL_ASK: AtomicBool = AtomicBool::new(false);
+static SHELL_THREAD: std::sync::OnceLock<std::thread::Thread> = std::sync::OnceLock::new();
+const SHELL_IDLE: std::time::Duration = std::time::Duration::from_secs(3);
+const SHELL_QUICK: std::time::Duration = std::time::Duration::from_millis(500);
+const SHELL_QUICK_ASKS: u32 = 6;
 
 static SHELL_FULLSCREEN: AtomicBool = AtomicBool::new(false);
 
 pub fn watch(hwnd: HWND) {
     HOOK_TARGET.store(hwnd.0 as isize, Ordering::Relaxed);
-    crate::system::spawn("shell-state", || {
+    let shell = crate::system::spawn("shell-state", || {
         unsafe { let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED); }
+        let mut quick: u32 = 0;
         loop {
             SHELL_FULLSCREEN.store(ask_shell_fullscreen(), Ordering::Relaxed);
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::thread::park_timeout(if quick > 0 { SHELL_QUICK } else { SHELL_IDLE });
+            quick = if SHELL_ASK.swap(false, Ordering::Relaxed) { SHELL_QUICK_ASKS } else { quick.saturating_sub(1) };
         }
     });
+    let _ = SHELL_THREAD.set(shell.thread().clone());
     for event in [0x0003, 0x000B] {
         unsafe { SetWinEventHook(event, event, None, Some(on_event), 0, 0, 2) };
     }
+    unsafe { SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, None, Some(on_window_shown), 0, 0, 2) };
 }
 
 pub enum Check {

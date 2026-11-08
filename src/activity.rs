@@ -1,18 +1,21 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use windows::core::{BOOL, HSTRING, Interface};
 use windows::Data::Json::JsonObject;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM};
+use windows::Win32::Storage::FileSystem::{FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification, FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_SIZE};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, IUIAutomation2, TreeScope_Descendants};
 use windows::Win32::UI::Shell::{SHGetKnownFolderPath, FOLDERID_Downloads, KF_FLAG_DEFAULT};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
-use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows::Win32::System::Threading::{CreateEventW, GetExitCodeProcess, OpenProcess, SetEvent, WaitForMultipleObjects, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible, PostMessageW, WM_APP};
 
 pub const WM_ACTIVITY: u32 = WM_APP + 15;
@@ -44,8 +47,103 @@ pub struct Watch {
     reader: Option<Reader>,
 }
 
+const ACTIVE_POLL: Duration = Duration::from_millis(250);
+const IDLE_CHECK: Duration = Duration::from_secs(10);
+const CHANGE_QUIET: Duration = Duration::from_secs(1);
+const DOWNLOAD_SCAN: Duration = Duration::from_secs(30);
+const DIRS_REFRESH: Duration = Duration::from_secs(60);
+const MAX_WATCHED_DIRS: usize = 63;
+
+static WAKE: OnceLock<isize> = OnceLock::new();
+
+fn wake_event() -> isize {
+    *WAKE.get_or_init(|| unsafe { CreateEventW(None, false, false, None) }.map_or(0, |h| h.0 as isize))
+}
+
+pub fn wake() {
+    if let Some(&raw) = WAKE.get().filter(|&&raw| raw != 0) {
+        unsafe { let _ = SetEvent(HANDLE(raw as _)); }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Woke {
+    Signal,
+    Change,
+    Timeout,
+}
+
+fn wait_plan(active: bool, now: Instant, quiet_until: Instant) -> (bool, Duration) {
+    if active {
+        (false, ACTIVE_POLL)
+    } else if now < quiet_until {
+        (false, quiet_until - now)
+    } else {
+        (true, IDLE_CHECK)
+    }
+}
+
+fn download_scan_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|t| now.saturating_duration_since(t) >= DOWNLOAD_SCAN)
+}
+
+fn wait_for(event: HANDLE, changes: &[HANDLE], timeout: Duration) -> Woke {
+    let mut all = Vec::with_capacity(1 + changes.len());
+    all.push(event);
+    all.extend_from_slice(changes);
+    let ms = timeout.as_millis().min(u32::MAX as u128 - 1) as u32;
+    let result = unsafe { WaitForMultipleObjects(&all, false, ms) };
+    if result == WAIT_TIMEOUT {
+        return Woke::Timeout;
+    }
+    let index = result.0.wrapping_sub(WAIT_OBJECT_0.0) as usize;
+    if index == 0 {
+        Woke::Signal
+    } else if index < all.len() {
+        unsafe { let _ = FindNextChangeNotification(all[index]); }
+        Woke::Change
+    } else {
+        std::thread::sleep(timeout);
+        Woke::Timeout
+    }
+}
+
+#[derive(Default)]
+struct DownloadWatches {
+    dirs: Vec<PathBuf>,
+    handles: Vec<HANDLE>,
+    checked_at: Option<Instant>,
+}
+
+impl DownloadWatches {
+    fn refresh(&mut self, now: Instant) {
+        if self.checked_at.is_some_and(|t| now.saturating_duration_since(t) < DIRS_REFRESH) {
+            return;
+        }
+        self.checked_at = Some(now);
+        let (dirs, _) = download_dirs();
+        if dirs == self.dirs {
+            return;
+        }
+        self.close();
+        self.handles = dirs
+            .iter()
+            .take(MAX_WATCHED_DIRS)
+            .filter_map(|dir| unsafe { FindFirstChangeNotificationW(&HSTRING::from(dir.as_os_str()), false, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_SIZE) }.ok())
+            .map(|h| HANDLE(h.0))
+            .collect();
+        self.dirs = dirs;
+    }
+
+    fn close(&mut self) {
+        for handle in self.handles.drain(..) {
+            unsafe { let _ = FindCloseChangeNotification(handle); }
+        }
+    }
+}
+
 struct Reader {
-    request: SyncSender<()>,
+    stop: Arc<AtomicBool>,
     updates: Receiver<(Option<LiveActivity>, Option<LiveActivity>)>,
     current: Option<LiveActivity>,
     finished: Option<LiveActivity>,
@@ -62,8 +160,7 @@ impl Watch {
             self.reader = None;
             return None;
         }
-        let reader = self.reader.get_or_insert_with(|| Reader::new(target));
-        let _ = reader.request.try_send(());
+        self.reader.get_or_insert_with(|| Reader::new(target));
         self.latest(now)
     }
 
@@ -89,37 +186,49 @@ impl Watch {
 
 impl Reader {
     fn new(target: isize) -> Self {
-        let (request, requests) = sync_channel::<()>(1);
+        let stop = Arc::new(AtomicBool::new(false));
         let (updates, receiver) = channel();
+        let (flag, event) = (stop.clone(), wake_event());
         crate::system::spawn("live-activity", move || {
             let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            let event = HANDLE(event as _);
             let mut monitor = Monitor::new(true);
-            let mut active = false;
-            loop {
-                if active {
-                    if let Err(RecvTimeoutError::Disconnected) = requests.recv_timeout(Duration::from_millis(250)) {
-                        break;
-                    }
-                } else if requests.recv().is_err() {
-                    break;
-                }
-                let current = monitor.poll(Instant::now());
+            let mut watches = DownloadWatches::default();
+            let (mut active, mut woke, mut quiet_until) = (false, Woke::Signal, Instant::now());
+            while !flag.load(Ordering::Relaxed) {
+                let now = Instant::now();
+                let current = monitor.poll(now, active || woke != Woke::Timeout);
                 let finished = monitor.take_finished();
                 let show = current.is_some() || finished.is_some();
                 active = current.is_some();
+                if woke == Woke::Change {
+                    quiet_until = now + CHANGE_QUIET;
+                }
                 if updates.send((current, finished)).is_err() {
                     break;
                 }
                 if show {
                     unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_ACTIVITY, WPARAM(0), LPARAM(0)); }
                 }
+                let now = Instant::now();
+                watches.refresh(now);
+                let (listen, timeout) = wait_plan(active, now, quiet_until);
+                woke = wait_for(event, if listen { &watches.handles } else { &[] }, timeout);
             }
+            watches.close();
             drop(monitor);
             if com.is_ok() {
                 unsafe { CoUninitialize(); }
             }
         });
-        Self { request, updates: receiver, current: None, finished: None, received_at: Instant::now() }
+        Self { stop, updates: receiver, current: None, finished: None, received_at: Instant::now() }
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        wake();
     }
 }
 
@@ -134,6 +243,7 @@ pub struct Monitor {
     download_dirs: Vec<PathBuf>,
     download_histories: Vec<PathBuf>,
     download_dirs_at: Option<Instant>,
+    download_scanned_at: Option<Instant>,
     download_name: Option<String>,
     download_lookup_at: Option<Instant>,
     download_done: Option<PathBuf>,
@@ -155,13 +265,18 @@ impl Monitor {
         Self { enabled, ..Default::default() }
     }
 
-    pub fn poll(&mut self, now: Instant) -> Option<LiveActivity> {
+    pub fn poll(&mut self, now: Instant, full: bool) -> Option<LiveActivity> {
         if !self.enabled {
             self.last.clear();
             self.finished = None;
             return None;
         }
-        let mut running: Vec<LiveActivity> = [self.poll_explorer(now), self.poll_download(now), self.poll_build(now)].into_iter().flatten().collect();
+        let scan = full || download_scan_due(self.download_scanned_at, now);
+        if scan {
+            self.download_scanned_at = Some(now);
+        }
+        let download = if scan { self.poll_download(now) } else { None };
+        let mut running: Vec<LiveActivity> = [self.poll_explorer(now), download, self.poll_build(now)].into_iter().flatten().collect();
         if let Some(mut a) = ended_activity(std::mem::take(&mut self.last), &running) {
             match a.kind {
                 ActivityKind::Download => if let Some(file) = self.download_done.take() {
@@ -347,14 +462,22 @@ fn elapsed_text(secs: u64) -> String {
     if secs >= 60 { format!("{}m {:02}s", secs / 60, secs % 60) } else { format!("{secs}s") }
 }
 
+const OPERATION_WINDOW: &str = "OperationStatusWindow";
+
+pub fn is_operation_window(hwnd: HWND) -> bool {
+    let mut class = [0u16; OPERATION_WINDOW.len() + 1];
+    let n = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
+    same_name(&class[..n], OPERATION_WINDOW)
+}
+
+fn same_name(units: &[u16], ascii: &str) -> bool {
+    units.len() == ascii.len() && units.iter().zip(ascii.bytes()).all(|(&u, b)| u < 128 && (u as u8).eq_ignore_ascii_case(&b))
+}
+
 fn explorer_windows() -> Vec<HWND> {
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        if IsWindowVisible(hwnd).as_bool() {
-            let mut class = [0u16; 64];
-            let n = GetClassNameW(hwnd, &mut class);
-            if n > 0 && String::from_utf16_lossy(&class[..n as usize]) == "OperationStatusWindow" {
-                (*(lparam.0 as *mut Vec<HWND>)).push(hwnd);
-            }
+        if IsWindowVisible(hwnd).as_bool() && is_operation_window(hwnd) {
+            (*(lparam.0 as *mut Vec<HWND>)).push(hwnd);
         }
         true.into()
     }
@@ -572,7 +695,10 @@ fn process_list() -> Vec<(u32, u32, String)> {
         let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
         while more {
             let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-            out.push((entry.th32ProcessID, entry.th32ParentProcessID, String::from_utf16_lossy(&entry.szExeFile[..len])));
+            let name = &entry.szExeFile[..len];
+            if [BUILD_TOOLS, TERMINALS].iter().any(|list| list.iter().any(|t| same_name(name, t))) {
+                out.push((entry.th32ProcessID, entry.th32ParentProcessID, String::from_utf16_lossy(name)));
+            }
             more = Process32NextW(snapshot, &mut entry).is_ok();
         }
         let _ = CloseHandle(snapshot);
@@ -614,8 +740,35 @@ mod tests {
             kind: ActivityKind::Download, title: "file.zip".into(),
             detail: "5 MB".into(), progress: None, result: None, file: None, more: 0,
         }];
-        assert!(monitor.poll(Instant::now()).is_none());
+        assert!(monitor.poll(Instant::now(), true).is_none());
         assert!(monitor.take_finished().is_none());
+    }
+
+    #[test]
+    fn an_idle_reader_waits_for_events_and_only_checks_in_now_and_then() {
+        let now = Instant::now();
+        assert_eq!(wait_plan(true, now, now), (false, ACTIVE_POLL), "a running task is sampled often and ignores folder noise");
+        assert_eq!(wait_plan(false, now, now), (true, IDLE_CHECK), "idle: listen to the folders, check slowly");
+        let quiet = now + Duration::from_millis(400);
+        assert_eq!(wait_plan(false, now, quiet), (false, Duration::from_millis(400)), "after a folder change the next ones are folded for a moment");
+        assert_eq!(wait_plan(false, quiet, quiet), (true, IDLE_CHECK));
+    }
+
+    #[test]
+    fn names_are_compared_without_building_a_string_and_without_caring_about_case() {
+        let units = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert!(same_name(&units("Cargo.exe"), "cargo.exe") && same_name(&units("CARGO.EXE"), "cargo.exe"));
+        assert!(!same_name(&units("cargo.exe2"), "cargo.exe") && !same_name(&units("cargo"), "cargo.exe"));
+        assert!(!same_name(&units("cargo.exé"), "cargo.exe"), "a non-ASCII unit is never a match");
+        assert!(!same_name(&[], "cargo.exe"));
+    }
+
+    #[test]
+    fn the_download_folders_are_scanned_on_events_or_every_so_often() {
+        let now = Instant::now();
+        assert!(download_scan_due(None, now), "the first look");
+        assert!(!download_scan_due(Some(now), now + DOWNLOAD_SCAN - Duration::from_millis(1)));
+        assert!(download_scan_due(Some(now), now + DOWNLOAD_SCAN));
     }
 
     #[test]
@@ -637,12 +790,11 @@ mod tests {
 
     #[test]
     fn reader_keeps_progress_between_samples_and_forgets_it_when_disabled() {
-        let (request, _requests) = sync_channel(1);
         let (updates, receiver) = channel();
         let now = Instant::now();
         let activity = LiveActivity { kind: ActivityKind::Download, title: "movie.zip".into(), detail: "5 MB".into(), progress: None, result: None, file: None, more: 0 };
         let mut watch = Watch { enabled: true, reader: Some(Reader {
-            request, updates: receiver, current: None, finished: None, received_at: now,
+            stop: Arc::new(AtomicBool::new(false)), updates: receiver, current: None, finished: None, received_at: now,
         }) };
         updates.send((Some(activity.clone()), None)).unwrap();
         assert_eq!(watch.poll(now, 0), Some(activity.clone()));
