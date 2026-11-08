@@ -292,6 +292,20 @@ static WX_STORM: Icon = Icon {
     vb: 24.0, sw: 2.0, anim: Anim::Flash, origins: MID,
     parts: &[p("M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973"), moves("m13 12-3 5h4l-3 5", 1)],
 };
+pub static FIG_PIN: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[p("M9 11a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"), p("M17.657 16.657l-4.243 4.243a2 2 0 0 1 -2.827 0l-4.244 -4.243a8 8 0 1 1 11.314 0z")],
+};
+pub static FIG_THERMO: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[p("M10 13.5a4 4 0 1 0 4 0v-8.5a2 2 0 0 0 -4 0v8.5"), p("M10 9l4 0")],
+};
+pub static FIG_DROP: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M12 3l5.5 8.2a6.5 6.5 0 1 1 -11 0z")] };
+pub static FIG_WIND: Icon = Icon {
+    vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID,
+    parts: &[p("M5 8h8.5a2.5 2.5 0 1 0 -2.34 -3.24"), p("M3 12h15.5a2.5 2.5 0 1 1 -2.34 3.24"), p("M4 16h5.5a2.5 2.5 0 1 1 -2.34 3.24")],
+};
+pub static FIG_UP: Icon = Icon { vb: 24.0, sw: 2.0, anim: Anim::Pulse, origins: MID, parts: &[p("M12 5l0 14"), p("M18 11l-6 -6"), p("M6 11l6 -6")] };
 pub fn weather(sky: crate::weather::Sky, day: bool) -> &'static Icon {
     use crate::weather::Sky;
     match (sky, day) {

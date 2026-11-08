@@ -16,6 +16,7 @@ impl Renderer {
         weather_empty: &Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
         moon_line: &Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
         hour_lines: &[(weather::Hour, &'static icons::Icon, Vec<ID2D1PathGeometry>)],
+        figure_icons: &[(&'static icons::Icon, Vec<ID2D1PathGeometry>)],
         (cl, cr): (f32, f32),
         s: f32,
         a: f32,
@@ -25,15 +26,21 @@ impl Renderer {
         let (center, lead) = (DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING);
         let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
         let rect_of = |b: Button| btns.iter().find(|(x, _)| *x == b).map(|(_, r)| *r);
+        let figure = |slot: usize, x: f32, y: f32, size: f32, alpha: f32| -> Result<()> {
+            match figure_icons.get(slot) {
+                Some((ic, geoms)) => wx_icon(ic, geoms, x, y, size, None, a * alpha, 9.0),
+                None => Ok(()),
+            }
+        };
         unsafe {
-            draw_input(tr("Nhập thành phố (vd: Hà Nội, Đà Nẵng)", "Type a city (e.g. Hanoi, Da Nang)"))?;
             let wx = v.weather;
             match (&wx.place, wx.now, weather_line) {
                 (Some(place), Some(n), Some((ic, geoms))) => {
                     let stale = wx.is_stale(lv.now);
                     let fade = if stale { 0.55 } else { 1.0 };
-                    let buttons_l = cr - (30.0 + 8.0 + 2.0 * UNIT_W + SUN_GAP + SUN_W + 8.0) * s;
-                    text(&place.name, F_TITLE, rect(cl, (CITY_Y + 2.0) * s, buttons_l, (CITY_Y + 22.0) * s), lead, grey(1.0, a))?;
+                    let buttons_l = cr - (CHIPS_R + 2.0 * UNIT_W + SUN_GAP + SUN_W + 8.0) * s;
+                    figure(0, cl, (CITY_Y + 5.5) * s, 13.0 * s, 0.55)?;
+                    text(&place.name, F_BODY, rect(cl + 16.0 * s, (CITY_Y + 2.0) * s, buttons_l, (CITY_Y + 22.0) * s), lead, grey(0.8, a))?;
                     if let Some(ob) = rect_of(Button::CityOff) {
                         let hot = hovered == Some(Button::CityOff);
                         hover_disc(Button::CityOff)?;
@@ -57,51 +64,79 @@ impl Renderer {
                     }
                     wx_icon(ic, geoms, cl, ICON_Y * s, WX_ICON * s, Some(weather::tints(n.sky, n.day)), a * fade, if current { v.page_age } else { 9.0 })?;
                     let temp = format!("{}°", v.unit.number(n.temp));
-                    let (tx, ty) = (cl + TEMP_X * s, (ICON_Y + 20.0) * s);
-                    let k = ((STRIP_X - TEMP_X - 8.0) * s / width(&temp, F_TEMP)).min(1.0);
+                    let (tx, ty) = (cl + TEMP_X * s, (ICON_Y + 22.0) * s);
+                    let k = ((HOURS_X - TEMP_X - 8.0) * s / width(&temp, F_TEMP)).min(1.0);
                     let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                     rt.SetTransform(&(translate(-tx, -ty) * scaling(k) * translate(tx, ty) * base));
-                    text(&temp, F_TEMP, rect(tx, (ICON_Y - 2.0) * s, tx + width(&temp, F_TEMP) + 6.0 * s, (ICON_Y + 42.0) * s), lead, grey(1.0, a * fade))?;
+                    text(&temp, F_TEMP, rect(tx, ICON_Y * s, tx + width(&temp, F_TEMP) + 6.0 * s, (ICON_Y + 44.0) * s), lead, grey(1.0, a * fade))?;
                     rt.SetTransform(&base);
-                    let words_r = cl + (STRIP_X - 8.0) * s;
-                    text(weather::describe(n.sky), F_BODY, rect(tx, (ICON_Y + 42.0) * s, words_r, (ICON_Y + 58.0) * s), lead, grey(0.9, a))?;
-                    let bl = cl + STRIP_X * s;
+                    let words_r = cl + (HOURS_X - 8.0) * s;
+                    text(weather::describe(n.sky), F_BODY, rect(tx, (ICON_Y + 48.0) * s, words_r, (ICON_Y + 64.0) * s), lead, grey(0.9, a))?;
+                    let bl = cl + HOURS_X * s;
                     let columns = if v.sun_view { 0 } else { hour_lines.len().min(5) };
                     if v.sun_view {
                         match wx.sun {
                             Some(sun) => self.draw_sun_path(text, wx_icon, moon_line, sun, v.health.minute_of_day, (bl, cr), s, a * fade, v.phase, if current { v.page_age } else { 9.0 })?,
-                            None => text(tr("Đang lấy giờ mặt trời…", "Getting the sun's times…"), F_LABEL, rect(bl, (STRIP_Y + 20.0) * s, cr, (STRIP_Y + 40.0) * s), center, grey(0.55, a))?,
+                            None => text(tr("Đang lấy giờ mặt trời…", "Getting the sun's times…"), F_LABEL, rect(bl, SUN_WAIT_Y * s, cr, (SUN_WAIT_Y + 20.0) * s), center, grey(0.55, a))?,
                         }
                     }
                     if columns > 0 {
+                        let shown = &hour_lines[..columns];
                         let sw = (cr - bl) / columns as f32;
-                        for (i, (h, ic, geoms)) in hour_lines.iter().take(columns).enumerate() {
+                        let (lo, hi) = shown.iter().fold((f32::MAX, f32::MIN), |(lo, hi), (h, _, _)| (lo.min(h.temp), hi.max(h.temp)));
+                        let per_degree = if hi > lo { ((CURVE_BOTTOM - CURVE_TOP) / (hi - lo)).min(4.0) } else { 0.0 };
+                        let mid = (CURVE_TOP + CURVE_BOTTOM) / 2.0;
+                        let points: Vec<(f32, f32)> = shown.iter().enumerate()
+                            .map(|(i, (h, _, _))| (bl + (i as f32 + 0.5) * sw, (mid - (h.temp - (lo + hi) / 2.0) * per_degree) * s))
+                            .collect();
+                        let ink = self.brush(grey(1.0, a * fade))?;
+                        if points.len() > 1 {
+                            let at = |i: isize| points[i.clamp(0, points.len() as isize - 1) as usize];
+                            let geo = self.factory.CreatePathGeometry()?;
+                            let sink = geo.Open()?;
+                            sink.BeginFigure(Vector2 { X: points[0].0, Y: points[0].1 }, D2D1_FIGURE_BEGIN_HOLLOW);
+                            for i in 0..points.len() as isize - 1 {
+                                let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+                                sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                                    point1: Vector2 { X: p1.0 + (p2.0 - p0.0) / 6.0, Y: p1.1 + (p2.1 - p0.1) / 6.0 },
+                                    point2: Vector2 { X: p2.0 - (p3.0 - p1.0) / 6.0, Y: p2.1 - (p3.1 - p1.1) / 6.0 },
+                                    point3: Vector2 { X: p2.0, Y: p2.1 },
+                                });
+                            }
+                            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                            sink.Close()?;
+                            rt.DrawGeometry(&geo, &ink, 2.0 * s, &self.round);
+                        }
+                        for (i, ((h, ic, geoms), (px, py))) in shown.iter().zip(&points).enumerate() {
+                            rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: *px, Y: *py }, radiusX: 3.0 * s, radiusY: 3.0 * s }, &ink);
                             let x = bl + i as f32 * sw;
-                            text(&format!("{}h", h.hour), F_LABEL, rect(x, STRIP_Y * s, x + sw, (STRIP_Y + 13.0) * s), center, grey(0.55, a * fade))?;
-                            wx_icon(ic, geoms, x + sw / 2.0 - 9.0 * s, (STRIP_Y + 15.0) * s, 18.0 * s, Some(weather::tints(h.sky, h.day)), a * fade, 9.0)?;
-                            text(&format!("{}°", v.unit.number(h.temp)), F_LABEL, rect(x, (STRIP_Y + 35.0) * s, x + sw, (STRIP_Y + 49.0) * s), center, grey(1.0, a * fade))?;
+                            text(&format!("{}h", h.hour), F_LABEL, rect(x, HOURS_Y * s, x + sw, (HOURS_Y + 14.0) * s), center, grey(0.55, a * fade))?;
+                            text(&format!("{}°", v.unit.number(h.temp)), F_LABEL, rect(x, py - 19.0 * s, x + sw, py - 5.0 * s), center, grey(1.0, a * fade))?;
+                            wx_icon(ic, geoms, px - HOUR_ICON / 2.0 * s, HOUR_ICON_Y * s, HOUR_ICON * s, Some(weather::tints(h.sky, h.day)), a * fade, 9.0)?;
                             if h.rain >= 20 {
-                                text(&format!("{}%", h.rain), F_LABEL, rect(x, (STRIP_Y + 48.0) * s, x + sw, (STRIP_Y + 62.0) * s), center, solid(BLUE, a * fade))?;
+                                text(&format!("{}%", h.rain), F_LABEL, rect(x, RAIN_Y * s, x + sw, (RAIN_Y + 13.0) * s), center, solid(BLUE, a * fade))?;
                             }
                         }
                     }
-                    rt.FillRectangle(&rect(cl, (FIGURES_Y - 3.0) * s, cr, (FIGURES_Y - 2.0) * s), &self.brush(grey(0.12, a))?);
-                    let high = weather::outlook(&wx.hours).high.map(|h| format!("{} {}°", tr("Cao nhất", "High"), v.unit.number(h.temp)));
-                    let figures: Vec<String> = [
+                    let high = weather::outlook(&wx.hours).high.map(|h| format!("{} {}°", tr("Cao", "High"), v.unit.number(h.temp)));
+                    let figures = [
                         Some(format!("{} {}°", tr("Cảm giác", "Feels like"), v.unit.number(n.feels))),
-                        Some(format!("{} {:.0}%", tr("Độ ẩm", "Humidity"), n.humidity)),
-                        Some(format!("{} {:.0} km/h", tr("Gió", "Wind"), n.wind)),
+                        Some(format!("{:.0}%", n.humidity)),
+                        Some(format!("{:.0} km/h", n.wind)),
                         high,
-                    ].into_iter().flatten().collect();
-                    let widths: Vec<f32> = figures.iter().map(|f| width(f, F_LABEL) + 2.0 * s).collect();
-                    let gap = ((cr - cl) - widths.iter().sum::<f32>()).max(0.0) / (figures.len().max(2) - 1) as f32;
-                    let mut fx = cl;
-                    for (label, fw) in figures.iter().zip(&widths) {
-                        text(label, F_LABEL, rect(fx, (FIGURES_Y - 2.0) * s, fx + fw, (FIGURES_Y + 16.0) * s), lead, grey(0.65, a * fade))?;
-                        fx += fw + gap;
+                    ];
+                    for (slot, label) in figures.into_iter().enumerate() {
+                        let Some(label) = label else { continue };
+                        let (column, row) = (slot % 2, slot / 2);
+                        let x = cl + column as f32 * FIG_COL * s;
+                        let y = (FIG_ROW_Y + row as f32 * FIG_ROW_H) * s;
+                        let right = if column == 0 { cl + (FIG_COL - 4.0) * s } else { cl + (HOURS_X - 8.0) * s };
+                        figure(slot + 1, x, y + 1.5 * s, 13.0 * s, 0.55 * fade)?;
+                        text(&label, F_LABEL, rect(x + 18.0 * s, y, right, y + FIG_ROW_H * s), lead, grey(0.8, a * fade))?;
                     }
                 }
                 _ => {
+                    draw_input(tr("Nhập thành phố (vd: Hà Nội, Đà Nẵng)", "Type a city (e.g. Hanoi, Da Nang)"))?;
                     let (first, second) = if wx.looking {
                         (tr("Đang tìm thành phố…", "Looking for the city…").to_string(), "")
                     } else if let Some(city) = &wx.not_found {

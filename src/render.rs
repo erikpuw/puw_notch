@@ -306,13 +306,22 @@ const LIST_X: f32 = HERO_W + 6.0;
 const ROW_Y: f32 = 66.0;
 const ROW_H: f32 = 26.0;
 pub const LIST_ROWS: usize = 4;
-const CITY_Y: f32 = 62.0;
-const ICON_Y: f32 = 90.0;
-const WX_ICON: f32 = 56.0;
-const TEMP_X: f32 = 64.0;
-const STRIP_X: f32 = 160.0;
-const STRIP_Y: f32 = 88.0;
-const FIGURES_Y: f32 = 152.0;
+const CITY_Y: f32 = 34.0;
+const CHIPS_R: f32 = 20.0;
+const ICON_Y: f32 = 62.0;
+const WX_ICON: f32 = 68.0;
+const TEMP_X: f32 = 84.0;
+const HOURS_X: f32 = 184.0;
+const HOURS_Y: f32 = 56.0;
+const CURVE_TOP: f32 = 98.0;
+const CURVE_BOTTOM: f32 = 122.0;
+const HOUR_ICON: f32 = 16.0;
+const HOUR_ICON_Y: f32 = 134.0;
+const RAIN_Y: f32 = 152.0;
+const FIG_ROW_Y: f32 = 142.0;
+const FIG_ROW_H: f32 = 16.0;
+const FIG_COL: f32 = 108.0;
+const SUN_WAIT_Y: f32 = 108.0;
 const UNIT_W: f32 = 28.0;
 const UNIT_H: f32 = 18.0;
 const SUN_W: f32 = 28.0;
@@ -454,14 +463,15 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
             }
         }
         Page::Weather => {
-            out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
-            out.push((Button::ListClear, r(cl + cw - 26.0, INPUT_Y, 26.0, INPUT_H)));
             if rows > 0 {
-                out.push((Button::CityOff, r(cl + cw - 24.0, CITY_Y, 24.0, 24.0)));
-                out.push((Button::SunToggle, r(cl + cw - 30.0 - 8.0 - 2.0 * UNIT_W - SUN_GAP - SUN_W, CITY_Y + 3.0, SUN_W, UNIT_H)));
+                out.push((Button::CityOff, r(cl + cw - 18.0, CITY_Y, 24.0, 24.0)));
+                out.push((Button::SunToggle, r(cl + cw - CHIPS_R - 2.0 * UNIT_W - SUN_GAP - SUN_W, CITY_Y + 3.0, SUN_W, UNIT_H)));
                 for (k, unit) in [weather::Unit::C, weather::Unit::F].into_iter().enumerate() {
-                    out.push((Button::Unit(unit), r(cl + cw - 30.0 - 8.0 - 2.0 * UNIT_W + k as f32 * UNIT_W, CITY_Y + 3.0, UNIT_W, UNIT_H)));
+                    out.push((Button::Unit(unit), r(cl + cw - CHIPS_R - 2.0 * UNIT_W + k as f32 * UNIT_W, CITY_Y + 3.0, UNIT_W, UNIT_H)));
                 }
+            } else {
+                out.push((Button::ListInput, r(cl, INPUT_Y, cw, INPUT_H)));
+                out.push((Button::ListClear, r(cl + cw - 26.0, INPUT_Y, 26.0, INPUT_H)));
             }
         }
         Page::Notify => {
@@ -898,6 +908,7 @@ struct Prep<'a> {
     weather_empty: &'a Option<(&'static icons::Icon, Vec<ID2D1PathGeometry>)>,
     hour_lines: &'a [(weather::Hour, &'static icons::Icon, Vec<ID2D1PathGeometry>)],
     focus_icons: &'a [(&'static icons::Icon, Vec<ID2D1PathGeometry>)],
+    figure_icons: &'a [(&'static icons::Icon, Vec<ID2D1PathGeometry>)],
     player_icons: &'a [(&'static icons::Icon, Vec<ID2D1PathGeometry>)],
     note_icons: &'a [Option<ID2D1Bitmap>],
     lyric_heights: &'a [f32],
@@ -1719,6 +1730,10 @@ impl Renderer {
             let ic = icons::weather(weather::Sky::Clear, false);
             ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>().map(|geoms| (ic, geoms))
         } else { None };
+        let figure_icons: Vec<(&'static icons::Icon, Vec<ID2D1PathGeometry>)> = if page == Some(Page::Weather) && v.weather.now.is_some() {
+            [&icons::FIG_PIN, &icons::FIG_THERMO, &icons::FIG_DROP, &icons::FIG_WIND, &icons::FIG_UP].into_iter()
+                .filter_map(|ic| Some((ic, ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?))).collect()
+        } else { Vec::new() };
         let focus_icons: Vec<(&'static icons::Icon, Vec<ID2D1PathGeometry>)> = if page == Some(Page::Focus) || v.leaving.is_some_and(|(p, _, _)| p == Page::Focus) {
             [&icons::FOCUS_RESET, &icons::PLAYER_NEXT].into_iter()
                 .filter_map(|ic| Some((ic, ic.parts.iter().map(|part| self.line_geometry(part.d)).collect::<Option<Vec<_>>>()?))).collect()
@@ -1866,7 +1881,7 @@ impl Renderer {
             rt.SetTransform(&Matrix3x2::translation(0.0, gy));
             let ear = if self.style == notch::Style::Pill { 0.0 } else { notch::ear(v.size[1]) * s };
             let shape = self.notch_shape(l, r, nh, nr, ear)?;
-            let prep = Prep { weather_line: &weather_line, weather_empty: &weather_empty, hour_lines: &hour_lines, focus_icons: &focus_icons, player_icons: &player_icons,
+            let prep = Prep { weather_line: &weather_line, weather_empty: &weather_empty, hour_lines: &hour_lines, focus_icons: &focus_icons, figure_icons: &figure_icons, player_icons: &player_icons,
                 note_icons: &note_icons, lyric_heights: &lyric_heights, lyric_tops: &lyric_tops, moon_line: &moon_line, tint, level, fonts: &fonts };
             let ctx = Ctx { v, s, l, r, cx, nh, gy, shape: &shape, text: &text, width: &width, micon: &micon, wx_icon: &draw_wx_icon, cover: &draw_cover };
             let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
@@ -2037,6 +2052,13 @@ mod tests {
         let (x, y) = ((sun.left + sun.right) / 2.0, (sun.top + sun.bottom) / 2.0);
         assert_eq!(hit_button(300.0, 1.0, x, y, None, Page::Weather, 1, 0, None, false), Some(Button::SunToggle));
         assert!(page_buttons(300.0, 1.0, Page::Weather, 0, 0, None, false).iter().all(|(b, _)| *b != Button::SunToggle), "no chip before there is a city");
+    }
+
+    #[test]
+    fn the_city_search_row_exists_only_while_there_is_no_city() {
+        let has_input = |rows| page_buttons(300.0, 1.0, Page::Weather, rows, 0, None, false).iter().any(|(b, _)| *b == Button::ListInput);
+        assert!(has_input(0), "no city yet: the row to type one");
+        assert!(!has_input(1), "a city is shown: the row would sit under its name");
     }
 
     #[test]
