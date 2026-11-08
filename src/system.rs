@@ -108,7 +108,9 @@ pub fn spawn<T: Send + 'static>(name: &str, f: impl FnOnce() -> T + Send + 'stat
     std::thread::Builder::new().name(name.into()).spawn(f).expect("a thread")
 }
 
-type BatteryCache = (std::sync::Arc<std::sync::Mutex<Option<Battery>>>, std::thread::Thread);
+const BATTERY_REFRESH: std::time::Duration = std::time::Duration::from_secs(30);
+
+type BatteryCache =(std::sync::Arc<std::sync::Mutex<Option<Battery>>>, std::thread::Thread);
 static BATTERY: std::sync::OnceLock<BatteryCache> = std::sync::OnceLock::new();
 
 pub fn battery_cached() -> Option<Battery> {
@@ -116,7 +118,7 @@ pub fn battery_cached() -> Option<Battery> {
         let cell = std::sync::Arc::new(std::sync::Mutex::new(battery()));
         let mine = cell.clone();
         let thread = crate::system::spawn("battery", move || loop {
-            std::thread::park_timeout(std::time::Duration::from_secs(1));
+            std::thread::park_timeout(BATTERY_REFRESH);
             let now = battery();
             if let Ok(mut b) = mine.lock() {
                 *b = now;
