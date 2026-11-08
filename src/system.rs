@@ -171,7 +171,7 @@ pub fn log(line: &str) {
         if fresh {
             let _ = writeln!(f, "{}", log_header());
         }
-        let _ = writeln!(f, "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {line}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+        let _ = writeln!(f, "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {line}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
     }
 }
 
