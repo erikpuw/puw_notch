@@ -10,8 +10,6 @@ pub const COVER_FADE_FROM: f32 = 0.96;
 pub const CURVE_DRAW_S: f32 = 0.7;
 pub const CURVE_ENTRY_S: f32 = 0.9;
 pub const CURVE_PING_S: f32 = 1.8;
-pub const CURVE_PINGS: f32 = 3.0;
-pub const CURVE_END_S: f32 = CURVE_DRAW_S + CURVE_PING_S * CURVE_PINGS;
 const CURVE_DOT_FROM_S: f32 = 0.06;
 const CURVE_LABEL_FROM_S: f32 = 0.14;
 const CURVE_STEP_S: f32 = 0.115;
@@ -30,7 +28,7 @@ pub fn curve_label(age: f32, i: usize) -> f32 {
 
 pub fn ping(age: f32) -> Option<(f32, f32)> {
     let t = age - CURVE_DRAW_S;
-    if t < 0.0 || t >= CURVE_PING_S * CURVE_PINGS {
+    if t < 0.0 {
         return None;
     }
     let k = lerp_in(t % CURVE_PING_S, 0.0, CURVE_PING_S * 0.7);
@@ -158,18 +156,20 @@ mod tests {
     }
 
     #[test]
-    fn the_temperature_curve_draws_in_then_pings_three_times_and_rests() {
+    fn the_temperature_curve_draws_in_then_pings_again_and_again() {
         assert_eq!((curve_drawn(0.0), curve_drawn(CURVE_DRAW_S), curve_drawn(9.0)), (0.0, 1.0, 1.0));
         assert!(curve_dot_age(0.0, 0) < 0.0 && curve_dot_age(0.2, 0) > 0.0, "a dot starts after the line is under way");
         assert!(curve_dot_age(0.5, 4) < curve_dot_age(0.5, 0), "later dots start later");
         assert_eq!((curve_label(0.0, 0), curve_label(9.0, 4)), (0.0, 1.0));
         assert_eq!(ping(0.0), None, "no ping while the line is drawing");
-        assert_eq!(ping(CURVE_END_S), None, "rests after the third");
+        let (_, early) = ping(CURVE_DRAW_S + 0.3).unwrap();
+        let (_, late) = ping(CURVE_DRAW_S + 0.3 + CURVE_PING_S * 40.0).unwrap();
+        assert!((early - late).abs() < 1e-3, "the same ping, however long the page stays open");
         let (k0, a0) = ping(CURVE_DRAW_S).unwrap();
         let (k1, a1) = ping(CURVE_DRAW_S + CURVE_PING_S * 0.5).unwrap();
         assert!(k0 == 0.0 && k1 > k0 && k1 <= 1.0 && a0 > a1, "spreads and fades");
         assert!(ping(CURVE_DRAW_S + CURVE_PING_S * 0.9).is_some_and(|(k, a)| k == 1.0 && a == 0.0), "gone before the next ping starts");
-        assert!(CURVE_ENTRY_S >= CURVE_DRAW_S && CURVE_ENTRY_S < CURVE_END_S);
+        assert!(CURVE_ENTRY_S >= CURVE_DRAW_S);
     }
 
     #[test]

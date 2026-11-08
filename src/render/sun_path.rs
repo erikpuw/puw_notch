@@ -7,7 +7,6 @@ const MOON: (f32, f32, f32) = (0.82, 0.86, 1.0);
 const WALK_S: f32 = 1.4;
 const PING_REACH: f32 = 16.0;
 pub(super) const SWAP_STEP_S: f32 = 0.8;
-pub(super) const MOVING_S: f32 = WALK_S - anim::CURVE_DRAW_S + anim::CURVE_END_S;
 const ARC_STEPS: usize = 64;
 const ARC_FADE: f32 = 0.16;
 
@@ -23,9 +22,6 @@ fn edge_fade(t: f32) -> f32 {
 }
 
 impl Renderer {
-    pub(super) fn sun_swapping(&self) -> bool {
-        matches!(self.sun_seen.get(), Some((_, Some(at))) if at.elapsed().as_secs_f32() < 3.0 * SWAP_STEP_S)
-    }
 
     pub(super) fn sun_swap(&self, day: bool) -> Option<f32> {
         let at = match self.sun_seen.get() {
@@ -185,10 +181,8 @@ mod tests {
     }
 
     #[test]
-    fn the_sun_and_moon_ping_only_after_they_have_walked_in_and_then_rest() {
+    fn the_sun_and_moon_ping_only_after_they_have_walked_in() {
         assert!(anim::ping(0.0 - WALK_S + anim::CURVE_DRAW_S).is_none(), "no ping while it is still walking");
         assert!(anim::ping(WALK_S - WALK_S + anim::CURVE_DRAW_S).is_some(), "the first ping starts as it arrives");
-        assert!(anim::ping(MOVING_S + 0.01 - WALK_S + anim::CURVE_DRAW_S).is_none(), "and the frames may stop at MOVING_S");
-        assert!(MOVING_S > WALK_S);
     }
 }

@@ -1952,9 +1952,9 @@ impl Renderer {
             self.place(hwnd, (x, y, w, h), region);
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
             self.slow_frames = lyrics_run;
-            let sun_moving = v.sun_view && v.weather.sun.is_some() && (v.page_age < sun_path::MOVING_S || self.sun_swapping());
-            let curve_until = if v.weather.hours.first().is_some_and(|h| anim::now_column(h.hour, v.health.minute_of_day / 60, 5).is_some()) { anim::CURVE_END_S } else { anim::CURVE_ENTRY_S };
-            let curve_moving = v.weather.now.is_some() && !v.sun_view && v.page_age < curve_until;
+            let sun_moving = v.sun_view && v.weather.sun.is_some();
+            let pinging = v.weather.hours.first().is_some_and(|h| anim::now_column(h.hour, v.health.minute_of_day / 60, 5).is_some());
+            let curve_moving = v.weather.now.is_some() && !v.sun_view && (pinging || v.page_age < anim::CURVE_ENTRY_S);
             let wx_busy = v.page == Page::Weather && v.mode == Mode::Expanded && (v.page_age < anim::ICON_MOTION_S || sun_moving || curve_moving);
             Ok(morphing.get() || glow_busy || bars_busy || icon_busy || wx_busy || lyric_moving || cover_fading)
         }
@@ -2170,6 +2170,41 @@ mod tests {
             let at_night = blue(&late);
             assert!(by_day > 0, "by day the path is lit");
             assert!(just_set > at_night, "the lit path lingers just after the sunset that was watched: {just_set} vs {at_night}");
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_radar_keeps_frames_coming_only_while_the_weather_page_is_open_and_a_column_is_now() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900i32, 300i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Radar"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let (health, idle_focus) = (Health::default(), Focus::default());
+            let ph = panel_size(Page::Weather)[1];
+            let hours: Vec<weather::Hour> = (0..24).map(|i| weather::Hour { hour: ((2 + i) % 24) as u8, temp: 25.0, rain: 0, wind: 5.0, sky: weather::Sky::Clear, day: true }).collect();
+            let wx = weather::State {
+                place: Some(weather::Place { name: "Hà Nội".into(), lat: 21.0, lon: 105.8 }),
+                now: Some(weather::Now { temp: 29.0, feels: 31.0, humidity: 77.0, wind: 6.0, sky: weather::Sky::Clear, day: true }),
+                hours, ..weather::State::default() };
+            macro_rules! view { ($mode:expr, $size:expr, $page:expr, $minute:expr) => { View { mode: $mode, size: $size, time: "14:00", date: "T5, 05/11",
+                battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: $page,
+                leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: $minute, settings: None } } }; }
+            let busy = |mode: Mode, size: [f32; 3], page: Page, minute: u32| {
+                let mut r = Renderer::new().unwrap();
+                let mut last = true;
+                for _ in 0..8 {
+                    last = r.present(hwnd, 0, 0, w, h, 1.0, &view!(mode, size, page, minute)).unwrap();
+                }
+                last
+            };
+            assert!(busy(Mode::Expanded, [480.0, ph, 28.0], Page::Weather, 14 * 60), "the radar runs on the open page");
+            assert!(!busy(Mode::Expanded, [480.0, ph, 28.0], Page::Weather, 20 * 60), "no column is now: nothing to ping");
+            assert!(!busy(Mode::Expanded, [480.0, ph, 28.0], Page::Todo, 14 * 60), "another page: still");
+            assert!(!busy(Mode::Collapsed, [150.0, 30.0, 14.0], Page::Weather, 14 * 60), "in the pill: still");
             DestroyWindow(hwnd).unwrap();
         }
     }
