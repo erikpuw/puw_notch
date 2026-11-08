@@ -10,13 +10,13 @@ use windows::Foundation::{IReference, TypedEventHandler};
 use windows::Devices::Radios::{Radio, RadioKind, RadioState};
 use windows::Networking::Connectivity::{NetworkConnectivityLevel, NetworkInformation, NetworkStatusChangedEventHandler};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
-use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
+use windows::Win32::System::Registry::{RegCloseKey, RegGetValueW, RegNotifyChangeKeyValue, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_NOTIFY, REG_NOTIFY_CHANGE_LAST_SET, RRF_RT_REG_DWORD};
 use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 pub const WM_CONN: u32 = WM_APP + 6;
-const POLL: Duration = Duration::from_secs(4);
+const POLL: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum RadioType {
@@ -311,6 +311,7 @@ pub fn watch(hwnd: HWND) {
         }
         let _ = Radio::RequestAccessAsync().and_then(|op| op.get());
         let _keep = subscribe();
+        airplane_changes();
         let mut kinds: BTreeMap<String, DeviceKind> = BTreeMap::new();
         let mut last = snapshot(&mut kinds);
         if let Ok(mut known) = KNOWN.lock() {
@@ -429,6 +430,19 @@ fn radios() -> BTreeMap<RadioType, bool> {
         }
     }
     out
+}
+
+fn airplane_changes() {
+    crate::system::spawn("airplane-switch", || unsafe {
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, w!("SYSTEM\\CurrentControlSet\\Control\\RadioManagement"), None, KEY_NOTIFY, &mut key) != ERROR_SUCCESS {
+            return;
+        }
+        while RegNotifyChangeKeyValue(key, false, REG_NOTIFY_CHANGE_LAST_SET, None, false) == ERROR_SUCCESS {
+            wake();
+        }
+        let _ = RegCloseKey(key);
+    });
 }
 
 fn airplane() -> bool {
