@@ -388,8 +388,7 @@ impl App {
         let limit = if self.frame_ms == BARS_FRAME_MS { 0.125 } else { 0.08 };
         if gap > limit && self.animating && self.last_gap_log.is_none_or(|t| t.elapsed().as_secs() >= 10) {
             self.last_gap_log = Some(now);
-            system::log(&format!("late frame: {:.0} ms (mode {:?}, page {})", gap * 1000.0, self.notch.mode, self.page.name()));
-        }
+            system::log(&format!("late frame: {:.0} ms (mode {:?}, page {})", gap * 1000.0, self.notch.mode, self.page.name()));        }
         if self.notch.mode != Mode::Expanded {
             self.lyrics_open = false;
         }
@@ -1528,6 +1527,7 @@ impl App {
                 for e in connectivity::take_events() {
                     let now = Instant::now();
                     match &e {
+                        Event::Device { up: true, .. } | Event::DeviceBattery { .. } if self.conn_list.as_ref().is_some_and(|l| l.hushes_devices(now)) => {}
                         Event::Device { up: false, .. } => self.conn_queue.push(connection_toast(e)),
                         Event::DeviceBattery { name, percent, .. } => {
                             if self.conn_list.as_mut().is_some_and(|l| device_battery(l, name, *percent, now)) {
@@ -1764,20 +1764,17 @@ struct ConnList {
     deadline: Instant,
     domain: Domain,
     bt: Option<Row>,
-    bt_on: bool,
-    bt_seen: Vec<String>,
-    bt_expected: usize,
     head_key: Option<&'static str>,
     before: Option<Box<ConnList>>,
 }
 
 impl ConnList {
     fn new(head: Toast, head_row: String, rows: Vec<Row>, at: Instant, domain: Domain) -> Self {
-        ConnList { head, head_row, rows, at, single: false, devices_head: false, devices: 0, net: None, vpn: None, deadline: at, domain, bt: None, bt_on: false, bt_seen: Vec::new(), bt_expected: 0, head_key: None, before: None }
+        ConnList { head, head_row, rows, at, single: false, devices_head: false, devices: 0, net: None, vpn: None, deadline: at, domain, bt: None, head_key: None, before: None }
     }
 
     fn take_in(&mut self, old: ConnList, keep_steps: bool) {
-        let ConnList { head, head_row, head_key, rows, at, single, devices_head, net, vpn, domain, before, .. } = old;
+        let ConnList { head_row, head_key, rows, at, single, devices_head, net, vpn, deadline, domain, before, .. } = old;
         if let Some(b) = before {
             self.take_in(*b, keep_steps);
         }
@@ -1787,20 +1784,15 @@ impl ConnList {
         if !single && !devices_head && !bt_head && !head_row.is_empty() {
             told.push(Row::line(head_row, at).keyed(head_key));
         }
-        let mut names = Vec::new();
+        let mut had_device = single;
         for r in rows {
             if r.icon.is_some() {
-                if r.state == RowState::Done {
-                    names.push(r.text);
-                }
+                had_device |= r.state == RowState::Done;
             } else if r.text == bt_on_text {
                 bt_head = true;
             } else {
                 told.push(r);
             }
-        }
-        if single {
-            names.push(head.title);
         }
         for r in told {
             if !self.rows.iter().any(|x| x.text == r.text) {
@@ -1808,50 +1800,22 @@ impl ConnList {
             }
         }
         if keep_steps {
-            self.bt_on |= bt_head || !names.is_empty();
-            for n in names {
-                if !self.bt_seen.contains(&n) {
-                    self.bt_seen.push(n);
-                }
+            if bt_head || had_device {
+                self.bt.get_or_insert_with(|| Row::line(bt_on_text, at));
             }
             self.net = net.or(self.net.take());
             self.vpn = vpn.or(self.vpn.take());
+            self.deadline = self.deadline.max(deadline);
         }
     }
 
     fn rows_shown(&self) -> Vec<Row> {
         let (devices, told): (Vec<Row>, Vec<Row>) = self.rows.iter().cloned().partition(|r| r.icon.is_some());
-        told.into_iter().chain(self.bt_row()).chain(self.net.iter().cloned()).chain(self.vpn.iter().cloned()).chain(devices).collect()
+        told.into_iter().chain(self.bt.iter().cloned()).chain(self.net.iter().cloned()).chain(self.vpn.iter().cloned()).chain(devices).collect()
     }
 
-    fn bt_row(&self) -> Option<Row> {
-        self.bt.clone().map(|mut r| {
-            let radio = if self.bt_on { tr("Bluetooth bật", "Bluetooth on") } else { "Bluetooth" };
-            r.text = if self.bt_seen.is_empty() { radio.to_string() } else { format!("{radio} +{} {}", self.bt_seen.len(), tr("thiết bị", "devices")) };
-            r
-        })
-    }
-
-    fn start_bt(&mut self, expected: usize, now: Instant) {
-        self.bt_expected = expected;
-        if expected > 0 || self.bt_on || !self.bt_seen.is_empty() {
-            let done = (self.bt_on || !self.bt_seen.is_empty()) && self.bt_seen.len() >= expected;
-            self.bt = Some(Row::step(String::new(), if done { RowState::Done } else { RowState::Wait }, now));
-            if expected > 0 {
-                self.deadline = now + Duration::from_millis(WAIT_MAX_MS as u64);
-            }
-        }
-    }
-
-    fn bt_device(&mut self, name: &str, now: Instant) {
-        if !self.bt_seen.iter().any(|n| n == name) {
-            self.bt_seen.push(name.to_string());
-        }
-        self.bt_on = true;
-        let b = self.bt.get_or_insert_with(|| Row::line(String::new(), now));
-        if b.state == RowState::Wait && self.bt_seen.len() >= self.bt_expected {
-            (b.state, b.at) = (RowState::Done, now);
-        }
+    fn hushes_devices(&self, now: Instant) -> bool {
+        self.domain == Domain::Air && self.fresh(now)
     }
 
     fn start_devices(&mut self, devices: &[(String, connectivity::DeviceKind)], now: Instant) {
@@ -1878,7 +1842,7 @@ impl ConnList {
     }
 
     fn pending(&self) -> bool {
-        self.net.iter().chain(self.vpn.iter()).chain(self.bt.iter()).any(|r| matches!(r.state, RowState::Wait | RowState::Todo))
+        self.net.iter().chain(self.vpn.iter()).any(|r| matches!(r.state, RowState::Wait | RowState::Todo))
             || self.rows.iter().any(|r| r.icon.is_some() && r.state == RowState::Wait)
     }
 
@@ -1890,8 +1854,9 @@ impl ConnList {
         }
     }
 
-    fn done_coming_back(&self, e: &Event) -> bool {
-        matches!(e, Event::Radio(..)) && self.domain == Domain::Air && !self.pending() && self.head_row == row_text(&Event::Airplane(false))
+    fn done_coming_back(&self, e: &Event, now: Instant) -> bool {
+        let awaiting_radios = self.net.is_none() && now.saturating_duration_since(self.at) < Duration::from_millis(RADIOS_MS as u64);
+        matches!(e, Event::Radio(..)) && self.domain == Domain::Air && !self.pending() && !awaiting_radios && self.head_row == row_text(&Event::Airplane(false))
     }
 
     fn fresh(&self, now: Instant) -> bool {
@@ -1909,9 +1874,6 @@ impl ConnList {
             self.vpn = None;
         }
         self.rows.retain(|r| !(r.icon.is_some() && r.state == RowState::Wait));
-        if let Some(b) = self.bt.as_mut().filter(|b| b.state == RowState::Wait) {
-            (b.state, b.at) = (RowState::Done, now);
-        }
         self.at = now;
         true
     }
@@ -1939,10 +1901,7 @@ impl ConnList {
                 true
             }
             Event::Radio(RadioType::Bluetooth, true) if self.domain == Domain::Air => {
-                self.bt_on = true;
-                if self.bt.is_none() {
-                    self.bt = Some(Row::line(String::new(), now));
-                }
+                self.bt.get_or_insert_with(|| Row::line(row_text(e), now));
                 true
             }
             Event::Radio(RadioType::Wifi, false) => {
@@ -1960,6 +1919,7 @@ impl ConnList {
 }
 
 const WAIT_MAX_MS: u32 = 15_000;
+const RADIOS_MS: u32 = 3_000;
 
 const MAX_ROWS: usize = 8;
 const MAX_WAIT_DEVICES: usize = 5;
@@ -1986,11 +1946,6 @@ fn device_connected(fresh: Option<ConnList>, e: &Event, now: Instant) -> ConnLis
     let Event::Device { name, kind, battery, .. } = e else { unreachable!("a device event") };
     let value = battery.map(|p| format!("{p}%"));
     match fresh {
-        Some(mut l) if l.domain == Domain::Air => {
-            l.bt_device(name, now);
-            l.at = now;
-            l
-        }
         Some(mut l) if l.single => {
             if l.head.title == *name {
                 l.head.badge = l.head.badge.take().or(value);
@@ -2034,10 +1989,6 @@ fn device_battery(l: &mut ConnList, name: &str, percent: u8, now: Instant) -> bo
     if !l.fresh(now) {
         return false;
     }
-    if l.domain == Domain::Air {
-        l.at = now;
-        return true;
-    }
     let value = format!("{percent}%");
     if l.single && l.head.title == name {
         l.head.badge = Some(value);
@@ -2076,7 +2027,7 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
     }
     let domain = domain_of(e);
     match fresh {
-        Some(mut l) if !l.single && !matches!(e, Event::Airplane(_)) && (l.domain == domain || (l.domain == Domain::Air && !l.done_coming_back(e))) => {
+        Some(mut l) if !l.single && !matches!(e, Event::Airplane(_)) && (l.domain == domain || (l.domain == Domain::Air && !l.done_coming_back(e, now))) => {
             let key = subject(e);
             let wifi_on = matches!(e, Event::Radio(RadioType::Wifi, true));
             let bt_on = matches!(e, Event::Radio(RadioType::Bluetooth, true));
@@ -2123,11 +2074,8 @@ fn conn_list_add(prev: Option<ConnList>, e: &Event, now: Instant, expect: Expect
             };
             l.head_key = subject(e);
             l.before = before.filter(|b| b.domain != Domain::Air);
-            if matches!(e, Event::Airplane(false) | Event::Radio(RadioType::Wifi, true)) {
+            if matches!(e, Event::Radio(RadioType::Wifi, true)) {
                 l.start_waiting(expect.vpn, now);
-            }
-            if matches!(e, Event::Airplane(false)) {
-                l.start_bt(expect.devices.len(), now);
             }
             if matches!(e, Event::Airplane(true)) && expect.vpn {
                 l.rows.push(Row::line(row_text(&Event::Vpn(false)), now).keyed(Some("vpn")));
@@ -2489,8 +2437,9 @@ mod tests {
         let (net, connected) = (tr("Kết nối mạng", "Network connection").to_string(), format!("{} JihoonKim", tr("Đã kết nối", "Connected to")));
         let (wifi_on, bt_on, vpn_on) = (tr("Wi-Fi bật", "Wi-Fi on").to_string(), tr("Bluetooth bật", "Bluetooth on").to_string(), tr("VPN kết nối", "VPN connected").to_string());
         let mut l = conn_list_add(None, &Event::Airplane(false), t0, Expect { vpn: true, ..Expect::default() });
-        assert_eq!(shown(&l), [(net.clone(), Wait), ("VPN".to_string(), Todo)]);
+        assert!(shown(&l).is_empty() && !l.pending(), "airplane off settles alone first: no network or VPN step yet");
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100), Expect { vpn: true, ..Expect::default() });
+        assert_eq!(shown(&l), [(wifi_on.clone(), Done), (net.clone(), Wait), ("VPN".to_string(), Todo)], "the network and VPN steps come with Wi-Fi");
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Bluetooth, true), at(120), Expect { vpn: true, ..Expect::default() });
         assert_eq!(shown(&l), [(wifi_on.clone(), Done), (bt_on.clone(), Done), (net.clone(), Wait), ("VPN".to_string(), Todo)]);
         assert!(l.pending() && l.fresh(at(14_000)) && l.life_ms(at(14_000)) > 1_000);
@@ -2502,7 +2451,7 @@ mod tests {
         assert!(!l.pending() && l.life_ms(at(9000)) == ALERT_MS);
         assert!(l.fresh(at(9000 + ALERT_MS as u64 - 1)) && !l.fresh(at(9000 + ALERT_MS as u64 + 1)));
         let mut l = conn_list_add(None, &Event::Airplane(false), t0, Expect::default());
-        assert_eq!(shown(&l), [(net.clone(), Wait)]);
+        assert!(shown(&l).is_empty());
         l = conn_list_add(Some(l), &online, at(3000), Expect::default());
         assert!(!l.pending());
         assert!(conn_list_add(None, &Event::Radio(RadioType::Wifi, true), t0, Expect::default()).vpn.is_none());
@@ -2561,26 +2510,30 @@ mod tests {
         let many: Vec<_> = (0..8).map(|i| (format!("Thiết bị {i}"), Mouse)).collect();
         let l = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, Expect { devices: &many, ..Expect::default() });
         assert_eq!(l.rows_shown().len(), MAX_WAIT_DEVICES);
+    }
+
+    #[test]
+    fn airplane_off_tells_bluetooth_on_and_leaves_the_devices_out() {
+        use connectivity::DeviceKind::{Headphones, Mouse};
+        use RowState::*;
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let known = vec![("WH-1000XM5".to_string(), Headphones), ("MX Master 3".to_string(), Mouse)];
         let air = Expect { vpn: true, devices: &known };
-        let plus = |n: usize| format!("{} +{n} {}", tr("Bluetooth bật", "Bluetooth on"), tr("thiết bị", "devices"));
         let states = |l: &ConnList| l.rows_shown().into_iter().map(|r| (r.text, r.state)).collect::<Vec<_>>();
+        let (wifi_on, bt_on, net) = (tr("Wi-Fi bật", "Wi-Fi on").to_string(), tr("Bluetooth bật", "Bluetooth on").to_string(), tr("Kết nối mạng", "Network connection").to_string());
         let mut l = conn_list_add(None, &Event::Airplane(false), t0, air);
+        assert!(states(&l).is_empty(), "airplane off alone first: no line waits for the radios or the remembered devices");
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Wifi, true), at(100), air);
         l = conn_list_add(Some(l), &Event::Radio(RadioType::Bluetooth, true), at(120), air);
-        let net = tr("Kết nối mạng", "Network connection").to_string();
-        assert_eq!(states(&l), [(tr("Wi-Fi bật", "Wi-Fi on").to_string(), Done), (tr("Bluetooth bật", "Bluetooth on").to_string(), Wait), (net.clone(), Wait), ("VPN".to_string(), Todo)]);
-        l = conn_list_add(Some(l), &dev("MX Master 3", Mouse, Some(64)), at(500), air);
-        l = conn_list_add(Some(l), &dev("WH-1000XM5", Headphones, None), at(800), air);
-        assert!(device_battery(&mut l, "WH-1000XM5", 80, at(900)), "a battery is taken in and not shown");
-        assert_eq!(states(&l)[1], (plus(2), Wait), "two of three: still waiting");
-        l = conn_list_add(Some(l), &dev("Tay cầm", Gamepad, Some(18)), at(1200), air);
-        assert_eq!(states(&l)[1], (plus(3), Done));
-        assert!(l.rows_shown().iter().all(|r| r.icon.is_none()), "no line per device");
-        let mut l = conn_list_add(None, &Event::Airplane(false), t0, air);
-        l = conn_list_add(Some(l), &dev("WH-1000XM5", Headphones, Some(80)), at(500), air);
-        assert!(l.pending() && l.expire(at(WAIT_MAX_MS as u64)));
-        assert_eq!(states(&l)[0], (plus(1).replace(&tr("Bluetooth bật", "Bluetooth on"), &tr("Bluetooth bật", "Bluetooth on")), Done));
-        assert!(!l.pending());
+        assert_eq!(states(&l), [(wifi_on, Done), (bt_on, Done), (net, Wait), ("VPN".to_string(), Todo)]);
+        assert!(l.hushes_devices(at(500)), "devices that come back while it shows are not told");
+        l = conn_list_add(Some(l), &Event::Net(Net::Online { name: "W".into(), wifi: true }), at(2000), air);
+        l = conn_list_add(Some(l), &Event::Vpn(true), at(2500), air);
+        assert!(!l.pending() && l.hushes_devices(at(2500 + ALERT_MS as u64 - 1)));
+        assert!(!l.hushes_devices(at(2500 + ALERT_MS as u64)), "once it is gone a device has its own banner again");
+        let bt = conn_list_add(None, &Event::Radio(RadioType::Bluetooth, true), t0, Expect::default());
+        assert!(!bt.hushes_devices(t0), "only the airplane banner keeps the devices out");
     }
 
     #[test]
@@ -2603,7 +2556,11 @@ mod tests {
         for (n, events) in orders.iter().enumerate() {
             let mut l: Option<ConnList> = None;
             for (i, e) in events.iter().enumerate() {
-                l = Some(conn_list_add(l.take(), e, t0 + Duration::from_millis(100 * i as u64), expect));
+                let now = t0 + Duration::from_millis(100 * i as u64);
+                if matches!(e, Event::Device { .. }) && l.as_ref().is_some_and(|l| l.hushes_devices(now)) {
+                    continue;
+                }
+                l = Some(conn_list_add(l.take(), e, now, expect));
             }
             let l = l.unwrap();
             let rows = l.rows_shown();
@@ -2611,7 +2568,7 @@ mod tests {
             let texts: Vec<String> = rows.iter().map(|r| r.text.clone()).collect();
             let expected = [
                 tr("Wi-Fi bật", "Wi-Fi on").to_string(),
-                format!("{} +4 {}", tr("Bluetooth bật", "Bluetooth on"), tr("thiết bị", "devices")),
+                tr("Bluetooth bật", "Bluetooth on").to_string(),
                 format!("{} W", tr("Đã kết nối", "Connected to")),
                 tr("VPN kết nối", "VPN connected").to_string(),
             ];
