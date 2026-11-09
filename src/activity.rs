@@ -896,6 +896,56 @@ mod tests {
         if com.is_ok() { unsafe { CoUninitialize(); } }
     }
 
+    fn visible_top_level_windows() -> Vec<HWND> {
+        unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            if IsWindowVisible(hwnd).as_bool() {
+                (*(lparam.0 as *mut Vec<HWND>)).push(hwnd);
+            }
+            true.into()
+        }
+        let mut windows = Vec::<HWND>::new();
+        unsafe { let _ = EnumWindows(Some(visit), LPARAM(&mut windows as *mut _ as isize)); }
+        windows
+    }
+
+    fn describe_window(hwnd: HWND) -> String {
+        let mut class = [0u16; 256];
+        let n = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
+        let mut pid = 0u32;
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, Some(&mut pid)); }
+        format!("class={:?} title={:?} pid={pid}", String::from_utf16_lossy(&class[..n]), window_title(hwnd))
+    }
+
+    #[test]
+    #[ignore = "read-only trace for 90 s: prints every window that appears or goes away with its class, title and the names inside it; delete, move and copy a file that asks to replace while it runs"]
+    fn trace_new_windows_while_you_copy_move_and_delete() {
+        let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let mut monitor = Monitor::new(true);
+        let mut known: std::collections::HashMap<isize, String> = visible_top_level_windows().into_iter().map(|h| (h.0 as isize, describe_window(h))).collect();
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(90) {
+            let now_windows = visible_top_level_windows();
+            for hwnd in &now_windows {
+                let id = hwnd.0 as isize;
+                if !known.contains_key(&id) {
+                    let line = describe_window(*hwnd);
+                    let labels = monitor.dialog_labels(*hwnd);
+                    println!("[{:>5} ms] OPEN  {line} names={:?}", start.elapsed().as_millis(), &labels[..labels.len().min(14)]);
+                    known.insert(id, line);
+                }
+            }
+            known.retain(|id, line| {
+                let alive = now_windows.iter().any(|h| h.0 as isize == *id);
+                if !alive {
+                    println!("[{:>5} ms] CLOSE {line}", start.elapsed().as_millis());
+                }
+                alive
+            });
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        if com.is_ok() { unsafe { CoUninitialize(); } }
+    }
+
     #[test]
     fn a_process_tells_how_it_exited_only_once_it_is_gone() {
         let mut child = std::process::Command::new("cmd").args(["/c", "exit 3"]).spawn().unwrap();
