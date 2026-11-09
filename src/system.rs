@@ -281,8 +281,17 @@ fn xml_escape(s: &str) -> String {
 }
 
 fn task_xml(exe: &std::path::Path, user: &str) -> String {
-    let (user, command) = (xml_escape(user), xml_escape(&autostart_command(exe)));
-    let dir = xml_escape(&exe.parent().map_or(String::new(), |d| d.display().to_string()));
+    let user = xml_escape(user);
+    let dir = exe.parent().map_or(String::new(), |d| d.display().to_string());
+    let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
+        .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let command = xml_escape(&powershell.display().to_string());
+    // UIAccess executables need ShellExecute; Task Scheduler starts executables directly.
+    let arguments = xml_escape(&format!(
+        r#"-NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process -FilePath '{}' -WorkingDirectory '{}'""#,
+        exe.display().to_string().replace('\'', "''"), dir.replace('\'', "''")
+    ));
+    let dir = xml_escape(&dir);
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -295,7 +304,7 @@ fn task_xml(exe: &std::path::Path, user: &str) -> String {
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Enabled>true</Enabled>
   </Settings>
-  <Actions Context="Author"><Exec><Command>{command}</Command><WorkingDirectory>{dir}</WorkingDirectory></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>{command}</Command><Arguments>{arguments}</Arguments><WorkingDirectory>{dir}</WorkingDirectory></Exec></Actions>
 </Task>
 "#
     )
@@ -404,12 +413,22 @@ mod tests {
     }
 
     #[test]
+    fn task_opens_uiaccess_apps_through_the_shell() {
+        let xml = task_xml(std::path::Path::new(r"C:\Apps & Co\O'Brien $HOME `\puw_notch.exe"), r"PC\A");
+        let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+        assert!(xml.contains(&format!("<Command>{}</Command>", xml_escape(&powershell.display().to_string()))));
+        assert!(xml.contains(r#"<Arguments>-NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;Start-Process -FilePath 'C:\Apps &amp; Co\O''Brien $HOME `\puw_notch.exe' -WorkingDirectory 'C:\Apps &amp; Co\O''Brien $HOME `'&quot;</Arguments>"#));
+        assert!(xml.contains(r"<WorkingDirectory>C:\Apps &amp; Co\O'Brien $HOME `</WorkingDirectory>"));
+    }
+
+    #[test]
     fn task_runs_at_logon_with_highest_rights_and_survives_battery() {
         let xml = task_xml(std::path::Path::new(r"C:\Apps & Co\puw_notch.exe"), r"PC\A <b>");
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>") && xml.contains("<LogonTrigger>"));
         assert!(xml.contains("<Delay>PT15S</Delay>"), "not before the startup apps have loaded");
         assert!(xml.contains("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>") && xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
-        assert!(xml.contains(r#"<Command>&quot;C:\Apps &amp; Co\puw_notch.exe&quot;</Command>"#), "path quoted and escaped");
+        assert!(xml.contains(r"Start-Process -FilePath 'C:\Apps &amp; Co\puw_notch.exe'"), "path quoted and escaped");
         assert!(xml.contains(r"<UserId>PC\A &lt;b&gt;</UserId>"), "user escaped");
     }
 

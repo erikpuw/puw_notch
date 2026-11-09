@@ -31,7 +31,7 @@
 
 Trang ẩn ở tray thì ngừng hẳn.
 
-**Khởi động cùng Windows** hỏi quyền quản trị một lần. Từ đó notch tự chạy sau khi đăng nhập, kể cả với cửa sổ chạy quyền quản trị. Bỏ tick thì tắt.
+**Khởi động cùng Windows** hỏi quyền quản trị khi bật. Task mở notch qua Windows Shell sau khi đăng nhập 15 giây, hỗ trợ cả bản ký số có `uiAccess`. Nếu task được tạo bằng bản cũ, tắt rồi bật lại tùy chọn sau khi cập nhật. Bỏ tick thì tắt.
 
 **8 trang**, chuyển bằng ‹ › hoặc rê chuột vào chấm trang: chấm mở thành hàng biểu tượng để chọn thẳng một trang.
 
