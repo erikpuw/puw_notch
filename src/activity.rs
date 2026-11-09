@@ -53,6 +53,7 @@ const CHANGE_QUIET: Duration = Duration::from_secs(1);
 const DOWNLOAD_SCAN: Duration = Duration::from_secs(30);
 const DIRS_REFRESH: Duration = Duration::from_secs(60);
 const MAX_WATCHED_DIRS: usize = 63;
+const CONFIRM_AFTER: Duration = Duration::from_millis(700);
 
 static WAKE: OnceLock<isize> = OnceLock::new();
 
@@ -200,7 +201,7 @@ impl Reader {
                 let current = monitor.poll(now, active || woke != Woke::Timeout);
                 let finished = monitor.take_finished();
                 let show = current.is_some() || finished.is_some();
-                active = current.is_some();
+                active = current.is_some() || monitor.waiting();
                 if woke == Woke::Change {
                     quiet_until = now + CHANGE_QUIET;
                 }
@@ -251,6 +252,8 @@ pub struct Monitor {
     automation: Option<IUIAutomation>,
     explorer_op: Option<(isize, ActivityKind, String)>,
     explorer_ui_at: Option<Instant>,
+    explorer_seen: Option<Instant>,
+    explorer_pending: bool,
     build_exe: Option<String>,
     build_since: Option<Instant>,
     build_pid: Option<u32>,
@@ -276,7 +279,9 @@ impl Monitor {
             self.download_scanned_at = Some(now);
         }
         let download = if scan { self.poll_download(now) } else { None };
-        let mut running: Vec<LiveActivity> = [self.poll_explorer(now), download, self.poll_build(now)].into_iter().flatten().collect();
+        let explorer = self.poll_explorer(now);
+        let explorer = self.confirm_explorer(explorer, now);
+        let mut running: Vec<LiveActivity> = [explorer, download, self.poll_build(now)].into_iter().flatten().collect();
         if let Some(mut a) = ended_activity(std::mem::take(&mut self.last), &running) {
             match a.kind {
                 ActivityKind::Download => if let Some(file) = self.download_done.take() {
@@ -299,6 +304,22 @@ impl Monitor {
 
     pub fn take_finished(&mut self) -> Option<LiveActivity> {
         self.finished.take()
+    }
+
+    pub fn waiting(&self) -> bool {
+        self.explorer_pending
+    }
+
+    fn confirm_explorer(&mut self, found: Option<LiveActivity>, now: Instant) -> Option<LiveActivity> {
+        let Some(activity) = found else {
+            self.explorer_seen = None;
+            self.explorer_pending = false;
+            return None;
+        };
+        let first_seen = *self.explorer_seen.get_or_insert(now);
+        let confirmed = file_op_confirmed(first_seen, now, &activity);
+        self.explorer_pending = !confirmed;
+        confirmed.then_some(activity)
     }
 
     fn poll_explorer(&mut self, now: Instant) -> Option<LiveActivity> {
@@ -422,6 +443,10 @@ impl Monitor {
 
 fn ended_activity(last: Vec<LiveActivity>, running: &[LiveActivity]) -> Option<LiveActivity> {
     last.into_iter().find(|a| !is_file_op(a.kind) && !running.iter().any(|r| r.kind == a.kind))
+}
+
+fn file_op_confirmed(first_seen: Instant, now: Instant, activity: &LiveActivity) -> bool {
+    now.saturating_duration_since(first_seen) >= CONFIRM_AFTER && (activity.progress.is_some() || names_operation(activity))
 }
 
 fn is_file_op(kind: ActivityKind) -> bool {
@@ -891,6 +916,34 @@ mod tests {
         let ended = ended_activity(last.clone(), &[act(ActivityKind::Delete)]);
         assert_eq!(ended.map(|a| a.kind), Some(ActivityKind::Build), "the build ended behind the copy; move to delete is no end");
         assert!(ended_activity(last, &[act(ActivityKind::FileOp), act(ActivityKind::Build)]).is_none(), "nothing ended");
+    }
+
+    #[test]
+    fn a_file_operation_shows_only_once_it_has_run_a_moment_and_is_named_or_has_progress() {
+        let mut monitor = Monitor::default();
+        let t0 = Instant::now();
+        let copying = parse_explorer_title("Copying 12% complete");
+        assert!(monitor.confirm_explorer(copying.clone(), t0).is_none());
+        assert!(monitor.waiting());
+        assert!(monitor.confirm_explorer(copying.clone(), t0 + CONFIRM_AFTER / 2).is_none());
+        assert_eq!(monitor.confirm_explorer(copying, t0 + CONFIRM_AFTER).map(|a| a.kind), Some(ActivityKind::FileOp));
+        assert!(!monitor.waiting());
+    }
+
+    #[test]
+    fn preparing_and_cancelled_operations_never_show() {
+        let mut monitor = Monitor::default();
+        let t0 = Instant::now();
+        let preparing = parse_explorer_title("Preparing to copy");
+        for secs in [0, 1, 5, 30] {
+            assert!(monitor.confirm_explorer(preparing.clone(), t0 + Duration::from_secs(secs)).is_none(), "{secs} s of preparing");
+        }
+        assert!(monitor.waiting());
+        assert!(monitor.confirm_explorer(None, t0 + Duration::from_secs(31)).is_none());
+        assert!(!monitor.waiting());
+        let deleting = parse_explorer_title("Deleting 3%");
+        assert!(monitor.confirm_explorer(deleting.clone(), t0 + Duration::from_secs(40)).is_none());
+        assert!(monitor.confirm_explorer(deleting, t0 + Duration::from_secs(41)).is_some());
     }
 
     #[test]
