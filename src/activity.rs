@@ -446,7 +446,7 @@ fn ended_activity(last: Vec<LiveActivity>, running: &[LiveActivity]) -> Option<L
 }
 
 fn file_op_confirmed(first_seen: Instant, now: Instant, activity: &LiveActivity) -> bool {
-    now.saturating_duration_since(first_seen) >= CONFIRM_AFTER && (activity.progress.is_some() || names_operation(activity))
+    activity.progress.is_some() || (names_operation(activity) && now.saturating_duration_since(first_seen) >= CONFIRM_AFTER)
 }
 
 fn is_file_op(kind: ActivityKind) -> bool {
@@ -969,10 +969,18 @@ mod tests {
     }
 
     #[test]
-    fn a_file_operation_shows_only_once_it_has_run_a_moment_and_is_named_or_has_progress() {
+    fn a_file_operation_with_a_percentage_shows_at_once() {
+        let mut monitor = Monitor::default();
+        let copying = parse_explorer_title("Copying 12% complete");
+        assert_eq!(monitor.confirm_explorer(copying, Instant::now()).map(|a| a.kind), Some(ActivityKind::FileOp));
+        assert!(!monitor.waiting());
+    }
+
+    #[test]
+    fn a_named_operation_without_a_percentage_waits_a_moment_first() {
         let mut monitor = Monitor::default();
         let t0 = Instant::now();
-        let copying = parse_explorer_title("Copying 12% complete");
+        let copying = parse_explorer_title("Copying");
         assert!(monitor.confirm_explorer(copying.clone(), t0).is_none());
         assert!(monitor.waiting());
         assert!(monitor.confirm_explorer(copying.clone(), t0 + CONFIRM_AFTER / 2).is_none());
@@ -991,7 +999,7 @@ mod tests {
         assert!(monitor.waiting());
         assert!(monitor.confirm_explorer(None, t0 + Duration::from_secs(31)).is_none());
         assert!(!monitor.waiting());
-        let deleting = parse_explorer_title("Deleting 3%");
+        let deleting = parse_explorer_title("Deleting");
         assert!(monitor.confirm_explorer(deleting.clone(), t0 + Duration::from_secs(40)).is_none());
         assert!(monitor.confirm_explorer(deleting, t0 + Duration::from_secs(41)).is_some());
     }
