@@ -126,7 +126,7 @@ impl Renderer {
                     Page::Notify => self.draw_notify(&text, &scrollbar, &btns, v, lv, current, &note_icons, (cl, cr), s, a, hovered)?,
                     Page::Usage => self.draw_usage(&text, &width, &btns, (cl, cr), s, a, hovered)?,
                     Page::Weather => self.draw_weather(&text, &width, &wx_icon, &draw_input, &hover_disc, &btns, v, lv, current, &weather_line, &weather_empty, &moon_line, &hour_lines, &figure_icons, (cl, cr), s, a, hovered)?,
-                    Page::Calendar => self.draw_calendar(&text, &width, &hover_disc, &btns, &v.cal, (cl, cr), s, a, hovered)?,
+                    Page::Calendar => self.draw_calendar(&text, &width, &hover_disc, &btns, &fonts, &v.cal, (cl, cr), s, a, hovered)?,
                     Page::Focus => self.draw_focus(&text, &micon, &wx_icon, &focus_icons, &btns, v.focus, v.health.minute_of_day, (cl, cr), s, a, hovered)?,
                     Page::Health => self.draw_health(&text, &micon, &hover_disc, &btns, &width, &v.health, settings, (cl, cr), s, a, hovered)?,
                 }

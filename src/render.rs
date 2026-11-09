@@ -624,6 +624,8 @@ const F_TEMP: usize = 17;
 const F_SONG: usize = 18;
 const F_TIME: usize = 19;
 const F_DAY: usize = 20;
+const F_CAL: usize = 21;
+const F_CAL_BOLD: usize = 22;
 const CAL_TOP: f32 = 34.0;
 const CAL_BLOCK_H: f32 = 128.0;
 const CAL_LEFT_W: f32 = 126.0;
@@ -632,11 +634,11 @@ const CAL_SWITCH_H: f32 = 48.0;
 const CAL_SEG_W: f32 = 52.0;
 const CAL_GRID_X: f32 = 148.0;
 const CAL_COL_W: f32 = 34.0;
-const CAL_TITLE_Y: f32 = 32.0;
-const CAL_HEAD_Y: f32 = 52.0;
-const CAL_ROW0: f32 = 68.0;
-const CAL_ROW_H: f32 = 16.0;
-const CAL_CHIP_H: f32 = 18.0;
+const CAL_TITLE_Y: f32 = 31.0;
+const CAL_HEAD_Y: f32 = 50.0;
+const CAL_ROW0: f32 = 64.5;
+const CAL_ROW_H: f32 = 17.2;
+const CAL_CHIP_H: f32 = 19.0;
 const LYRIC_TOP: f32 = 30.0;
 const LYRIC_BOTTOM: f32 = 168.0;
 const LYRIC_GAP: f32 = 14.0;
@@ -1196,11 +1198,25 @@ impl Renderer {
                 Ok(f)
             };
             let ui = w!("Segoe UI");
-            let display = unsafe {
-                let (mut collection, mut index, mut found) = (None, 0u32, false.into());
-                let has = self.dw.GetSystemFontCollection(&mut collection, false).is_ok()
-                    && collection.is_some_and(|c| c.FindFamilyName(w!("Segoe UI Variable Display"), &mut index, &mut found).is_ok() && found.as_bool());
-                if has { w!("Segoe UI Variable Display") } else { ui }
+            let (display, cal_fam) = unsafe {
+                let mut collection = None;
+                let col = self.dw.GetSystemFontCollection(&mut collection, false).ok().and(collection);
+                let has = |name: PCWSTR| {
+                    let (mut index, mut found) = (0u32, false.into());
+                    col.as_ref().is_some_and(|c| c.FindFamilyName(name, &mut index, &mut found).is_ok() && found.as_bool())
+                };
+                let d = if has(w!("Segoe UI Variable Display")) { w!("Segoe UI Variable Display") } else { ui };
+                let c = if has(w!("Bahnschrift")) { w!("Bahnschrift") } else { ui };
+                (d, c)
+            };
+            let make_ink = |family: PCWSTR, size: f32, weight: DWRITE_FONT_WEIGHT| -> Result<IDWriteTextFormat> {
+                unsafe {
+                    let f = self.dw.CreateTextFormat(family, None, weight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size * scale, w!("vi-VN"))?;
+                    f.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+                    f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                    f.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
+                    Ok(f)
+                }
             };
             let set = vec![
                 make(ui, 15.0, DWRITE_FONT_WEIGHT_BOLD)?,
@@ -1232,6 +1248,8 @@ impl Renderer {
                 make(display, 21.0, DWRITE_FONT_WEIGHT_BOLD)?,
                 make(display, 46.0, DWRITE_FONT_WEIGHT_MEDIUM)?,
                 make(display, 52.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                make_ink(cal_fam, 13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+                make_ink(cal_fam, 13.0, DWRITE_FONT_WEIGHT_BOLD)?,
             ];
             self.fonts = Some((scale, set));
         }

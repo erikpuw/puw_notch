@@ -998,10 +998,8 @@ impl App {
                 self.cal_sel = if (ty, tm) == (self.cal_year, self.cal_month) { td } else { 1 };
             }
             Button::CalCell(i) => {
-                let day = i as i32 - calendar::first_column(self.cal_year, self.cal_month) as i32 + 1;
-                if (1..=calendar::days_in_month(self.cal_year, self.cal_month) as i32).contains(&day) {
-                    self.cal_sel = day as u32;
-                }
+                let (cy, cm, cd, _) = calendar::cell_date(self.cal_year, self.cal_month, i);
+                (self.cal_year, self.cal_month, self.cal_sel) = (cy, cm, cd);
             }
             Button::CalMode(on) if self.cal_zone.is_some() => self.cal_lunar = on,
             Button::CalMode(_) => {}

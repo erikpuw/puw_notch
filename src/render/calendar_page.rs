@@ -8,6 +8,7 @@ impl Renderer {
         width: &dyn Fn(&str, usize) -> f32,
         hover_disc: &dyn Fn(Button) -> Result<()>,
         btns: &[(Button, D2D_RECT_F)],
+        fonts: &[IDWriteTextFormat],
         c: &CalView,
         (cl, _cr): (f32, f32),
         s: f32,
@@ -27,9 +28,19 @@ impl Renderer {
             let col_box = |y0: f32, y1: f32| rect(cl, (top + y0) * s, cl + CAL_LEFT_W * s, (top + y1) * s);
             text(&big.to_string(), F_DAY, col_box(0.0, 52.0), center, grey(1.0, a))?;
             text(cal::weekday_long(cal::weekday(c.year, c.month, sel), english), F_TITLE, col_box(58.0, 76.0), center, grey(1.0, a))?;
-            if zone.is_some() {
-                let other = if english { format!("Solar {sel}/{}", c.month) } else { format!("{sel}/{} dương lịch", c.month) };
-                text(&other, F_LABEL, col_box(78.0, 94.0), center, grey(0.6, a))?;
+            if let Some(z) = c.zone {
+                let other = if c.lunar_on {
+                    if english { format!("Solar {sel}/{}", c.month) } else { format!("{sel}/{} dương lịch", c.month) }
+                } else {
+                    let l = cal::lunar(c.year, c.month, sel, z);
+                    let m = if l.leap {
+                        if english { format!("{} leap", l.month) } else { format!("{} nhuận", l.month) }
+                    } else {
+                        l.month.to_string()
+                    };
+                    if english { format!("Lunar {}/{m}", l.day) } else { format!("{}/{m} âm lịch", l.day) }
+                };
+                text(&other, F_LABEL, col_box(79.0, 95.0), center, grey(0.55, a))?;
             }
             if c.zone.is_some() {
                 let pill = col_box(102.0, 124.0);
@@ -63,38 +74,55 @@ impl Renderer {
             }
             for k in 0..7u32 {
                 let x = gx + k as f32 * CAL_COL_W * s;
-                text(cal::weekday_short(k, english), F_BODY, rect(x, CAL_HEAD_Y * s, x + CAL_COL_W * s, (CAL_HEAD_Y + CAL_ROW_H) * s), center, grey(0.5, a))?;
+                text(cal::weekday_short(k, english), F_LABEL, rect(x, CAL_HEAD_Y * s, x + CAL_COL_W * s, (CAL_HEAD_Y + 15.0) * s), center, grey(0.46, a))?;
             }
-            let (first, days) = (cal::first_column(c.year, c.month) as i32, cal::days_in_month(c.year, c.month) as i32);
             for i in 0..42usize {
-                let day = i as i32 - first + 1;
-                if !(1..=days).contains(&day) {
-                    continue;
-                }
-                let day = day as u32;
+                let (cy, cm, day, in_month) = cal::cell_date(c.year, c.month, i);
                 let (col, row) = ((i % 7) as f32, (i / 7) as f32);
                 let cell = rect(gx + col * CAL_COL_W * s, (CAL_ROW0 + row * CAL_ROW_H) * s, gx + (col + 1.0) * CAL_COL_W * s, (CAL_ROW0 + (row + 1.0) * CAL_ROW_H) * s);
-                let l = zone.map(|z| cal::lunar(c.year, c.month, day, z));
+                let l = zone.map(|z| cal::lunar(cy, cm, day, z));
+                let is_lunar_first = l.is_some_and(|l| l.day == 1);
                 let label = match l {
                     Some(l) if l.day == 1 => format!("1/{}", l.month),
                     Some(l) => l.day.to_string(),
                     None => day.to_string(),
                 };
-                let font = if l.is_some_and(|l| l.day == 1) { F_CLOCK_BOLD } else { F_CLOCK };
-                let (mx, my) = ((cell.left + cell.right) / 2.0, (cell.top + cell.bottom) / 2.0);
-                let half = ((width(&label, font) / s + 8.0).max(CAL_CHIP_H) / 2.0) * s;
-                let chip = rect(mx - half, my - CAL_CHIP_H * s / 2.0, mx + half, my + CAL_CHIP_H * s / 2.0);
-                let today = c.today == (c.year, c.month, day);
+                let today = in_month && c.today == (cy, cm, day);
+                let selected = in_month && day == sel;
+                let font = if today || (in_month && is_lunar_first) { F_CAL_BOLD } else { F_CAL };
+                let mx = ((cell.left + cell.right) / 2.0).round();
+                let my = ((cell.top + cell.bottom) / 2.0).round();
+                let half_h = (CAL_CHIP_H * s / 2.0).round();
+                let half_w = if is_lunar_first {
+                    (((width(&label, font) / s + 9.0).max(CAL_CHIP_H) * s) / 2.0).round()
+                } else {
+                    half_h
+                };
+                let chip = rect(mx - half_w, my - half_h, mx + half_w, my + half_h);
                 if today {
-                    rt.FillRoundedRectangle(&rounded(chip, CAL_CHIP_H * s / 2.0), &self.brush(color(GREEN.0, GREEN.1, GREEN.2, a))?);
-                } else if day == sel {
+                    rt.FillRoundedRectangle(&rounded(chip, half_h), &self.brush(color(GREEN.0, GREEN.1, GREEN.2, a))?);
+                } else if selected {
                     let inner = rect(chip.left + 0.5, chip.top + 0.5, chip.right - 0.5, chip.bottom - 0.5);
-                    rt.DrawRoundedRectangle(&rounded(inner, CAL_CHIP_H * s / 2.0), &self.brush(grey(0.7, a))?, 1.0 * s, None);
+                    rt.DrawRoundedRectangle(&rounded(inner, half_h - 0.5), &self.brush(grey(0.7, a))?, 1.0 * s, None);
                 } else if hovered == Some(Button::CalCell(i)) {
-                    rt.FillRoundedRectangle(&rounded(chip, CAL_CHIP_H * s / 2.0), &self.brush(grey(0.14, a))?);
+                    rt.FillRoundedRectangle(&rounded(chip, half_h), &self.brush(grey(0.14, a))?);
                 }
-                let ink = if today { color(0.02, 0.13, 0.04, a) } else if l.is_some_and(|l| l.day == 1) { color(YELLOW.0, YELLOW.1, YELLOW.2, a) } else { grey(1.0, a) };
-                text(&label, if today { F_CLOCK_BOLD } else { font }, cell, center, ink)?;
+                let ink = if today {
+                    color(0.02, 0.13, 0.04, a)
+                } else if !in_month {
+                    grey(if hovered == Some(Button::CalCell(i)) { 0.45 } else { 0.24 }, a)
+                } else if is_lunar_first {
+                    color(YELLOW.0, YELLOW.1, YELLOW.2, a)
+                } else {
+                    grey(0.92, a)
+                };
+                let u: Vec<u16> = label.encode_utf16().collect();
+                let layout = self.dw.CreateTextLayout(&u, &fonts[font], 200.0, 200.0)?;
+                let om = layout.GetOverhangMetrics()?;
+                let ink_cx = (-om.left + (200.0 + om.right)) / 2.0;
+                let ink_cy = (-om.top + (200.0 + om.bottom)) / 2.0;
+                let origin = Vector2 { X: mx - ink_cx, Y: my - ink_cy };
+                rt.DrawTextLayout(origin, &layout, &self.brush(ink)?, D2D1_DRAW_TEXT_OPTIONS_NONE);
             }
         }
         Ok(())

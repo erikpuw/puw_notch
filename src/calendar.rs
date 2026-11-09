@@ -20,6 +20,23 @@ pub fn first_column(year: i32, month: u32) -> u32 {
     weekday(year, month, 1)
 }
 
+/// The `(year, month, day, in_current_month)` at grid cell `i` (`0..42`).
+pub fn cell_date(year: i32, month: u32, i: usize) -> (i32, u32, u32, bool) {
+    let first = first_column(year, month) as i32;
+    let days = days_in_month(year, month) as i32;
+    let offset = i as i32 - first + 1;
+    if offset < 1 {
+        let (py, pm) = shift_month(year, month, -1);
+        let p_days = days_in_month(py, pm) as i32;
+        (py, pm, (p_days + offset) as u32, false)
+    } else if offset > days {
+        let (ny, nm) = shift_month(year, month, 1);
+        (ny, nm, (offset - days) as u32, false)
+    } else {
+        (year, month, offset as u32, true)
+    }
+}
+
 pub fn shift_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
     let n = year * 12 + month as i32 - 1 + delta;
     (n.div_euclid(12), n.rem_euclid(12) as u32 + 1)
@@ -236,5 +253,15 @@ mod tests {
         assert_eq!(lunar_title(2026, 11, 7.0, false), "Tháng 9 – 10 âm lịch");
         assert_eq!(weekday_long(5, false), "Thứ Bảy");
         assert_eq!(weekday_short(6, true), "Su");
+    }
+
+    #[test]
+    fn adjacent_month_cells_fill_the_grid() {
+        // Nov 1 2026 is a Sunday (index 6); cells 0..6 are Oct 26..31.
+        assert_eq!(cell_date(2026, 11, 0), (2026, 10, 26, false));
+        assert_eq!(cell_date(2026, 11, 5), (2026, 10, 31, false));
+        assert_eq!(cell_date(2026, 11, 6), (2026, 11, 1, true));
+        assert_eq!(cell_date(2026, 11, 35), (2026, 11, 30, true));
+        assert_eq!(cell_date(2026, 11, 36), (2026, 12, 1, false));
     }
 }
