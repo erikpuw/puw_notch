@@ -204,12 +204,19 @@ impl Reader {
             let mut watches = DownloadWatches::default();
             let (mut active, mut woke, mut quiet_until) = (false, Woke::Signal, Instant::now());
             let mut showed = false;
+            let mut last_seen: Option<(ActivityKind, String)> = None;
             while !flag.load(Ordering::Relaxed) {
                 let now = Instant::now();
                 if woke == Woke::Signal {
                     monitor.start_hunt(now);
                 }
                 let current = monitor.poll(now, active || woke != Woke::Timeout);
+                let seen = current.as_ref().map(|a| (a.kind, a.title.clone()));
+                if seen != last_seen {
+                    let windows: Vec<String> = explorer_windows().into_iter().map(|h| format!("{:?} {:?}", h.0, window_title(h))).collect();
+                    crate::system::log(&format!("live activity now {:?} {:?}, windows {windows:?}", seen, current.as_ref().and_then(|a| a.progress)));
+                    last_seen = seen;
+                }
                 let finished = monitor.take_finished();
                 let show = current.is_some() || finished.is_some();
                 active = current.is_some() || monitor.waiting();
