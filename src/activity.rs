@@ -48,7 +48,7 @@ pub struct Watch {
 }
 
 const ACTIVE_POLL: Duration = Duration::from_millis(250);
-const IDLE_CHECK: Duration = Duration::from_secs(10);
+const IDLE_CHECK: Duration = Duration::from_secs(2);
 const CHANGE_QUIET: Duration = Duration::from_secs(1);
 const DOWNLOAD_SCAN: Duration = Duration::from_secs(30);
 const DIRS_REFRESH: Duration = Duration::from_secs(60);
@@ -943,7 +943,7 @@ mod tests {
         static FROM: OnceLock<Instant> = OnceLock::new();
         if id_object == 0 && is_operation_window(hwnd) && event != 0x800C && event != 0x800B {
             let since = FROM.get_or_init(Instant::now).elapsed().as_millis();
-            println!("[{since:>5} ms since the first event] hook event {event:#06x} visible {} title {:?}", IsWindowVisible(hwnd).as_bool(), window_title(hwnd));
+            println!("[{since:>5} ms since the first event] hook event {event:#06x} window {:?} visible {} title {:?}", hwnd.0, IsWindowVisible(hwnd).as_bool(), window_title(hwnd));
         }
     }
 
@@ -1073,7 +1073,7 @@ mod tests {
         let mut monitor = Monitor::default();
         assert!(!monitor.waiting());
         monitor.explorer_hunting = true;
-        assert!(monitor.waiting(), "a window is there: do not go back to checking every ten seconds");
+        assert!(monitor.waiting(), "a window is there: do not go back to the slow idle check");
     }
 
     #[test]
