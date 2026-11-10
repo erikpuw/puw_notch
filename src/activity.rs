@@ -482,7 +482,7 @@ fn window_hunt_open(since: Instant, now: Instant) -> bool {
 }
 
 fn file_op_confirmed(first_seen: Instant, now: Instant, activity: &LiveActivity) -> bool {
-    activity.progress.is_some() || (names_operation(activity) && now.saturating_duration_since(first_seen) >= CONFIRM_AFTER)
+    activity.progress.is_some_and(|p| p < 1.0) || (names_operation(activity) && now.saturating_duration_since(first_seen) >= CONFIRM_AFTER)
 }
 
 fn is_file_op(kind: ActivityKind) -> bool {
@@ -1078,6 +1078,17 @@ mod tests {
         let copying = parse_explorer_title("Copying 12% complete");
         assert_eq!(monitor.confirm_explorer(copying, Instant::now()).map(|a| a.kind), Some(ActivityKind::FileOp));
         assert!(!monitor.waiting());
+    }
+
+    #[test]
+    fn a_reused_window_still_saying_100_percent_does_not_show_the_last_task() {
+        let mut monitor = Monitor::default();
+        let t0 = Instant::now();
+        let stale = parse_explorer_title("Deleting 100% complete");
+        assert!(monitor.confirm_explorer(stale, t0).is_none(), "a new task never starts at 100%: that is the last one");
+        assert!(monitor.waiting());
+        let fresh = parse_explorer_title("Copying 21% complete");
+        assert!(monitor.confirm_explorer(fresh, t0 + Duration::from_millis(250)).is_some());
     }
 
     #[test]
