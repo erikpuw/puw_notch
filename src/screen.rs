@@ -51,7 +51,7 @@ pub fn watch(hwnd: HWND) {
     for event in [0x0003, 0x000B] {
         unsafe { SetWinEventHook(event, event, None, Some(on_event), 0, 0, 2) };
     }
-    unsafe { SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, None, Some(on_window_shown), 0, 0, 2) };
+    unsafe { SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE, None, Some(on_window_shown), 0, 0, 2) };
 }
 
 pub enum Check {

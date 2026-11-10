@@ -927,13 +927,37 @@ mod tests {
         format!("class={:?} title={:?} pid={pid}", String::from_utf16_lossy(&class[..n]), window_title(hwnd))
     }
 
+    unsafe extern "system" fn trace_hook(_: windows::Win32::UI::Accessibility::HWINEVENTHOOK, event: u32, hwnd: HWND, id_object: i32, _: i32, _: u32, _: u32) {
+        if id_object == 0 && is_operation_window(hwnd) {
+            println!("hook event {event:#06x} for an operation window {:?}", hwnd.0);
+        }
+    }
+
+    fn pump_messages_for(span: Duration) {
+        use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE};
+        let until = Instant::now() + span;
+        while Instant::now() < until {
+            let mut msg = MSG::default();
+            while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
-    #[ignore = "read-only trace for 90 s: prints every window that appears or goes away with its class, title and the names inside it; delete, move and copy a file that asks to replace while it runs"]
+    #[ignore = "read-only trace for 90 s: prints every window that appears or goes away with its class, title and the names inside it, and every window event of the operation window the way the notch's hook hears it; delete, move and copy a file that asks to replace while it runs"]
     fn trace_new_windows_while_you_copy_move_and_delete() {
         let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         let mut monitor = Monitor::new(true);
         let mut known: std::collections::HashMap<isize, String> = visible_top_level_windows().into_iter().map(|h| (h.0 as isize, describe_window(h))).collect();
         let start = Instant::now();
+        let mut opened = 0usize;
+        println!("tracing for 90 s: {} windows are open now; copy, move and delete something", known.len());
+        let hook = unsafe { windows::Win32::UI::Accessibility::SetWinEventHook(0x8000, 0x800C, None, Some(trace_hook), 0, 0, 2) };
         while start.elapsed() < Duration::from_secs(90) {
             let now_windows = visible_top_level_windows();
             for hwnd in &now_windows {
@@ -942,6 +966,7 @@ mod tests {
                     let line = describe_window(*hwnd);
                     let labels = monitor.dialog_labels(*hwnd);
                     println!("[{:>5} ms] OPEN  {line} names={:?}", start.elapsed().as_millis(), &labels[..labels.len().min(14)]);
+                    opened += 1;
                     known.insert(id, line);
                 }
             }
@@ -952,8 +977,10 @@ mod tests {
                 }
                 alive
             });
-            std::thread::sleep(Duration::from_millis(250));
+            pump_messages_for(Duration::from_millis(250));
         }
+        unsafe { let _ = windows::Win32::UI::Accessibility::UnhookWinEvent(hook); }
+        println!("trace finished: {opened} new windows were seen");
         if com.is_ok() { unsafe { CoUninitialize(); } }
     }
 
