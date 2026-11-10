@@ -75,6 +75,7 @@ const NOTES_MAX: usize = 30;
 const CARET_MS: u32 = 530;
 const CHECK_MS: u32 = 500;
 const ACTIVITY_MS: u32 = 1500;
+static ACTIVITY_SHOWN: AtomicBool = AtomicBool::new(true);
 const TRIM_TICKS: u32 = 10;
 static BEAT: AtomicU64 = AtomicU64::new(0);
 static WHERE: AtomicU8 = AtomicU8::new(0);
@@ -747,7 +748,12 @@ impl App {
             return;
         }
         if self.notch.mode != Mode::Alert {
-            self.show_banner(t, ms);
+            let mode = self.notch.mode;
+            let hidden = self.hidden;
+            let shown = self.show_banner(t, ms);
+            if ACTIVITY_SHOWN.swap(shown, Ordering::Relaxed) != shown {
+                system::log(&format!("live activity banner {}: notch mode {mode:?}, hidden {hidden}", if shown { "shown" } else { "refused" }));
+            }
         } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.icon.is_some() && b.choices.is_empty()) {
             let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
             self.notch.set_alert_width(width);

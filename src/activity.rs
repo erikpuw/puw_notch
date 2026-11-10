@@ -959,6 +959,28 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "read-only trace for 60 s: runs the notch's own monitor the way the reader does and prints every change of what it would show; copy and delete many files while it runs"]
+    fn trace_what_the_monitor_would_show_while_you_copy_and_delete() {
+        let mut monitor = Monitor::new(true);
+        let start = Instant::now();
+        let mut last: Option<(ActivityKind, String, Option<i32>)> = None;
+        monitor.start_hunt(start);
+        println!("monitor trace for 60 s");
+        while start.elapsed() < Duration::from_secs(60) {
+            let polled_at = Instant::now();
+            let shown = monitor.poll(polled_at, true);
+            let took = polled_at.elapsed().as_millis();
+            let now_shows = shown.as_ref().map(|a| (a.kind, a.title.clone(), a.progress.map(|p| (p * 100.0) as i32)));
+            if now_shows != last || took > 200 {
+                println!("[{:>5} ms] poll took {took} ms, shows {now_shows:?}, waiting {}", start.elapsed().as_millis(), monitor.waiting());
+                last = now_shows;
+            }
+            std::thread::sleep(ACTIVE_POLL);
+        }
+        println!("monitor trace finished");
+    }
+
+    #[test]
     #[ignore = "read-only trace for 90 s: prints every window that appears or goes away with its class, title and the names inside it, and every window event of the operation window the way the notch's hook hears it; delete, move and copy a file that asks to replace while it runs"]
     fn trace_new_windows_while_you_copy_move_and_delete() {
         let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
@@ -974,8 +996,10 @@ mod tests {
                 let id = hwnd.0 as isize;
                 if !known.contains_key(&id) {
                     let line = describe_window(*hwnd);
+                    let read_from = Instant::now();
                     let labels = monitor.dialog_labels(*hwnd);
-                    println!("[{:>5} ms] OPEN  {line} names={:?}", start.elapsed().as_millis(), &labels[..labels.len().min(14)]);
+                    let read_ms = read_from.elapsed().as_millis();
+                    println!("[{:>5} ms] OPEN  {line} read {read_ms} ms names={:?}", start.elapsed().as_millis(), &labels[..labels.len().min(14)]);
                     opened += 1;
                     known.insert(id, line);
                 }
