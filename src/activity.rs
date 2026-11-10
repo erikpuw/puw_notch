@@ -323,6 +323,8 @@ impl Monitor {
     pub fn start_hunt(&mut self, now: Instant) {
         self.explorer_window_since.get_or_insert(now);
         self.explorer_hunting = true;
+        (self.explorer_op, self.explorer_ui_at) = (None, None);
+        (self.explorer_seen, self.explorer_pending) = (None, false);
     }
 
     pub fn waiting(&self) -> bool {
@@ -360,22 +362,20 @@ impl Monitor {
             if activity.as_ref().is_some_and(names_operation) {
                 return activity;
             }
-            let known = self.explorer_op.as_ref().filter(|(h, ..)| *h == id).map(|(_, kind, name)| (*kind, name.clone()));
-            if let (Some(a), Some((kind, name))) = (activity.as_mut(), known) {
-                (a.kind, a.title) = (kind, name);
-                return activity;
-            }
             if self.explorer_ui_at.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_secs(1)) {
+                let known = self.explorer_op.as_ref().filter(|(h, ..)| *h == id).map(|(_, kind, name)| (*kind, name.clone()));
+                if let (Some(a), Some((kind, name))) = (activity.as_mut(), known) {
+                    (a.kind, a.title) = (kind, name);
+                }
                 if activity.is_some() { return activity; }
                 continue;
             }
             self.explorer_ui_at = Some(now);
             let labels = self.dialog_labels(hwnd);
-            if let Some(a) = parse_explorer_labels(&title, &labels) {
-                if names_operation(&a) {
-                    self.explorer_op = Some((id, a.kind, a.title.clone()));
-                }
-                return Some(a);
+            let read = parse_explorer_labels(&title, &labels);
+            self.explorer_op = read.as_ref().filter(|a| names_operation(a)).map(|a| (id, a.kind, a.title.clone()));
+            if read.is_some() {
+                return read;
             }
         }
         None
@@ -1106,6 +1106,19 @@ mod tests {
         assert_eq!(monitor.explorer_window_since, Some(t0));
         monitor.start_hunt(t0 + Duration::from_secs(3));
         assert_eq!(monitor.explorer_window_since, Some(t0), "a second wake does not restart the clock");
+    }
+
+    #[test]
+    fn a_new_operation_window_forgets_what_the_last_operation_was() {
+        let mut monitor = Monitor::default();
+        let t0 = Instant::now();
+        monitor.explorer_op = Some((7, ActivityKind::Delete, "Đang xóa".into()));
+        monitor.explorer_ui_at = Some(t0);
+        monitor.explorer_seen = Some(t0);
+        monitor.start_hunt(t0 + Duration::from_secs(2));
+        assert!(monitor.explorer_op.is_none(), "Explorer reuses the window: a copy must not keep the delete's name");
+        assert!(monitor.explorer_ui_at.is_none(), "read the window again at once");
+        assert!(monitor.explorer_seen.is_none());
     }
 
     #[test]
