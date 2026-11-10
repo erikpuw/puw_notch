@@ -157,6 +157,12 @@ impl Watch {
         Self { enabled, reader: None }
     }
 
+    pub fn forget(&mut self) {
+        if let Some(reader) = self.reader.as_mut() {
+            (reader.current, reader.finished) = (None, None);
+        }
+    }
+
     pub fn poll(&mut self, now: Instant, target: isize) -> Option<LiveActivity> {
         if !self.enabled {
             self.reader = None;
@@ -857,6 +863,21 @@ mod tests {
         assert!(watch.latest(now).is_none());
         assert!(watch.poll(now, 0).is_none());
         assert!(watch.reader.is_none() && watch.take_finished().is_none());
+    }
+
+    #[test]
+    fn a_closed_banner_forgets_the_last_task_so_the_next_one_starts_clean() {
+        let (updates, receiver) = channel();
+        let now = Instant::now();
+        let deleting = LiveActivity { kind: ActivityKind::Delete, title: "Deleting files".into(), detail: "100%".into(), progress: Some(1.0), result: None, file: None, more: 0 };
+        let mut watch = Watch { enabled: true, reader: Some(Reader {
+            stop: Arc::new(AtomicBool::new(false)), updates: receiver, current: None, finished: Some(deleting.clone()), received_at: now,
+        }) };
+        updates.send((Some(deleting), None)).unwrap();
+        assert!(watch.latest(now).is_some());
+        watch.forget();
+        assert!(watch.latest(now).is_none(), "nothing of the delete is left once the banner is gone");
+        assert!(watch.take_finished().is_none());
     }
 
     #[test]

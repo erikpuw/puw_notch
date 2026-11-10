@@ -431,6 +431,11 @@ impl App {
         } else {
             self.animating = false;
             self.set_frame_interval(0);
+            if self.notch.mode != Mode::Alert && self.banner.is_some() {
+                self.banner = None;
+                self.renderer.forget_morph("banner");
+                self.activity.forget();
+            }
         }
     }
 
