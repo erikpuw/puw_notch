@@ -20,8 +20,7 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _:
 }
 
 const OBJID_WINDOW: i32 = 0;
-const EVENT_OBJECT_SHOW: u32 = 0x8002;
-unsafe extern "system" fn on_window_shown(_: HWINEVENTHOOK, _: u32, hwnd: HWND, id_object: i32, _: i32, _: u32, _: u32) {
+unsafe extern "system" fn on_window_created(_: HWINEVENTHOOK, _: u32, hwnd: HWND, id_object: i32, _: i32, _: u32, _: u32) {
     if id_object == OBJID_WINDOW && crate::activity::is_operation_window(hwnd) {
         crate::system::log("a file operation window was shown");
         crate::activity::wake();
@@ -51,7 +50,7 @@ pub fn watch(hwnd: HWND) {
     for event in [0x0003, 0x000B] {
         unsafe { SetWinEventHook(event, event, None, Some(on_event), 0, 0, 2) };
     }
-    unsafe { SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE, None, Some(on_window_shown), 0, 0, 2) };
+    unsafe { SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE, None, Some(on_window_created), 0, 0, 2) };
 }
 
 pub enum Check {
