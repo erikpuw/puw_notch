@@ -938,8 +938,10 @@ mod tests {
     }
 
     unsafe extern "system" fn trace_hook(_: windows::Win32::UI::Accessibility::HWINEVENTHOOK, event: u32, hwnd: HWND, id_object: i32, _: i32, _: u32, _: u32) {
-        if id_object == 0 && is_operation_window(hwnd) {
-            println!("hook event {event:#06x} for an operation window {:?}", hwnd.0);
+        static FROM: OnceLock<Instant> = OnceLock::new();
+        if id_object == 0 && is_operation_window(hwnd) && event != 0x800C && event != 0x800B {
+            let since = FROM.get_or_init(Instant::now).elapsed().as_millis();
+            println!("[{since:>5} ms since the first event] hook event {event:#06x} visible {} title {:?}", IsWindowVisible(hwnd).as_bool(), window_title(hwnd));
         }
     }
 
