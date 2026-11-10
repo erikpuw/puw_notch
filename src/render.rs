@@ -1602,6 +1602,10 @@ impl Renderer {
     }
 
 
+    pub fn forget_morph(&self, slot: &'static str) {
+        self.morphs.borrow_mut().remove(slot);
+    }
+
     pub fn status_banner_width(&mut self, title: &str, body: &str, rows: &[Row], scale: f32) -> f32 {
         let Ok(fonts) = self.fonts(scale) else { return notch::alert_size(0)[0] };
         let line = |text: &str, font: usize| -> f32 {

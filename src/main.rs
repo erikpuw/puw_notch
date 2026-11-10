@@ -675,9 +675,13 @@ impl App {
         } else {
             0
         };
+        let opening = self.notch.mode != Mode::Alert;
         let shown = if t.choices.is_empty() { self.notch.on_alert(lines) } else { self.notch.on_alert_choice(lines) };
         if self.hidden || !shown {
             return false;
+        }
+        if opening {
+            self.renderer.forget_morph("banner");
         }
         if t.icon.is_some() && t.choices.is_empty() && t.badge.is_none() {
             let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
@@ -756,7 +760,7 @@ impl App {
             if ACTIVITY_SHOWN.swap(shown, Ordering::Relaxed) != shown {
                 system::log(&format!("live activity banner {}: notch mode {mode:?}, hidden {hidden}", if shown { "shown" } else { "refused" }));
             }
-        } else if self.banner.as_ref().is_some_and(|b| b.app == t.app && b.icon.is_some() && b.choices.is_empty()) {
+        } else if self.banner.as_ref().is_some_and(|b| (b.app == t.app || (is_activity_app(&b.app) && is_activity_app(&t.app))) && b.icon.is_some() && b.choices.is_empty()) {
             let width = self.renderer.status_banner_width(&t.title, &t.body, &t.rows, self.scale);
             self.notch.set_alert_width(width);
             self.banner = Some(t);
@@ -1665,6 +1669,10 @@ fn app_icon(small: bool) -> HICON {
 
 fn status_toast(source: &str, title: String, body: &str, level: Option<f32>, icon: &'static str) -> Toast {
     Toast { app: source.to_string(), title, body: body.to_string(), level, icon: Some(icon), image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() }
+}
+
+fn is_activity_app(app: &str) -> bool {
+    [tr("Tệp", "Files"), tr("Tải xuống", "Download"), tr("Build", "Build")].contains(&app)
 }
 
 fn activity_toast(a: &activity::LiveActivity, done: bool) -> Toast {
