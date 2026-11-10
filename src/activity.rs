@@ -54,6 +54,7 @@ const DOWNLOAD_SCAN: Duration = Duration::from_secs(30);
 const DIRS_REFRESH: Duration = Duration::from_secs(60);
 const MAX_WATCHED_DIRS: usize = 63;
 const CONFIRM_AFTER: Duration = Duration::from_millis(700);
+const WINDOW_PATIENCE: Duration = Duration::from_secs(15);
 
 static WAKE: OnceLock<isize> = OnceLock::new();
 
@@ -254,6 +255,8 @@ pub struct Monitor {
     explorer_ui_at: Option<Instant>,
     explorer_seen: Option<Instant>,
     explorer_pending: bool,
+    explorer_window_since: Option<Instant>,
+    explorer_hunting: bool,
     build_exe: Option<String>,
     build_since: Option<Instant>,
     build_pid: Option<u32>,
@@ -307,7 +310,7 @@ impl Monitor {
     }
 
     pub fn waiting(&self) -> bool {
-        self.explorer_pending
+        self.explorer_pending || self.explorer_hunting
     }
 
     fn confirm_explorer(&mut self, found: Option<LiveActivity>, now: Instant) -> Option<LiveActivity> {
@@ -326,8 +329,12 @@ impl Monitor {
         let windows = explorer_windows();
         if windows.is_empty() {
             self.explorer_op = None;
+            self.explorer_window_since = None;
+            self.explorer_hunting = false;
             return None;
         }
+        let since = *self.explorer_window_since.get_or_insert(now);
+        self.explorer_hunting = window_hunt_open(since, now);
         for hwnd in windows {
             let id = hwnd.0 as isize;
             let title = window_title(hwnd);
@@ -443,6 +450,10 @@ impl Monitor {
 
 fn ended_activity(last: Vec<LiveActivity>, running: &[LiveActivity]) -> Option<LiveActivity> {
     last.into_iter().find(|a| !is_file_op(a.kind) && !running.iter().any(|r| r.kind == a.kind))
+}
+
+fn window_hunt_open(since: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(since) < WINDOW_PATIENCE
 }
 
 fn file_op_confirmed(first_seen: Instant, now: Instant, activity: &LiveActivity) -> bool {
@@ -986,6 +997,18 @@ mod tests {
         assert!(monitor.confirm_explorer(copying.clone(), t0 + CONFIRM_AFTER / 2).is_none());
         assert_eq!(monitor.confirm_explorer(copying, t0 + CONFIRM_AFTER).map(|a| a.kind), Some(ActivityKind::FileOp));
         assert!(!monitor.waiting());
+    }
+
+    #[test]
+    fn a_window_not_yet_readable_keeps_the_reader_looking_closely_for_a_while_then_lets_go() {
+        let t0 = Instant::now();
+        assert!(window_hunt_open(t0, t0));
+        assert!(window_hunt_open(t0, t0 + WINDOW_PATIENCE - Duration::from_millis(1)));
+        assert!(!window_hunt_open(t0, t0 + WINDOW_PATIENCE));
+        let mut monitor = Monitor::default();
+        assert!(!monitor.waiting());
+        monitor.explorer_hunting = true;
+        assert!(monitor.waiting(), "a window is there: do not go back to checking every ten seconds");
     }
 
     #[test]
