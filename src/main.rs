@@ -696,6 +696,8 @@ impl App {
             self.show_activity(activity_toast(&a, false), ACTIVITY_MS);
         } else if let Some(a) = self.activity.take_finished() {
             self.show_activity(activity_toast(&a, true), ALERT_MS);
+        } else if self.notch.mode == Mode::Alert && self.banner.as_ref().is_some_and(|b| b.app == tr("Tệp", "Files") && b.choices.is_empty()) {
+            unsafe { SetTimer(Some(self.hwnd), T_ALERT, 1, None) };
         }
     }
 

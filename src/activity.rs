@@ -197,6 +197,7 @@ impl Reader {
             let mut monitor = Monitor::new(true);
             let mut watches = DownloadWatches::default();
             let (mut active, mut woke, mut quiet_until) = (false, Woke::Signal, Instant::now());
+            let mut showed = false;
             while !flag.load(Ordering::Relaxed) {
                 let now = Instant::now();
                 if woke == Woke::Signal {
@@ -212,9 +213,10 @@ impl Reader {
                 if updates.send((current, finished)).is_err() {
                     break;
                 }
-                if show {
+                if show || showed {
                     unsafe { let _ = PostMessageW(Some(HWND(target as _)), WM_ACTIVITY, WPARAM(0), LPARAM(0)); }
                 }
+                showed = show;
                 let now = Instant::now();
                 watches.refresh(now);
                 let (listen, timeout) = wait_plan(active, now, quiet_until);
