@@ -199,6 +199,9 @@ impl Reader {
             let (mut active, mut woke, mut quiet_until) = (false, Woke::Signal, Instant::now());
             while !flag.load(Ordering::Relaxed) {
                 let now = Instant::now();
+                if woke == Woke::Signal {
+                    monitor.start_hunt(now);
+                }
                 let current = monitor.poll(now, active || woke != Woke::Timeout);
                 let finished = monitor.take_finished();
                 let show = current.is_some() || finished.is_some();
@@ -309,6 +312,11 @@ impl Monitor {
         self.finished.take()
     }
 
+    pub fn start_hunt(&mut self, now: Instant) {
+        self.explorer_window_since.get_or_insert(now);
+        self.explorer_hunting = true;
+    }
+
     pub fn waiting(&self) -> bool {
         self.explorer_pending || self.explorer_hunting
     }
@@ -329,8 +337,10 @@ impl Monitor {
         let windows = explorer_windows();
         if windows.is_empty() {
             self.explorer_op = None;
-            self.explorer_window_since = None;
-            self.explorer_hunting = false;
+            self.explorer_hunting = self.explorer_window_since.is_some_and(|since| window_hunt_open(since, now));
+            if !self.explorer_hunting {
+                self.explorer_window_since = None;
+            }
             return None;
         }
         let since = *self.explorer_window_since.get_or_insert(now);
@@ -1036,6 +1046,17 @@ mod tests {
         assert!(!monitor.waiting());
         monitor.explorer_hunting = true;
         assert!(monitor.waiting(), "a window is there: do not go back to checking every ten seconds");
+    }
+
+    #[test]
+    fn a_wake_keeps_the_reader_looking_before_the_window_is_even_visible() {
+        let mut monitor = Monitor::default();
+        let t0 = Instant::now();
+        monitor.start_hunt(t0);
+        assert!(monitor.waiting());
+        assert_eq!(monitor.explorer_window_since, Some(t0));
+        monitor.start_hunt(t0 + Duration::from_secs(3));
+        assert_eq!(monitor.explorer_window_since, Some(t0), "a second wake does not restart the clock");
     }
 
     #[test]
