@@ -251,7 +251,7 @@ const LYRICS_BTN: f32 = 28.0;
 const SKIP_GAP: f32 = 40.0;
 const CONTROLS_Y: f32 = 148.0;
 const BAR_Y: f32 = 108.0;
-const SIDE: f32 = 44.0;
+const SIDE: f32 = 36.0;
 const FOCUS_CHIP_Y: f32 = 92.0;
 const FOCUS_CHIP_H: f32 = 22.0;
 const FOCUS_STRIP_Y: f32 = 128.0;
@@ -284,9 +284,9 @@ fn focus_segments(width: f32) -> Vec<(f32, f32)> {
     }).collect()
 }
 const ARROW: f32 = 18.0;
-const ARROW_INSET: f32 = 13.0;
+const ARROW_INSET: f32 = 6.0;
 const ARROW_GLYPH: f32 = 0.75;
-const PAGE_CLIP: f32 = 34.0;
+const PAGE_CLIP: f32 = 28.0;
 fn arrow_y(h: f32) -> f32 {
     h / 2.0 - 10.0
 }
