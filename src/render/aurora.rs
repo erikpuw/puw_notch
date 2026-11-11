@@ -1,6 +1,6 @@
 use super::*;
 
-const AURORA_MAX_LUM: f32 = 0.5;
+const AURORA_MAX_LUM: f32 = 0.36;
 
 const AURORA_STEPS: usize = 48;
 const AURORA_LAYERS: [(f32, f32); 8] = [(2.4, 0.12), (2.0, 0.14), (1.65, 0.16), (1.3, 0.19), (1.0, 0.22), (0.72, 0.26), (0.48, 0.3), (0.26, 0.36)];
@@ -9,7 +9,7 @@ const AURORA_Y: f32 = 0.8;
 const AURORA_AMP: f32 = 0.07;
 const AURORA_HALO: f32 = 0.018;
 const AURORA_CORE: [(f32, f32); 4] = [(9.0, 0.10), (5.0, 0.16), (2.6, 0.30), (1.2, 0.55)];
-const AURORA_CORE_WHITE: f32 = 0.35;
+const AURORA_CORE_WHITE: f32 = 0.15;
 
 fn at(t: f32, u: f32) -> (f32, f32) {
     use std::f32::consts::TAU;
@@ -92,7 +92,7 @@ impl Renderer {
             let stops: Vec<D2D1_GRADIENT_STOP> = (0..=5).map(|i| {
                 let f = i as f32 / 5.0;
                 let c = (c1.0 + (c2.0 - c1.0) * f, c1.1 + (c2.1 - c1.1) * f, c1.2 + (c2.2 - c1.2) * f);
-                let pulse = 0.45 + 0.55 * (0.5 + 0.5 * (t * 0.4 + i as f32 * 1.7).sin());
+                let pulse = 0.55 + 0.30 * (0.5 + 0.5 * (t * 0.4 + i as f32 * 1.7).sin());
                 D2D1_GRADIENT_STOP { position: f, color: color(c.0, c.1, c.2, pulse) }
             }).collect();
             let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: l, Y: 0.0 }, endPoint: Vector2 { X: r, Y: 0.0 } };

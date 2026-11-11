@@ -1926,7 +1926,7 @@ impl Renderer {
             if level > 0.0 && open > 0.0 && panel_ok {
                 let (gr, gg, gb) = dim_to_lum(tint, GLOW_MAX_LUM);
                 let stop = |position: f32, a: f32| D2D1_GRADIENT_STOP { position, color: color(gr, gg, gb, a * open * level * gate) };
-                let stops = rt.CreateGradientStopCollection(&[stop(0.58, 0.0), stop(0.68, 0.08), stop(0.82, 0.42), stop(1.0, 1.0)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                let stops = rt.CreateGradientStopCollection(&[stop(0.58, 0.0), stop(0.68, 0.08), stop(0.82, 0.28), stop(1.0, 0.65)], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                 let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
                 rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &stops)?, None);
             }
