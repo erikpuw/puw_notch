@@ -457,7 +457,9 @@ impl Monitor {
     }
 
     fn poll_build(&mut self, now: Instant) -> Option<LiveActivity> {
-        let Some((pid, exe)) = pick_build(&process_list()) else {
+        let builds = pick_builds(&process_list());
+        let shown = builds.iter().find(|(p, _)| Some(*p) == self.build_pid).or(builds.first()).cloned();
+        let Some((pid, exe)) = shown else {
             self.build_exit = self.build_proc.take().and_then(|p| p.exit_code());
             (self.build_pid, self.build_exe, self.build_since) = (None, None, None);
             return None;
@@ -471,7 +473,7 @@ impl Monitor {
             self.build_since = Some(now);
         }
         let secs = self.build_since.map_or(0, |t| now.duration_since(t).as_secs());
-        Some(LiveActivity { kind: ActivityKind::Build, title: build_name(&exe).to_string(), detail: elapsed_text(secs), progress: None, result: None, file: None, more: 0 })
+        Some(LiveActivity { kind: ActivityKind::Build, title: build_name(&exe).to_string(), detail: elapsed_text(secs), progress: None, result: None, file: None, more: builds.len() - 1 })
     }
 }
 
@@ -750,11 +752,12 @@ fn build_name(exe: &str) -> &'static str {
     }
 }
 
-pub fn pick_build(procs: &[(u32, u32, String)]) -> Option<(u32, String)> {
+pub fn pick_builds(procs: &[(u32, u32, String)]) -> Vec<(u32, String)> {
     procs
         .iter()
-        .find(|(_, parent, exe)| listed(BUILD_TOOLS, exe) && procs.iter().any(|(pid, _, p)| pid == parent && listed(TERMINALS, p)))
+        .filter(|(_, parent, exe)| listed(BUILD_TOOLS, exe) && procs.iter().any(|(pid, _, p)| pid == parent && listed(TERMINALS, p)))
         .map(|(pid, _, exe)| (*pid, exe.clone()))
+        .collect()
 }
 
 fn process_list() -> Vec<(u32, u32, String)> {
@@ -1147,6 +1150,14 @@ mod tests {
         assert_eq!(a.progress, Some(0.53));
         let one = parse_explorer_labels("53% complete", &labels[..3]).unwrap();
         assert_eq!(one.more, 0);
+        let mixed: Vec<String> = [
+            "Copying 1 item from src to dst - 83% complete", "Copying 1 item from ", "src",
+            "Deleting 13,308 items from build - 16% complete", "Deleting 13,308 items from ", "16% complete",
+        ].map(String::from).to_vec();
+        let a = parse_explorer_labels("2 Running Actions", &mixed).unwrap();
+        assert_eq!((a.kind, a.more, a.progress), (ActivityKind::FileOp, 1, Some(0.83)));
+        let deleting = parse_explorer_labels("16% complete", &mixed[3..]).unwrap();
+        assert_eq!((deleting.kind, deleting.more), (ActivityKind::Delete, 0));
     }
 
     #[test]
@@ -1261,12 +1272,14 @@ mod tests {
     fn only_a_build_tool_a_terminal_started_counts() {
         let p = |pid, parent, exe: &str| (pid, parent, exe.to_string());
         let shell = [p(1, 0, "powershell.exe"), p(2, 1, "cargo.exe"), p(3, 2, "rustc.exe")];
-        assert_eq!(pick_build(&shell).map(|(_, exe)| exe).as_deref(), Some("cargo.exe"));
+        assert_eq!(pick_builds(&shell), vec![(2, "cargo.exe".to_string())]);
         let wrapped = [p(1, 0, "pwsh.exe"), p(2, 1, "rtk.exe"), p(3, 2, "cargo.exe")];
-        assert_eq!(pick_build(&wrapped).map(|(_, exe)| exe).as_deref(), Some("cargo.exe"));
+        assert_eq!(pick_builds(&wrapped), vec![(3, "cargo.exe".to_string())]);
         let ide = [p(1, 0, "Code.exe"), p(2, 1, "cargo.exe")];
-        assert_eq!(pick_build(&ide), None, "not from a terminal");
+        assert!(pick_builds(&ide).is_empty(), "not from a terminal");
         let nested = [p(1, 0, "cmd.exe"), p(2, 1, "node.exe")];
-        assert_eq!(pick_build(&nested), None, "node is not a build tool");
+        assert!(pick_builds(&nested).is_empty(), "node is not a build tool");
+        let two = [p(1, 0, "pwsh.exe"), p(2, 1, "cargo.exe"), p(5, 0, "cmd.exe"), p(6, 5, "dotnet.exe")];
+        assert_eq!(pick_builds(&two).len(), 2, "two builds in two terminals: one banner with +1");
     }
 }
