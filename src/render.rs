@@ -283,10 +283,12 @@ fn focus_segments(width: f32) -> Vec<(f32, f32)> {
         seg
     }).collect()
 }
-const ARROW: f32 = 24.0;
+const ARROW: f32 = 18.0;
+const ARROW_INSET: f32 = 13.0;
+const ARROW_GLYPH: f32 = 0.75;
 const PAGE_CLIP: f32 = 34.0;
 fn arrow_y(h: f32) -> f32 {
-    h / 2.0 - 13.0
+    h / 2.0 - 10.0
 }
 
 fn dots_y(h: f32) -> f32 {
@@ -439,8 +441,8 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     let r = |x: f32, y: f32, bw: f32, bh: f32| rect((left + x) * scale, y * scale, (left + x + bw) * scale, (y + bh) * scale);
     let mut out = Vec::new();
     if !wide {
-        out.push((Button::PagePrev, r(10.0, arrow_y(panel_h), ARROW, ARROW)));
-        out.push((Button::PageNext, r(w - 10.0 - ARROW, arrow_y(panel_h), ARROW, ARROW)));
+        out.push((Button::PagePrev, r(ARROW_INSET, arrow_y(panel_h), ARROW, ARROW)));
+        out.push((Button::PageNext, r(w - ARROW_INSET - ARROW, arrow_y(panel_h), ARROW, ARROW)));
     }
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {

@@ -19,8 +19,8 @@ impl Renderer {
         let trail = DWRITE_TEXT_ALIGNMENT_TRAILING;
         unsafe {
             let nav = [
-                (Button::PagePrev, rect(l + 10.0 * s, arrow_y(ph) * s, l + (10.0 + ARROW) * s, (arrow_y(ph) + ARROW) * s)),
-                (Button::PageNext, rect(r - (10.0 + ARROW) * s, arrow_y(ph) * s, r - 10.0 * s, (arrow_y(ph) + ARROW) * s)),
+                (Button::PagePrev, rect(l + ARROW_INSET * s, arrow_y(ph) * s, l + (ARROW_INSET + ARROW) * s, (arrow_y(ph) + ARROW) * s)),
+                (Button::PageNext, rect(r - (ARROW_INSET + ARROW) * s, arrow_y(ph) * s, r - ARROW_INSET * s, (arrow_y(ph) + ARROW) * s)),
             ];
             let arrow_a = a * (1.0 - ((v.size[0] - notch::target(Mode::Expanded, false)[0]) / notch::LYRICS_EXTRA_W).clamp(0.0, 1.0));
             for (b, icon) in [(Button::PagePrev, ICON_LEFT), (Button::PageNext, ICON_RIGHT)] {
@@ -36,7 +36,12 @@ impl Renderer {
                         radiusY: (br.bottom - br.top) / 2.0,
                     };
                     rt.FillEllipse(&circle, &self.brush(grey(if hot { 0.26 } else { 0.15 }, a))?);
+                    let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
+                    let (mx, my) = (circle.point.X, circle.point.Y);
+                    let k = ARROW_GLYPH;
+                    rt.SetTransform(&(Matrix3x2 { M11: k, M12: 0.0, M21: 0.0, M22: k, M31: mx - k * mx, M32: my - k * my } * base));
                     text(icon, F_SMALL_ICON, *br, center, grey(if hot { 1.0 } else { 0.75 }, a))?;
+                    rt.SetTransform(&base);
                 }
             }
             let (dot, wide, gap) = (6.0 * s, 18.0 * s, 6.0 * s);
