@@ -1,5 +1,7 @@
 use super::*;
 
+const CHARGE_RING: f32 = 28.0;
+
 impl Renderer {
     pub(super) fn draw_banner(
         &self,
@@ -32,7 +34,15 @@ impl Renderer {
             let age = v.banner_age;
             let (pop_scale, pop_alpha) = icons::pop(age);
             let pop = translate(-mx, -my) * scaling(pop_scale) * translate(mx, my);
-            if let (BannerKind::Notification, Some(img)) = (kind, banner_app) {
+            let charge = t.badge.as_deref().and_then(|b| b.trim_end_matches('%').parse::<u8>().ok()).filter(|_| matches!(icon, ICON_PLUG | ICON_BATTERY));
+            if let Some(percent) = charge {
+                icon_busy = age < anim::ICON_MOTION_S;
+                let rise = anim::ease_out((age / anim::ICON_MOTION_S).clamp(0.0, 1.0));
+                let shown = Battery { percent: (percent as f32 * rise).round() as u8, charging: true, saver: false };
+                rt.SetTransform(&(pop * base));
+                self.draw_battery_ring((mx, my), CHARGE_RING * s, &shown, a * pop_alpha)?;
+                rt.SetTransform(&base);
+            } else if let (BannerKind::Notification, Some(img)) = (kind, banner_app) {
                 let size = img.GetSize();
                 let k = d / size.width.max(size.height);
                 let brush = rt.CreateBitmapBrush(img, None, None)?;
