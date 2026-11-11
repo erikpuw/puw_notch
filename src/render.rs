@@ -3208,7 +3208,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "writes target/promo/notch-vi.mov and notch-en.mov through PUW_FFMPEG (the 30 s promo's notch layer); tools/promo.py composes the video"]
+    #[ignore = "writes target/promo/notch-vi.mov and notch-en.mov through PUW_FFMPEG (the promo's notch layer, 1680 x 680 at 2x); tools/promo.py composes the video"]
     fn promo_frames() {
         for english in [false, true] {
             promo_layer(english);
@@ -3217,14 +3217,15 @@ mod tests {
     }
 
     fn promo_layer(english: bool) {
-        use crate::notch::Notch;
+        use crate::notch::{Notch, Style};
         use crate::robot::{Mood, Robot};
         use crate::todo::stamp;
+        use crate::usage::{Bar, Snapshot};
         use std::io::Write;
         use weather::{Now, Place, Sky, State};
         crate::i18n::set_english(english);
-        let t = |vi: &str, en: &str| if english { en.to_string() } else { vi.to_string() };
-        let (w, h, scale, fps, frames) = (960, 420, 2.0, 30.0, 900);
+        let tl = |vi: &'static str, en: &'static str| if english { en } else { vi };
+        let (w, h, scale, fps, frames) = (1680, 680, 2.0, 30.0, 942);
         let out = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/promo");
         std::fs::create_dir_all(&out).unwrap();
         let ffmpeg = std::env::var("PUW_FFMPEG").unwrap_or_else(|_| "ffmpeg".into());
@@ -3235,22 +3236,58 @@ mod tests {
         let pipe = enc.stdin.as_mut().unwrap();
 
         let art = preview_cover();
-        let lines: Vec<(u64, String)> = vec![(0, t("Lời chạy theo bài đang phát", "Lyrics follow the song")), (90_000, t("Ngay trên notch của bạn", "Right in your notch"))];
-        let song = |ms| Track { title: t("Bài hát mẫu", "Sample song"), artist: t("Nghệ sĩ mẫu", "Sample artist"), duration_ms: 210_000, position_ms: ms, playing: true,
-            can_toggle: true, can_next: true, can_previous: true, can_seek: true, art: art.clone(), art_key: 1, lyrics: Arc::new(lines.clone()), ..Default::default() };
-        let item = |text: String, at: Option<u64>| Item { text, done: None, at, told_soon: false, told_now: false };
-        let todos = vec![item(t("Gửi báo cáo tuần", "Send the weekly report"), Some(stamp(20261029, 9, 0))), item(t("Uống thuốc", "Take vitamins"), Some(stamp(20261029, 10, 15))),
-            item(t("Họp nhóm dự án", "Project sync"), Some(stamp(20261029, 20, 0))), item(t("Khám răng", "Dentist"), Some(stamp(20261030, 9, 0)))];
-        let note = |app: &str, title: String, body: String, at: u64| Note { id: format!("promo.{app}"), app: app.into(), title, body, at, open: None };
-        let notes = [note("Zalo", t("Anh Minh", "Alex"), t("Tối nay 8h họp nhóm nhé", "Team call at 8 tonight"), 202610290938),
-            note("Outlook", t("Lịch họp tuần", "Weekly planning"), t("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202610290910),
-            note("Spotify", t("Danh sách mới cho bạn", "New playlist for you"), t("Nhạc tập trung buổi sáng", "Morning focus"), 202610290805)];
-        let toast = Toast { app: "Zalo".into(), title: t("Anh Minh", "Alex"), body: t("Tối nay 8h họp nhóm nhé, nhớ mang laptop.", "Team call at 8 tonight, bring your laptop."),
-            level: None, icon: None, image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows: Vec::new() };
-        let wx = State { place: Some(Place { name: t("Đà Nẵng", "Da Nang"), lat: 16.0, lon: 108.0 }),
-            now: Some(Now { temp: 29.0, feels: 32.0, humidity: 78.0, wind: 9.0, sky: Sky::PartlyCloudy, day: true }), updated: Some(202610290930), ..State::default() };
-        let health = Health::default();
-        let date = t("T5, 29/10", "Thu, 29/10");
+        let lines: Vec<(u64, String)> = [(0, tl("Lời bài hát chạy theo nhạc", "Lyrics that follow the song")), (64_000, tl("Lời bài hát chạy theo nhạc", "Lyrics that follow the song")),
+            (65_300, tl("Dòng đang hát sáng lên ở giữa", "The line being sung lights up")), (66_500, tl("Ngay trên notch của bạn", "Right in your notch")),
+            (67_700, tl("Không cần mở thêm app nào", "No other app to open"))].into_iter().map(|(t, s)| (t, s.to_string())).collect();
+        let song = |position_ms| Track { title: tl("Bài hát mẫu", "Sample song").into(), artist: tl("Nghệ sĩ mẫu", "Sample artist").into(), duration_ms: 210_000, position_ms, playing: true,
+            can_toggle: true, can_next: true, can_previous: true, can_seek: true, can_shuffle: true, can_repeat: true, repeat: crate::music::Repeat::All,
+            art: art.clone(), art_key: 1, lyrics: Arc::new(lines.clone()), ..Default::default() };
+        let item = |text: &str, done: bool, at: Option<u64>| Item { text: text.into(), done: done.then_some(20261111), at, told_soon: false, told_now: false };
+        let todos = vec![item(tl("Gửi báo cáo tuần", "Send the weekly report"), false, Some(stamp(20261111, 9, 0))), item(tl("Uống thuốc", "Take vitamins"), false, Some(stamp(20261111, 10, 15))),
+            item(tl("Họp nhóm dự án", "Project sync"), false, Some(stamp(20261111, 20, 0))), item(tl("Mua sữa và trứng", "Buy milk and eggs"), false, None),
+            item(tl("Gọi cho khách hàng", "Call the client"), true, None)];
+        let note = |app: &str, title: &str, body: &str, at: u64| Note { id: format!("promo.{app}"), app: app.into(), title: title.into(), body: body.into(), at, open: None };
+        let notes = [note("Zalo", tl("Anh Minh", "Alex"), tl("Tối nay 8h họp nhóm nhé", "Team call at 8 tonight"), 202611110938),
+            note("Outlook", tl("Lịch họp tuần", "Weekly planning"), tl("Phòng 3, 9:00 thứ Hai", "Room 3, Monday 9:00"), 202611110910),
+            note("ScreenSketch", tl("Đã chép ảnh chụp màn hình", "Screenshot copied"), tl("Đã lưu vào thư mục ảnh chụp", "Saved to the screenshots folder"), 202611110852),
+            note("Spotify", tl("Danh sách mới cho bạn", "New playlist for you"), tl("Nhạc tập trung buổi sáng", "Morning focus"), 202611110805)];
+        let hours: Vec<weather::Hour> = (0..24).map(|i| {
+            let hour = ((9 + i) % 24) as u8;
+            let rain = match hour { 11 => 25, 14 => 40, 16 => 40, 17 => 70, _ => 0 };
+            weather::Hour { hour, temp: if (6..18).contains(&hour) { 26.0 + (hour.min(13) - 6) as f32 } else { 25.0 }, rain, wind: 12.0, sky: if rain >= 50 { Sky::Rain } else { Sky::PartlyCloudy }, day: (6..18).contains(&hour) }
+        }).collect();
+        let wx = State { place: Some(Place { name: tl("Đà Nẵng", "Da Nang").into(), lat: 16.0, lon: 108.0 }),
+            now: Some(Now { temp: 29.0, feels: 32.0, humidity: 78.0, wind: 9.0, sky: Sky::PartlyCloudy, day: true }), updated: Some(202611110930), hours, ..State::default() };
+        let mut health = Health::default();
+        (health.water_on, health.sit_on, health.taken_ml, health.water_mark, health.sitting_since) = (true, true, 750, Some(999_970), Some(999_958));
+        let focus = Focus::demo(4, std::time::Duration::from_secs(7 * 60 + 18));
+        let now_secs = crate::usage::now_secs();
+        let bar = |label: &str, weekly, used, hours: i64| Bar { label: label.into(), weekly, used, resets_at: now_secs + hours * 3600 };
+        let mut snap = Snapshot::default();
+        snap.apps[0] = Some(vec![bar(tl("5 giờ", "5 h"), false, 37.0, 3), bar(tl("Tuần", "Week"), true, 8.0, 150)]);
+        snap.apps[1] = Some(vec![bar(tl("30 ngày", "30 days"), true, 14.0, 718)]);
+        snap.plans[1] = Some("free".into());
+        snap.updated[1] = Some(now_secs);
+        snap.apps[2] = Some(vec![bar(tl("Gemini · Tuần", "Gemini · Week"), true, 0.4, 150), bar(tl("Claude · GPT · Tuần", "Claude · GPT · Week"), true, 36.0, 160)]);
+
+        let at_row = Instant::now();
+        let status = |app: &str, title: &str, body: &str, icon: &'static str, rows: Vec<Row>| Toast { app: app.into(), title: title.into(), body: body.into(), level: None, icon: Some(icon),
+            image: None, open: None, badge: None, choices: Vec::new(), app_id: None, rows };
+        let ask = |app: &str, title: &str, body: &str, choices: &[&str]| Toast { choices: choices.iter().map(|c| c.to_string()).collect(), ..status(app, title, body, ICON_WARN, Vec::new()) };
+        let device = |name: &str, kind, battery: &str| Row { text: name.into(), at: at_row, icon: Some(device_icon(kind)), value: Some(battery.into()), low: false, state: RowState::Done, key: None };
+        let wifi = status("Network", tl("Đã bật Wi-Fi", "Turned on Wi-Fi"), "", ICON_WIFI, vec![Row::line(tl("Đã kết nối Home-WiFi", "Connected to Home-WiFi").into(), at_row)]);
+        let bluetooth = status("Network", tl("2 thiết bị Bluetooth", "2 Bluetooth devices"), "", ICON_BT,
+            vec![device("UGREEN HiTune Max5c", crate::connectivity::DeviceKind::Headphones, "80%"), device(tl("Chuột không dây", "Wireless mouse"), crate::connectivity::DeviceKind::Mouse, "56%")]);
+        let airplane = status("Network", tl("Chế độ máy bay Bật", "Airplane mode On"), "", ICON_AIRPLANE,
+            vec![Row::line(tl("Bluetooth tắt", "Bluetooth off").into(), at_row), Row::line(tl("Wi-Fi tắt", "Wi-Fi off").into(), at_row)]);
+        let plugged = Toast { badge: Some("82%".into()), ..status(tl("Pin", "Battery"), tl("Đang sạc", "Charging"), tl("Đã cắm sạc", "Charger connected"), ICON_PLUG, Vec::new()) };
+        let copying = |k: f32| { let pct = (18.0 + 78.0 * k).round(); Toast { level: Some(pct / 100.0),
+            ..status(tl("Tệp", "Files"), &format!("{} · {pct}% · +2", tl("Đang sao chép", "Copying")), &format!("{pct}%"), ICON_COPY, Vec::new()) } };
+        let built = status("Build", tl("Cargo hoàn tất", "Cargo finished"), "1m 15s", ICON_DONE, Vec::new());
+        let claude = ask("Claude", tl("Duyệt lệnh", "Approve command"), tl("Cho phép chạy cargo build --release cho project này?", "Allow cargo build --release to run for this project?"),
+            if english { &["Allow", "Deny", "In the app"] } else { &["Đồng ý", "Không đồng ý", "Trong app"] });
+        let antigravity = ask("Antigravity", tl("Cho phép mcp", "Allow mcp"), "codebase-memory-mcp/get_architecture", if english { &["Allow", "Deny"] } else { &["Đồng ý", "Không"] });
+        let date = tl("T4, 11/11", "Wed, 11/11");
 
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -3258,62 +3295,98 @@ mod tests {
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Promo"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
+            (renderer.style, renderer.usage, renderer.usage_tab) = (Style::Pill, snap, 0);
             let mut notch = Notch::new(false);
             let mut robot = Robot::default();
             let (mut page, mut page_since, mut page_anim) = (Page::Music, 0.0f32, None::<(Page, f32)>);
-            let (mut live, mut charging) = (false, false);
-            let clicks = [10.5, 12.5, 14.5, 16.5];
+            let (mut live, mut charging, mut lyrics) = (false, false, false);
+            let (mut banner, mut banner_at) = (None::<Toast>, 0.0f32);
+            let clicks = [7.2, 8.5, 9.8, 11.1, 12.4, 13.7, 15.0];
             let start = Instant::now();
             for i in 0..frames {
                 let (now, before) = (i as f32 / fps, (i as f32 - 1.0) / fps);
                 let at = |s: f32| before < s && now >= s;
                 std::thread::sleep((start + std::time::Duration::from_secs_f32(now)).saturating_duration_since(Instant::now()));
-                if at(4.0) {
+                let mut show = None::<Toast>;
+                if at(1.6) {
                     live = true;
                     notch.set_live(true);
                 }
-                if at(7.0) {
+                if at(4.0) {
                     notch.on_enter();
                 }
-                if at(7.4) {
+                if at(4.3) {
                     notch.on_dwell(true);
                     page_since = now;
+                }
+                if at(4.9) || at(6.6) {
+                    lyrics = !lyrics;
                 }
                 if let Some(k) = clicks.iter().position(|&c| at(c)) {
                     page_anim = Some((page, now));
                     page = PAGES[k + 1];
                     page_since = now;
+                    notch.set_panel(panel_size(page));
                 }
-                if at(18.6) {
+                if at(16.8) {
                     notch.on_leave();
                 }
-                if at(19.6) {
-                    let lines = renderer.banner_lines(&toast.body, scale, false, false).min(notch::BANNER_MAX_LINES) as u8;
-                    notch.on_alert(lines);
+                for (s, t) in [(17.2, &wifi), (17.9, &bluetooth), (18.6, &airplane), (19.3, &plugged), (20.4, &copying(0.0)), (21.8, &built), (23.3, &claude), (24.7, &antigravity)] {
+                    if at(s) {
+                        show = Some(t.clone());
+                    }
                 }
-                if at(23.2) {
+                if at(19.3) {
+                    charging = true;
+                }
+                if (20.4..21.8).contains(&now) && banner.as_ref().is_some_and(|b| b.icon == Some(ICON_COPY)) {
+                    let t = copying(((now - 20.4) / 1.3).min(1.0));
+                    notch.set_alert_width(renderer.status_banner_width(&t.title, &t.body, &t.rows, scale));
+                    banner = Some(t);
+                }
+                if at(20.1) || at(23.0) || at(26.0) {
                     notch.on_alert_end();
+                    banner = None;
                 }
-                if at(23.8) {
-                    (live, charging) = (false, true);
+                if at(26.3) {
+                    live = false;
                     notch.set_live(false);
                     robot.update(40, true);
                 }
+                if let Some(t) = show {
+                    let opening = notch.mode != Mode::Alert;
+                    if t.choices.is_empty() && !opening {
+                        notch.set_alert_status(t.rows.len() as u8);
+                    } else if t.choices.is_empty() {
+                        notch.on_alert(0);
+                        notch.set_alert_rows(t.rows.len() as u8);
+                    } else {
+                        notch.on_alert_choice(renderer.banner_lines(&t.body, scale, false, true).clamp(1, 3) as u8);
+                    }
+                    if opening {
+                        renderer.forget_morph("banner");
+                    }
+                    let width = if t.choices.is_empty() && t.badge.is_none() { renderer.status_banner_width(&t.title, &t.body, &t.rows, scale) } else { 0.0 };
+                    notch.set_alert_width(width);
+                    (banner, banner_at) = (Some(t), now);
+                }
+                notch.set_wide(lyrics && page == Page::Music && notch.mode == Mode::Expanded);
                 notch.step(1.0 / fps);
                 let leaving = page_anim.map(|(from, t0)| (from, ((now - t0) / 0.32).min(1.0), 1));
                 if leaving.is_some_and(|(_, k, _)| k >= 1.0) {
                     page_anim = None;
                 }
                 let eyes = robot.visible().then(|| robot.step(1.0 / fps, None, Mood::Normal));
-                let track = song(64_000 + ((now - 4.0).max(0.0) * 1000.0) as u64);
+                let track = song(62_000 + ((now - 1.6).max(0.0) * 1000.0) as u64);
                 let mode = notch.mode;
-                let view = View { mode, size: notch.size(), time: "09:41", date: &date, battery: Some(Battery { percent: 82, charging, saver: false }),
-                    banner: (mode == Mode::Alert).then_some(&toast), music: live.then_some(&track), live: notch.live, robot: eyes, phase: now,
-                    banner_age: (now - 19.6).max(0.0), lyrics: false,
-                    hovered: (mode == Mode::Expanded && (10.0..18.2).contains(&now)).then_some(Button::PageNext), page, leaving,
-                    list: ListView { counts: (3, 1), remind_before: 15, now: 202610290941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    todos: &todos, notes: &notes, focus: &Focus::default(), health: HealthView { h: &health, now: crate::todo::minutes(202610290941), minute_of_day: 9 * 60 + 41, settings: None },
-                    weather: &wx, page_age: if mode == Mode::Expanded { now - page_since } else { 0.0 }, unit: weather::Unit::C, sun_view: false, cal: Default::default() };
+                let view = View { mode, size: notch.size(), time: "09:41", date, battery: Some(Battery { percent: 82, charging, saver: false }),
+                    banner: if mode == Mode::Alert { banner.as_ref() } else { None }, music: live.then_some(&track), live: notch.live, robot: eyes, phase: now,
+                    banner_age: now - banner_at, lyrics: lyrics && page == Page::Music,
+                    hovered: (mode == Mode::Expanded && (6.9..16.6).contains(&now)).then_some(Button::PageNext), page, leaving,
+                    list: ListView { counts: (4, 1), remind_before: 15, now: 202611110941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                    todos: &todos, notes: &notes, focus: &focus, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 9 * 60 + 41, settings: None },
+                    weather: &wx, page_age: if mode == Mode::Expanded { now - page_since } else { 0.0 }, unit: weather::Unit::C, sun_view: false,
+                    cal: crate::calendar::CalView { year: 2026, month: 11, sel: 11, today: (2026, 11, 11), zone: Some(7.0), lunar_on: true } };
                 renderer.present(hwnd, 0, 0, w, h, scale, &view).unwrap();
                 pipe.write_all(&renderer.grabbed).unwrap();
             }
