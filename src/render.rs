@@ -3260,7 +3260,7 @@ mod tests {
             now: Some(Now { temp: 29.0, feels: 32.0, humidity: 78.0, wind: 9.0, sky: Sky::PartlyCloudy, day: true }), updated: Some(202611110930), hours, ..State::default() };
         let mut health = Health::default();
         (health.water_on, health.sit_on, health.taken_ml, health.water_mark, health.sitting_since) = (true, true, 750, Some(999_970), Some(999_958));
-        let focus = Focus::demo(4, std::time::Duration::from_secs(7 * 60 + 18));
+        let (focus, idle) = (Focus::demo(4, std::time::Duration::from_secs(7 * 60 + 18)), Focus::default());
         let now_secs = crate::usage::now_secs();
         let bar = |label: &str, weekly, used, hours: i64| Bar { label: label.into(), weekly, used, resets_at: now_secs + hours * 3600 };
         let mut snap = Snapshot::default();
@@ -3384,7 +3384,7 @@ mod tests {
                     banner_age: now - banner_at, lyrics: lyrics && page == Page::Music,
                     hovered: (mode == Mode::Expanded && (6.9..16.6).contains(&now)).then_some(Button::PageNext), page, leaving,
                     list: ListView { counts: (4, 1), remind_before: 15, now: 202611110941, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    todos: &todos, notes: &notes, focus: &focus, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 9 * 60 + 41, settings: None },
+                    todos: &todos, notes: &notes, focus: if page == Page::Focus && mode == Mode::Expanded { &focus } else { &idle }, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 9 * 60 + 41, settings: None },
                     weather: &wx, page_age: if mode == Mode::Expanded { now - page_since } else { 0.0 }, unit: weather::Unit::C, sun_view: false,
                     cal: crate::calendar::CalView { year: 2026, month: 11, sel: 11, today: (2026, 11, 11), zone: Some(7.0), lunar_on: true } };
                 renderer.present(hwnd, 0, 0, w, h, scale, &view).unwrap();

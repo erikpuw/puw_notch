@@ -92,7 +92,7 @@ VO = {
         (3.3, "Nhạc đang phát? Hiện ngay trên notch."),
         (6.0, "Rê chuột vào, lời bài hát chạy theo luôn."),
         (8.85, "Ghi chú,"),
-        (10.15, "Pomodoro,"),
+        (10.15, "tập trung,"),
         (11.45, "thông báo,"),
         (12.75, "nhắc uống nước,"),
         (14.05, "thời tiết,"),
