@@ -269,7 +269,7 @@ pub struct Monitor {
     download_done: Option<PathBuf>,
     download_before: HashSet<PathBuf>,
     automation: Option<IUIAutomation>,
-    explorer_op: Option<(isize, ActivityKind, String)>,
+    explorer_op: Option<(isize, LiveActivity)>,
     explorer_ui_at: Option<Instant>,
     explorer_seen: Option<Instant>,
     explorer_pending: bool,
@@ -318,7 +318,7 @@ impl Monitor {
         self.last = running.clone();
         let more = running.len().saturating_sub(1);
         if let Some(first) = running.first_mut() {
-            first.more = more;
+            first.more += more;
         }
         running.into_iter().next()
     }
@@ -370,17 +370,19 @@ impl Monitor {
                 return activity;
             }
             if self.explorer_ui_at.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_secs(1)) {
-                let known = self.explorer_op.as_ref().filter(|(h, ..)| *h == id).map(|(_, kind, name)| (*kind, name.clone()));
-                if let (Some(a), Some((kind, name))) = (activity.as_mut(), known) {
-                    (a.kind, a.title) = (kind, name);
+                let known = self.explorer_op.as_ref().filter(|(h, _)| *h == id).map(|(_, a)| a.clone());
+                match (activity.as_mut(), known) {
+                    (Some(a), Some(k)) => (a.kind, a.title, a.more) = (k.kind, k.title, k.more),
+                    (None, Some(k)) => return Some(k),
+                    (None, None) => continue,
+                    (Some(_), None) => {}
                 }
-                if activity.is_some() { return activity; }
-                continue;
+                return activity;
             }
             self.explorer_ui_at = Some(now);
             let labels = self.dialog_labels(hwnd);
             let read = parse_explorer_labels(&title, &labels);
-            self.explorer_op = read.as_ref().filter(|a| names_operation(a)).map(|a| (id, a.kind, a.title.clone()));
+            self.explorer_op = read.as_ref().filter(|a| names_operation(a)).map(|a| (id, a.clone()));
             if read.is_some() {
                 return read;
             }
@@ -590,6 +592,13 @@ fn parse_explorer_labels(title: &str, labels: &[String]) -> Option<LiveActivity>
                 None => activity = Some(found),
             }
         }
+    }
+    let running = labels.iter().filter(|label| {
+        let lower = label.trim().to_lowercase();
+        (lower.ends_with("complete") || lower.ends_with("hoàn thành")) && parse_explorer_title(label).is_some_and(|a| names_operation(&a))
+    }).count();
+    if let Some(a) = activity.as_mut() {
+        a.more = running.saturating_sub(1);
     }
     activity
 }
@@ -1127,10 +1136,24 @@ mod tests {
     }
 
     #[test]
+    fn two_moves_in_one_explorer_window_make_one_banner_with_plus_one() {
+        let labels: Vec<String> = [
+            "Moving 3 items from Downloads to Music - 53% complete", "Moving 3 items from ", "Downloads",
+            "Moving 5 items from Desktop to Videos - 20% complete", "Moving 5 items from ", "Desktop", "Pause the operation",
+        ].map(String::from).to_vec();
+        assert!(parse_explorer_title("2 Running Actions").is_none());
+        let a = parse_explorer_labels("2 Running Actions", &labels).unwrap();
+        assert_eq!((a.kind, a.more), (ActivityKind::Move, 1));
+        assert_eq!(a.progress, Some(0.53));
+        let one = parse_explorer_labels("53% complete", &labels[..3]).unwrap();
+        assert_eq!(one.more, 0);
+    }
+
+    #[test]
     fn a_new_operation_window_forgets_what_the_last_operation_was() {
         let mut monitor = Monitor::default();
         let t0 = Instant::now();
-        monitor.explorer_op = Some((7, ActivityKind::Delete, "Đang xóa".into()));
+        monitor.explorer_op = Some((7, parse_explorer_title("Deleting 40% complete").unwrap()));
         monitor.explorer_ui_at = Some(t0);
         monitor.explorer_seen = Some(t0);
         monitor.start_hunt(t0 + Duration::from_secs(2));
