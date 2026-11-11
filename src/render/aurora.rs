@@ -1,6 +1,6 @@
 use super::*;
 
-const AURORA_MAX_LUM: f32 = 0.36;
+const AURORA_MAX_LUM: f32 = 0.42;
 
 const AURORA_STEPS: usize = 48;
 const AURORA_LAYERS: [(f32, f32); 8] = [(2.4, 0.12), (2.0, 0.14), (1.65, 0.16), (1.3, 0.19), (1.0, 0.22), (0.72, 0.26), (0.48, 0.3), (0.26, 0.36)];
@@ -8,8 +8,8 @@ const AURORA_SHRINK: f32 = 8.0;
 const AURORA_Y: f32 = 0.8;
 const AURORA_AMP: f32 = 0.07;
 const AURORA_HALO: f32 = 0.018;
-const AURORA_CORE: [(f32, f32); 4] = [(9.0, 0.10), (5.0, 0.16), (2.6, 0.30), (1.2, 0.55)];
-const AURORA_CORE_WHITE: f32 = 0.15;
+const AURORA_CORE: [(f32, f32); 4] = [(9.0, 0.10), (5.0, 0.16), (2.6, 0.40), (1.2, 0.75)];
+const AURORA_CORE_WHITE: f32 = 0.28;
 
 fn at(t: f32, u: f32) -> (f32, f32) {
     use std::f32::consts::TAU;
