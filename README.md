@@ -8,7 +8,7 @@
 
 <p align="center">
   Nhạc, việc, thông báo, thời tiết, lịch và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
-  Viết bằng Rust, exe ~908 KB, không WebView.
+  Viết bằng Rust, exe ~1024 KB, không WebView, không cần cài Visual C++ Redistributable.
 </p>
 
 <p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a></p>
@@ -134,6 +134,8 @@ Menu ở khay hệ thống (chuột phải vào biểu tượng):
 ## Tải về và chạy
 
 Tải `puw_notch.exe` ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) rồi chạy (chỉ tải ở đây, xem lưu ý ở đầu trang). App chưa có chữ ký số, nên không có gì khác ngoài nguồn này để xác nhận file là của tác giả, và Windows có thể chặn:
+
+Exe đã gồm sẵn thư viện C của Visual C++ (liên kết tĩnh), nên máy mới cài Windows chạy được ngay, không cần cài vcredist.
 
 - **SmartScreen** ("Windows protected your PC"): bấm **More info** → **Run anyway**.
 - **File bị đánh dấu tải từ mạng**: chuột phải vào file → **Properties** → tick **Unblock** → OK.

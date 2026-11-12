@@ -8,7 +8,7 @@
 
 <p align="center">
   Music, tasks, notifications, weather, a calendar and a tiny robot, tucked into the top edge of your screen, Dynamic Island style.<br>
-  Written in Rust, ~908 KB exe, no WebView.
+  Written in Rust, ~1024 KB exe, no WebView, no Visual C++ Redistributable to install.
 </p>
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b></p>
@@ -134,6 +134,8 @@ The tray menu (right-click the icon):
 ## Download and run
 
 Get `puw_notch.exe` from [Releases](https://github.com/erikpuw/puw_notch/releases) and run it (download only from here, see the note at the top). The app is not code-signed, so nothing but this source confirms a file is the author's, and Windows may block it:
+
+The exe already contains the Visual C++ C runtime (statically linked), so a fresh Windows install runs it as is, with no vcredist to install.
 
 - **SmartScreen** ("Windows protected your PC"): click **More info** → **Run anyway**.
 - **File marked as downloaded**: right-click the file → **Properties** → tick **Unblock** → OK.
