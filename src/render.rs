@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::time::Instant;
 
 use crate::anim::{self, ease_out, ease_out_back, page_fades};
@@ -98,19 +98,20 @@ pub enum Page {
     Weather,
     Calendar,
     Usage,
+    Task,
 }
 
-pub const PAGES: [Page; 8] = [Page::Music, Page::Todo, Page::Focus, Page::Notify, Page::Health, Page::Weather, Page::Calendar, Page::Usage];
+pub const PAGES: [Page; 9] = [Page::Music, Page::Todo, Page::Task, Page::Focus, Page::Notify, Page::Health, Page::Weather, Page::Calendar, Page::Usage];
 
-static PAGES_ON: AtomicU8 = AtomicU8::new(ALL_PAGES);
-const ALL_PAGES: u8 = ((1u16 << PAGES.len()) - 1) as u8;
+static PAGES_ON: AtomicU16 = AtomicU16::new(ALL_PAGES);
+const ALL_PAGES: u16 = ((1u32 << PAGES.len()) - 1) as u16;
 
-pub fn set_pages_on(mask: u8) {
+pub fn set_pages_on(mask: u16) {
     let mask = mask & ALL_PAGES;
     PAGES_ON.store(if mask == 0 { ALL_PAGES } else { mask }, Ordering::Relaxed);
 }
 
-pub fn pages_on() -> u8 {
+pub fn pages_on() -> u16 {
     PAGES_ON.load(Ordering::Relaxed)
 }
 
@@ -119,7 +120,7 @@ pub fn page_shown(page: Page) -> bool {
 }
 
 impl Page {
-    pub fn bit(self) -> u8 {
+    pub fn bit(self) -> u16 {
         1 << match self {
             Page::Music => 0,
             Page::Todo => 1,
@@ -129,6 +130,7 @@ impl Page {
             Page::Usage => 5,
             Page::Focus => 6,
             Page::Calendar => 7,
+            Page::Task => 8,
         }
     }
 
@@ -142,6 +144,7 @@ impl Page {
             Page::Weather => tr("Thời tiết", "Weather"),
             Page::Usage => tr("Giới hạn", "Limits"),
             Page::Calendar => tr("Lịch", "Calendar"),
+            Page::Task => "Task",
         }
     }
 }
@@ -362,6 +365,7 @@ fn nav_icon(page: Page) -> &'static str {
         Page::Weather => "\u{E706}",
         Page::Usage => "\u{E9D9}",
         Page::Calendar => "\u{E787}",
+        Page::Task => "\u{E8C0}",
     }
 }
 
@@ -447,6 +451,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {
         Page::Music => out.extend(buttons(cx, scale, wide)),
+        Page::Task => {}
         Page::Todo => {
             let (x0, rw) = (cl + LIST_X, cw - LIST_X);
             out.push((Button::ListInput, r(x0, INPUT_Y, rw, INPUT_H)));

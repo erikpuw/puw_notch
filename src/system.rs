@@ -197,19 +197,23 @@ pub struct Settings {
     pub place: Option<Place>,
     pub unit: Option<crate::weather::Unit>,
     pub notes_cleared: i64,
-    pub pages: u8,
+    pub pages: u16,
     pub sun_view: bool,
     pub activity: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b1111_1111, sun_view: false, activity: false }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: ALL_PAGES, sun_view: false, activity: false }
     }
 }
 
+const ALL_PAGES: u16 = 0x1FF;
+const TASK_PAGE: u16 = 1 << 8;
+
 fn parse_settings(text: &str) -> Settings {
     let mut s = Settings::default();
+    let mut knows_task_page = false;
     for line in text.lines() {
         match line.trim() {
             "minimal=1" => s.minimal = true,
@@ -218,6 +222,7 @@ fn parse_settings(text: &str) -> Settings {
             "volkeys=1" => s.volume_keys = true,
             "approve=0" => s.approve = false,
             "activity=1" => s.activity = true,
+            "pages9=1" => knows_task_page = true,
             other => {
                 if let Some(style) = other.strip_prefix("style=") {
                     s.style = crate::notch::Style::from_tag(style).unwrap_or_default();
@@ -228,13 +233,17 @@ fn parse_settings(text: &str) -> Settings {
                 } else if let Some(unit) = other.strip_prefix("unit=") {
                     s.unit = crate::weather::Unit::from_tag(unit);
                 } else if let Some(mask) = other.strip_prefix("pages=") {
-                    s.pages = mask.parse().ok().filter(|m: &u8| *m != 0).map_or(s.pages, |m| if m == 0b11_1111 || m == 0b111_1111 { 0b1111_1111 } else { m });
+                    s.pages = mask.parse().ok().filter(|m: &u16| *m != 0).map_or(s.pages, |m| if m == 0b11_1111 || m == 0b111_1111 { 0b1111_1111 } else { m });
                 } else if let Some(id) = other.strip_prefix("notes_cleared=") {
                     s.notes_cleared = id.parse().unwrap_or(0);
                 }
             }
         }
     }
+    if !knows_task_page {
+        s.pages |= TASK_PAGE;
+    }
+    s.pages &= ALL_PAGES;
     s
 }
 
@@ -252,7 +261,7 @@ pub fn save_settings(s: Settings) {
         let sun = if s.sun_view { "sunview=1\n" } else { "" };
         let act = if s.activity { "activity=1\n" } else { "" };
         let cleared = if s.notes_cleared > 0 { format!("notes_cleared={}\n", s.notes_cleared) } else { String::new() };
-        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\nstyle={}\napprove={}\npages={}\n{city}{unit}{sun}{act}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8, s.style.tag(), s.approve as u8, s.pages));
+        let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\nstyle={}\napprove={}\npages={}\npages9=1\n{city}{unit}{sun}{act}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8, s.style.tag(), s.approve as u8, s.pages));
     }
 }
 
@@ -446,11 +455,14 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0b1111_1111, sun_view: false, activity: false });
-        assert_eq!(parse_settings("pages=5\n").pages, 5);
-        assert_eq!(parse_settings("pages=0\n").pages, 0b1111_1111, "never none");
-        assert_eq!(parse_settings("pages=63\n").pages, 0b1111_1111, "a mask saved before the Focus page gets it too");
-        assert_eq!(parse_settings("pages=127\n").pages, 0b1111_1111, "a mask with every page saved before the Calendar page gets it too");
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0x1FF, sun_view: false, activity: false });
+        assert_eq!(parse_settings("pages=5\n").pages, 5 | 1 << 8, "an old file shows the new Task page");
+        assert_eq!(parse_settings("pages=0\n").pages, 0x1FF, "never none");
+        assert_eq!(parse_settings("pages=63\n").pages, 0x1FF, "a mask saved before the Focus page gets it too");
+        assert_eq!(parse_settings("pages=127\n").pages, 0x1FF, "a mask with every page saved before the Calendar page gets it too");
+        assert_eq!(parse_settings("pages=255\n").pages, 0x1FF);
+        assert_eq!(parse_settings("pages=255\npages9=1\n").pages, 0xFF, "a file saved after Task keeps Task off");
+        assert_eq!(parse_settings("pages9=1\npages=5\n").pages, 5);
         assert!(!parse_settings("approve=0\n").approve && parse_settings("minimal=0\n").approve, "on unless turned off");
         assert_eq!(parse_settings("style=pill\n").style, crate::notch::Style::Pill);
         assert_eq!(parse_settings("style=x\n").style, crate::notch::Style::Ears, "unknown: the original look");
