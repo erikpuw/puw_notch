@@ -1063,6 +1063,46 @@ impl App {
                 self.task_sel = Some(i);
                 self.settings_open = Some(Card::TaskEdit);
             }
+            Button::TaskBack => {
+                self.settings_open = None;
+                self.edit_item = None;
+                self.draft.clear();
+                self.end_edit();
+            }
+            Button::TaskPick(i) => {
+                self.task_sel = Some(i);
+                self.cancel_task_edit();
+            }
+            Button::TaskName => {
+                if let Some(i) = render::picked(self.task_sel, self.tasks.items.len()) {
+                    self.draft = self.tasks.items[i].title.clone();
+                    self.edit_item = Some(i);
+                    self.begin_edit();
+                }
+            }
+            Button::TaskDelete => {
+                if let Some(i) = render::picked(self.task_sel, self.tasks.items.len()) {
+                    self.tasks.remove(i);
+                    self.task_sel = None;
+                    self.cancel_task_edit();
+                    self.clamp_scroll();
+                }
+            }
+            Button::TaskRepeat(_) | Button::TaskDue(_) | Button::TaskHour(_) | Button::TaskSlot(_) | Button::TaskSnooze(_) => {
+                if let Some(i) = render::picked(self.task_sel, self.tasks.items.len()) {
+                    let today = self.today;
+                    let t = &mut self.tasks.items[i];
+                    match button {
+                        Button::TaskRepeat(r) => task::set_repeat(t, r, today),
+                        Button::TaskDue(dir) => task::step_due(t, dir, today),
+                        Button::TaskHour(dir) => task::step_hour(t, dir),
+                        Button::TaskSlot(slot) => t.slots ^= slot,
+                        Button::TaskSnooze(dir) => t.snooze = task::step_snooze(t.snooze, dir),
+                        _ => {}
+                    }
+                    self.tasks.save();
+                }
+            }
         }
         self.hovered_button = self.hit(x, y);
         self.redraw();
@@ -1088,6 +1128,18 @@ impl App {
             return;
         }
         let now = system::now_stamp();
+        if self.page == Page::Task {
+            let saved = match self.edit_item {
+                Some(i) => self.tasks.rename(i, &self.draft),
+                None => self.tasks.add(&self.draft, now).map(|i| self.task_sel = Some(i)).is_some(),
+            };
+            if saved {
+                self.edit_item = None;
+                self.draft.clear();
+                self.clamp_scroll();
+            }
+            return;
+        }
         let saved = match self.edit_item {
             Some(i) => self.todo.update(i, &self.draft, now),
             None => self.todo.add(&self.draft, now),

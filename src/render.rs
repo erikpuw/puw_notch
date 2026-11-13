@@ -48,6 +48,7 @@ mod pages;
 mod sun_path;
 mod task_page;
 mod usage_page;
+pub use task_page::picked;
 
 pub const WM_ICONS: u32 = WM_APP + 10;
 
@@ -228,6 +229,15 @@ pub enum Button {
     TaskEdit,
     TaskSwitch,
     TaskRow(usize),
+    TaskBack,
+    TaskPick(usize),
+    TaskName,
+    TaskRepeat(crate::task::Repeat),
+    TaskDue(i32),
+    TaskHour(i32),
+    TaskSlot(u8),
+    TaskSnooze(i32),
+    TaskDelete,
 }
 
 impl Button {
@@ -464,6 +474,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {
         Page::Music => out.extend(buttons(cx, scale, wide)),
+        Page::Task if settings == Some(Card::TaskEdit) => out.extend(task_page::edit_buttons(&r, cl, cw, rows, scroll)),
         Page::Task => {
             use task_page::*;
             let x0 = cl + LIST_X;
@@ -2670,17 +2681,17 @@ mod tests {
                 task("Gia hạn tên miền", Repeat::Once, 202611250900, vec![], false),
             ];
             let empty = Tasks::default();
-            let frames = [&empty, &full];
+            let frames = [(&empty, None, ""), (&full, None, ""), (&full, Some(Card::TaskEdit), ""), (&full, Some(Card::TaskEdit), "Nộp tờ khai VAT")];
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
-            for tasks in frames {
+            for (tasks, settings, typed) in frames {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "10:00", date: "T6, 13/11", battery: Some(Battery { percent: 82, charging: false, saver: false }),
                     banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Task,
                     leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
-                    task: TaskView { tasks: Some(tasks), now, sel: None },
-                    list: ListView { counts: (0, 0), remind_before: 15, now, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
-                    focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
+                    task: TaskView { tasks: Some(tasks), now, sel: Some(0) },
+                    list: ListView { counts: (0, 0), remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
+                    focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings } };
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
                 }

@@ -111,6 +111,47 @@ pub fn next_due(t: &Task) -> u64 {
     next as u64 * 10_000 + t.due % 10_000
 }
 
+fn prev_day(date: u32) -> u32 {
+    let (y, m, d) = ((date / 10_000) as i32, date / 100 % 100, date % 100);
+    if d > 1 {
+        return date - 1;
+    }
+    let (py, pm) = shift_month(y, m, -1);
+    py as u32 * 10_000 + pm * 100 + days_in_month(py as u32, pm)
+}
+
+pub fn step_due(t: &mut Task, dir: i32, today: u32) {
+    let date = date_of(t.due);
+    let moved = if dir > 0 { next_day(date) } else { prev_day(date) };
+    if moved < today {
+        return;
+    }
+    t.due = moved as u64 * 10_000 + t.due % 10_000;
+    t.day = moved % 100;
+}
+
+pub fn step_hour(t: &mut Task, dir: i32) {
+    let m = (t.due % 10_000 / 100 * 60 + t.due % 100) as i32 + 30 * dir.signum();
+    if (0..24 * 60).contains(&m) {
+        t.due = stamp(date_of(t.due), m as u32 / 60, m as u32 % 60);
+    }
+}
+
+pub fn step_snooze(n: u32, dir: i32) -> u32 {
+    let i = SNOOZE_STEPS.iter().position(|&m| m == n).unwrap_or(2) as i32;
+    SNOOZE_STEPS[(i + dir.signum()).clamp(0, SNOOZE_STEPS.len() as i32 - 1) as usize]
+}
+
+pub fn set_repeat(t: &mut Task, r: Repeat, today: u32) {
+    t.repeat = r;
+    if t.finished && r != Repeat::Once {
+        t.finished = false;
+        while date_of(t.due) < today {
+            t.due = next_due(t);
+        }
+    }
+}
+
 fn clean(title: &str) -> String {
     title.replace(['\t', '\n', '\r'], " ").trim().to_string()
 }
@@ -159,6 +200,14 @@ impl Tasks {
         self.items.push(Task { title, repeat: Repeat::Once, day: date % 100, due: stamp(date, NEW_TASK_HOUR, 0), slots: ALL_SLOTS, snooze: SNOOZE_DEFAULT, done: Vec::new(), nag_at: None, told: 0, finished: false });
         self.save();
         Some(self.items.len() - 1)
+    }
+
+    pub fn rename(&mut self, i: usize, title: &str) -> bool {
+        let title = clean(title);
+        let Some(t) = self.items.get_mut(i).filter(|_| !title.is_empty()) else { return false };
+        t.title = title;
+        self.save();
+        true
     }
 
     pub fn remove(&mut self, i: usize) {
@@ -410,6 +459,63 @@ mod tests {
         let it = &t.items[i];
         assert_eq!((it.repeat, it.due, it.slots, it.snooze), (Repeat::Once, 202611200900, SLOT_BOOT | SLOT_NOON | SLOT_FOUR, 30));
         assert!(t.add("   ", 202611131000).is_none());
+    }
+
+    #[test]
+    fn deadline_steps_a_day_and_never_before_today() {
+        let mut t = task("Thuế", Repeat::Monthly, 202611200900);
+        step_due(&mut t, 1, 20261113);
+        assert_eq!((t.due, t.day), (202611210900, 21));
+        step_due(&mut t, -1, 20261113);
+        step_due(&mut t, -1, 20261113);
+        assert_eq!(t.due, 202611190900);
+        let mut u = task("Họp", Repeat::Once, 202611130900);
+        step_due(&mut u, -1, 20261113);
+        assert_eq!(u.due, 202611130900, "not before today");
+        let mut w = task("Lương", Repeat::Monthly, 202611300900);
+        step_due(&mut w, 1, 20261113);
+        assert_eq!((w.due, w.day), (202612010900, 1));
+    }
+
+    #[test]
+    fn hour_steps_half_an_hour_inside_the_day() {
+        let mut t = task("Thuế", Repeat::Once, 202611200900);
+        step_hour(&mut t, 1);
+        assert_eq!(t.due, 202611200930);
+        step_hour(&mut t, -1);
+        step_hour(&mut t, -1);
+        assert_eq!(t.due, 202611200830);
+        let mut late = task("Thuế", Repeat::Once, 202611202330);
+        step_hour(&mut late, 1);
+        assert_eq!(late.due, 202611202330);
+    }
+
+    #[test]
+    fn snooze_steps_stop_at_both_ends() {
+        assert_eq!(step_snooze(30, 1), 45);
+        assert_eq!(step_snooze(30, -1), 15);
+        assert_eq!(step_snooze(10, -1), 10);
+        assert_eq!(step_snooze(120, 1), 120);
+    }
+
+    #[test]
+    fn repeat_change_reopens_a_finished_task_on_a_future_date() {
+        let mut t = task("BHXH", Repeat::Once, 202610200900);
+        t.finished = true;
+        set_repeat(&mut t, Repeat::Monthly, 20261113);
+        assert!(!t.finished);
+        assert_eq!(t.due, 202611200900);
+        set_repeat(&mut t, Repeat::Once, 20261113);
+        assert_eq!((t.repeat, t.due), (Repeat::Once, 202611200900));
+    }
+
+    #[test]
+    fn rename_keeps_the_rest() {
+        let mut t = tasks_with(task("Thuế", Repeat::Once, 202611200900));
+        assert!(t.rename(0, "  Thuế quý 4 "));
+        assert_eq!(t.items[0].title, "Thuế quý 4");
+        assert!(!t.rename(0, "  "));
+        assert!(!t.rename(5, "x"));
     }
 
     #[test]
