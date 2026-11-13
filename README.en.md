@@ -8,7 +8,7 @@
 
 <p align="center">
   Music, tasks, notifications, weather, a calendar and a tiny robot, tucked into the top edge of your screen, Dynamic Island style.<br>
-  Written in Rust, ~1024 KB exe, no WebView, no Visual C++ Redistributable to install.
+  Written in Rust, ~1073 KB exe, no WebView, no Visual C++ Redistributable to install.
 </p>
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b></p>
@@ -39,6 +39,7 @@ A page hidden in the tray stops completely.
 |---|---|
 | **Music** | Cover, synced lyrics, playback controls, drag the bar to seek (Windows, iTunes, foobar2000). The lyrics button widens the panel; the background follows the cover. |
 | **Notes** | Notes and appointments in one list. Type "Call 20:00" or "Dentist 28/10 14:30". Overdue shows red; ⚙ picks a reminder. |
+| **Task** | Weekly, monthly or quarterly chores, with a week strip of coloured dots. From 7 days before the deadline it reminds you at startup, 12:00 and 16:00 with a card in the middle of a blurred screen. "Done" closes that round; "Remind me later" asks again in 30 minutes (you can change it). |
 | **Focus** | Pomodoro: the whole cycle (4 rounds of 25 min, breaks of 5 and 15) on one strip. When a segment ends a banner says so and the next one starts by itself. |
 | **Notifications** | The ~30 latest Windows notifications, click to open the app. "Clear all" only hides them in the notch. |
 | **Health** | Water and stand-up reminders, a round button to log them, settings under ⚙. |
