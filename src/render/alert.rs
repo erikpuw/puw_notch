@@ -6,7 +6,7 @@ const PAD: f32 = 24.0;
 const BTN_H: f32 = 26.0;
 const BTN_GAP: f32 = 4.0;
 const DONE_W: f32 = 84.0;
-const NOT_YET_W: f32 = 200.0;
+const NOT_YET_W: f32 = 150.0;
 const ROW_BTN_H: f32 = 22.0;
 const ROW_DONE_W: f32 = 64.0;
 const ROW_NOT_YET_W: f32 = 76.0;
@@ -75,6 +75,14 @@ impl Renderer {
                 rt.DrawText(&t, &fonts[f], &b, &self.brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
                 Ok(())
             };
+            let width = |t: &str, f: usize| -> f32 {
+                let u: Vec<u16> = t.encode_utf16().collect();
+                let mut m = DWRITE_TEXT_METRICS::default();
+                match self.dw.CreateTextLayout(&u, &fonts[f], 10_000.0, 100.0) {
+                    Ok(layout) if layout.GetMetrics(&mut m).is_ok() => m.widthIncludingTrailingWhitespace,
+                    _ => 0.0,
+                }
+            };
             let (center, lead) = (DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING);
             let solid = |c: (f32, f32, f32), a: f32| color(c.0, c.1, c.2, a);
             rt.BeginDraw();
@@ -119,9 +127,9 @@ impl Renderer {
                 text(&row.title, F_HEAD, rect(x, c.top + 70.0 * s, c.right - PAD * s, c.top + 96.0 * s), lead, grey(1.0, a))?;
                 text(&row.due, F_BODY, rect(x, c.top + 96.0 * s, c.right - PAD * s, c.top + 116.0 * s), lead, grey(0.6, a))?;
                 text(&row.big, F_FIGURE, rect(x, c.top + 118.0 * s, c.right - PAD * s, c.top + 158.0 * s), lead, solid(rgb, a))?;
-                let told = if english { format!("Reminded {} time{}", row.told, if row.told == 1 { "" } else { "s" }) } else { format!("Đã nhắc {} lần", row.told) };
+                let told = if english { format!("Reminded {} time{} · next {}", row.told, if row.told == 1 { "" } else { "s" }, row.next) } else { format!("Đã nhắc {} lần · lần sau {}", row.told, row.next) };
                 text(&told, F_LABEL, rect(x, c.top + 158.0 * s, c.right - PAD * s, c.top + 176.0 * s), lead, grey(0.45, a))?;
-                let later = if english { format!("Not yet · again in {} min", row.snooze) } else { format!("Chưa làm · nhắc lại sau {} phút", row.snooze) };
+                let later = if english { format!("Remind in {} min", row.snooze) } else { format!("Nhắc lại sau {} phút", row.snooze) };
                 pill(Choice::NotYet(row.task), &later, false)?;
                 pill(Choice::Done(row.task), tr("Đã làm", "Done"), true)?;
             } else {
@@ -139,7 +147,9 @@ impl Renderer {
                     rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x + 4.0 * s, Y: top + 15.0 * s }, radiusX: 4.0 * s, radiusY: 4.0 * s }, &self.brush(solid(rgb, a))?);
                     let tr_right = c.right - (PAD + ROW_DONE_W + ROW_NOT_YET_W + BTN_GAP + 10.0) * s;
                     text(&row.title, F_TITLE, rect(x + 16.0 * s, top + 4.0 * s, tr_right, top + 24.0 * s), lead, grey(1.0, a))?;
+                    let big_w = width(&row.big, F_LABEL);
                     text(&row.big, F_LABEL, rect(x + 16.0 * s, top + 22.0 * s, tr_right, top + 40.0 * s), lead, solid(rgb, a))?;
+                    text(&format!(" · {}", row.when), F_LABEL, rect(x + 16.0 * s + big_w, top + 22.0 * s, tr_right, top + 40.0 * s), lead, grey(0.55, a))?;
                     pill(Choice::NotYet(row.task), tr("Chưa làm", "Not yet"), false)?;
                     pill(Choice::Done(row.task), tr("Đã làm", "Done"), true)?;
                 }

@@ -47,6 +47,8 @@ pub struct AlertRow {
     pub title: String,
     pub kind: &'static str,
     pub due: String,
+    pub when: String,
+    pub next: String,
     pub big: String,
     pub status: Status,
     pub told: u32,
@@ -63,14 +65,17 @@ pub fn alert_rows(tasks: &Tasks, shown: &[usize], now: u64) -> Vec<AlertRow> {
             let date = task::date_of(t.due);
             let (y, m, d) = ((date / 10_000) as i32, date / 100 % 100, date % 100);
             let wd = crate::calendar::weekday_short(crate::calendar::weekday(y, m, d), english());
-            let due = format!("{} {wd} {d}/{m}, {:02}:{:02}", tr("Hạn:", "Due"), t.due / 100 % 100, t.due % 100);
+            let when = format!("{wd} {d}/{m}, {:02}:{:02}", t.due / 100 % 100, t.due % 100);
+            let due = format!("{} {when}", tr("Hạn:", "Due"));
+            let again = task::later(now, t.snooze);
+            let next = format!("{:02}:{:02}", again / 100 % 100, again % 100);
             let left = task::days_left(t.due, now);
             let (kind, big) = match status {
                 Status::Late(n) => (tr("trễ hạn", "late"), if english() { format!("{n} day{} late", if n == 1 { "" } else { "s" }) } else { format!("Trễ {n} ngày") }),
                 Status::Today => (tr("đến hạn", "due"), tr("Đến hạn hôm nay", "Due today").to_string()),
                 _ => (tr("sắp đến hạn", "coming up"), if english() { format!("{left} day{} left", if left == 1 { "" } else { "s" }) } else { format!("Còn {left} ngày") }),
             };
-            AlertRow { task: i, title: t.title.clone(), kind, due, big, status, told: t.told, snooze: t.snooze }
+            AlertRow { task: i, title: t.title.clone(), kind, due, when, next, big, status, told: t.told, snooze: t.snooze }
         })
         .collect()
 }
@@ -211,6 +216,8 @@ mod tests {
         assert_eq!(rows[1].big, "Đến hạn hôm nay");
         assert_eq!(rows[2].big, "Còn 3 ngày");
         assert_eq!(rows[0].due, "Hạn: T4 11/11, 09:00");
+        assert_eq!(rows[0].when, "T4 11/11, 09:00");
+        assert_eq!(rows[0].next, "10:30", "Not yet rings again after the task's own minutes");
         assert_eq!(rows[0].told, 2);
     }
 }

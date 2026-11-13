@@ -85,7 +85,7 @@ pub fn week_start(date: u32) -> u32 {
     py as u32 * 10_000 + pm * 100 + days_in_month(py as u32, pm) - (back - d)
 }
 
-fn later(t: u64, mins: u32) -> u64 {
+pub fn later(t: u64, mins: u32) -> u64 {
     let (mut date, mut m) = (date_of(t), (t % 10_000 / 100 * 60 + t % 100) as u32 + mins);
     while m >= 24 * 60 {
         m -= 24 * 60;
