@@ -71,8 +71,18 @@ pub fn days_left(due: u64, now: u64) -> i64 {
     day_number(date_of(due)) - day_number(date_of(now))
 }
 
-fn days_after(date: u32, n: u32) -> u32 {
+pub fn days_after(date: u32, n: u32) -> u32 {
     (0..n).fold(date, |d, _| next_day(d))
+}
+
+pub fn week_start(date: u32) -> u32 {
+    let (y, m, d) = ((date / 10_000) as i32, date / 100 % 100, date % 100);
+    let back = crate::calendar::weekday(y, m, d);
+    if back < d {
+        return date - back;
+    }
+    let (py, pm) = shift_month(y, m, -1);
+    py as u32 * 10_000 + pm * 100 + days_in_month(py as u32, pm) - (back - d)
 }
 
 fn later(t: u64, mins: u32) -> u64 {
@@ -400,6 +410,14 @@ mod tests {
         let it = &t.items[i];
         assert_eq!((it.repeat, it.due, it.slots, it.snooze), (Repeat::Once, 202611200900, SLOT_BOOT | SLOT_NOON | SLOT_FOUR, 30));
         assert!(t.add("   ", 202611131000).is_none());
+    }
+
+    #[test]
+    fn weeks_start_on_monday() {
+        assert_eq!(week_start(20261113), 20261109);
+        assert_eq!(week_start(20261109), 20261109);
+        assert_eq!(week_start(20261101), 20261026);
+        assert_eq!(week_start(20270101), 20261228);
     }
 
     #[test]

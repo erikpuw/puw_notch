@@ -197,6 +197,9 @@ struct App {
     nav_open: bool,
     page: Page,
     todo: todo::Todo,
+    tasks: task::Tasks,
+    task_sel: Option<usize>,
+    task_scroll: usize,
     today: u32,
     draft: String,
     editing: bool,
@@ -312,6 +315,7 @@ impl App {
             weather: &self.wx,
             page_age: self.page_since.elapsed().as_secs_f32(),
             unit: self.unit, sun_view: self.sun_view, cal,
+            task: render::TaskView { tasks: Some(&self.tasks), now, sel: self.task_sel },
         };
         self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
         if self.icons_morphing && !self.animating {
@@ -881,12 +885,17 @@ impl App {
     }
 
     fn scroll(&self) -> usize {
-        if self.page == Page::Notify { self.note_scroll } else { self.todo_scroll }
+        match self.page {
+            Page::Notify => self.note_scroll,
+            Page::Task => self.task_scroll,
+            _ => self.todo_scroll,
+        }
     }
 
     fn rows(&self) -> usize {
         match self.page {
             Page::Todo => self.todo.items.len(),
+            Page::Task => self.tasks.items.len(),
             Page::Notify => self.notes.len(),
             Page::Weather => usize::from(self.wx.now.is_some()),
             _ => 0,
@@ -1045,6 +1054,15 @@ impl App {
             Button::FocusSkip => self.focus.skip(Instant::now()),
             Button::FocusMode(kind) => self.focus.pick(kind, Instant::now()),
             Button::FocusSeg(seg) => self.focus.jump(seg, Instant::now()),
+            Button::TaskSwitch => {
+                self.tasks.enabled = !self.tasks.enabled;
+                self.tasks.save();
+            }
+            Button::TaskEdit => self.settings_open = Some(Card::TaskEdit),
+            Button::TaskRow(i) => {
+                self.task_sel = Some(i);
+                self.settings_open = Some(Card::TaskEdit);
+            }
         }
         self.hovered_button = self.hit(x, y);
         self.redraw();
@@ -1085,6 +1103,7 @@ impl App {
 
     fn clamp_scroll(&mut self) {
         self.todo_scroll = self.todo_scroll.min(self.todo.items.len().saturating_sub(LIST_ROWS));
+        self.task_scroll = self.task_scroll.min(self.tasks.items.len().saturating_sub(LIST_ROWS));
         self.note_scroll = self.note_scroll.min(self.notes.len().saturating_sub(NOTE_ROWS));
     }
 
@@ -1415,10 +1434,14 @@ impl App {
             }
             WM_CHAR if self.editing => self.type_char(wp.0 as u16),
             WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => self.end_edit(),
-            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && matches!(self.page, Page::Todo | Page::Notify) => {
+            WM_MOUSEWHEEL if self.notch.mode == Mode::Expanded && matches!(self.page, Page::Todo | Page::Notify | Page::Task) => {
                 let delta = ((wp.0 >> 16) & 0xffff) as i16;
                 let max = self.rows().saturating_sub(if self.page == Page::Notify { NOTE_ROWS } else { LIST_ROWS });
-                let scroll = if self.page == Page::Notify { &mut self.note_scroll } else { &mut self.todo_scroll };
+                let scroll = match self.page {
+                    Page::Notify => &mut self.note_scroll,
+                    Page::Task => &mut self.task_scroll,
+                    _ => &mut self.todo_scroll,
+                };
                 *scroll = if delta > 0 { scroll.saturating_sub(1) } else { (*scroll + 1).min(max) };
                 if self.page == Page::Notify { self.kick(); } else { self.redraw(); }
             }
@@ -2333,6 +2356,9 @@ fn run() -> windows::core::Result<()> {
             nav_open: false,
             page: Page::Music,
             todo: todo::Todo::load(system::now_stamp()),
+            tasks: task::Tasks::load(system::now_stamp()),
+            task_sel: None,
+            task_scroll: 0,
             today: system::today(),
             draft: String::new(),
             editing: false,

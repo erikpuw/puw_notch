@@ -18,6 +18,7 @@ impl Renderer {
             let lv = &v.list;
             let rows_of = |page: Page| match page {
                 Page::Todo => v.todos.len(),
+                Page::Task => v.task.tasks.map_or(0, |t| t.items.len()),
                 Page::Notify => v.notes.len(),
                 Page::Weather => usize::from(v.weather.now.is_some()),
                 _ => 0,
@@ -128,7 +129,7 @@ impl Renderer {
                     Page::Weather => self.draw_weather(&text, &width, &wx_icon, &draw_input, &hover_disc, &btns, v, lv, current, &weather_line, &weather_empty, &moon_line, &hour_lines, &figure_icons, (cl, cr), s, a, hovered)?,
                     Page::Calendar => self.draw_calendar(&text, &width, &hover_disc, &btns, &fonts, &v.cal, (cl, cr), s, a, hovered)?,
                     Page::Focus => self.draw_focus(&text, &micon, &wx_icon, &focus_icons, &btns, v.focus, v.health.minute_of_day, (cl, cr), s, a, hovered)?,
-                    Page::Task => {}
+                    Page::Task => self.draw_task(&text, &width, &hover_disc, &scrollbar, &btns, &fonts, &v.task, scroll, (cl, cr), s, a, hovered)?,
                     Page::Health => self.draw_health(&text, &micon, &hover_disc, &btns, &width, &v.health, settings, (cl, cr), s, a, hovered)?,
                 }
                 rt.SetTransform(&Matrix3x2::translation(0.0, gy));

@@ -211,7 +211,7 @@ mod tests {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "23:48", date: "T7, 31/10",
                     battery: Some(Battery { percent: 77, charging: true, saver: false }), banner: None, music: None, live: false, robot: None,
                     phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Usage, leaving: None, todos: &[], notes: &[],
-                    weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
+                    weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(), task: Default::default(),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: &crate::focus::Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings: None } };
                 for _ in 0..40 {

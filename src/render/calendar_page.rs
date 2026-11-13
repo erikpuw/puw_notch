@@ -116,14 +116,20 @@ impl Renderer {
                 } else {
                     grey(0.92, a)
                 };
-                let u: Vec<u16> = label.encode_utf16().collect();
-                let layout = self.dw.CreateTextLayout(&u, &fonts[font], 200.0, 200.0)?;
-                let om = layout.GetOverhangMetrics()?;
-                let ink_cx = (-om.left + (200.0 + om.right)) / 2.0;
-                let ink_cy = (-om.top + (200.0 + om.bottom)) / 2.0;
-                let origin = Vector2 { X: mx - ink_cx, Y: my - ink_cy };
-                rt.DrawTextLayout(origin, &layout, &self.brush(ink)?, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                self.day_number(&label, &fonts[font], mx, my, ink)?;
             }
+        }
+        Ok(())
+    }
+
+    pub(super) fn day_number(&self, label: &str, format: &IDWriteTextFormat, mx: f32, my: f32, ink: D2D1_COLOR_F) -> Result<()> {
+        unsafe {
+            let u: Vec<u16> = label.encode_utf16().collect();
+            let layout = self.dw.CreateTextLayout(&u, format, 200.0, 200.0)?;
+            let om = layout.GetOverhangMetrics()?;
+            let ink_cx = (-om.left + (200.0 + om.right)) / 2.0;
+            let ink_cy = (-om.top + (200.0 + om.bottom)) / 2.0;
+            self.rt.DrawTextLayout(Vector2 { X: mx - ink_cx, Y: my - ink_cy }, &layout, &self.brush(ink)?, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         Ok(())
     }
