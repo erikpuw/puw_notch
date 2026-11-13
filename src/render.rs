@@ -2675,7 +2675,7 @@ mod tests {
             let mut full = Tasks::default();
             full.items = vec![
                 task("Báo cáo thuế quý", Repeat::Quarterly, 202611110900, vec![], false),
-                task("Họp tuần", Repeat::Weekly, 202611131100, vec![20261106], false),
+                task("Họp tuần với phòng kế toán và khách hàng", Repeat::Weekly, 202611131100, vec![20261106], false),
                 task("Gửi lương tháng", Repeat::Monthly, 202611150900, vec![], false),
                 task("Đóng BHXH", Repeat::Once, 202611120900, vec![20261112], true),
                 task("Gia hạn tên miền", Repeat::Once, 202611250900, vec![], false),

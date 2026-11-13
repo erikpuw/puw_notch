@@ -170,16 +170,19 @@ impl Renderer {
                 (n, false) => format!("{n} task hôm nay"),
                 (n, true) => format!("{n} task{} today", if n == 1 { "" } else { "s" }),
             };
-            let sy = 112.0;
+            let sy = 104.0;
             let dot_c = if due_today > 0 { YELLOW } else { GREEN };
             rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: cl + 4.0 * s, Y: (sy + 9.0) * s }, radiusX: 4.0 * s, radiusY: 4.0 * s }, &self.brush(solid(dot_c, a))?);
             text(&summary, F_TITLE, rect(cl + 14.0 * s, sy * s, cl + WEEK_W * s, (sy + 18.0) * s), lead, grey(1.0, a))?;
             let next = tasks.order(now).into_iter().find(|&i| matches!(tasks.status(i, now), Status::Today | Status::Waiting));
-            let next_line = match next {
-                Some(i) => format!("{} {}, {}", tr("Kế tiếp:", "Next:"), tasks.items[i].title, due_label(tasks, i, now)),
-                None => tr("Không có task sắp tới", "Nothing coming up").to_string(),
-            };
-            text(&next_line, F_LABEL, rect(cl + 14.0 * s, (sy + 20.0) * s, cl + WEEK_W * s, (sy + 36.0) * s), lead, grey(0.55, a))?;
+            let line = |y: f32| rect(cl + 14.0 * s, (sy + y) * s, cl + WEEK_W * s, (sy + y + 16.0) * s);
+            match next {
+                Some(i) => {
+                    text(&format!("{} {}", tr("Kế tiếp:", "Next:"), due_label(tasks, i, now)), F_LABEL, line(20.0), lead, grey(0.55, a))?;
+                    text(&tasks.items[i].title, F_LABEL, line(36.0), lead, grey(0.85, a))?;
+                }
+                None => text(tr("Không có task sắp tới", "Nothing coming up"), F_LABEL, line(20.0), lead, grey(0.55, a))?,
+            }
 
             let dx = cl + DIVIDER_X * s;
             rt.FillRectangle(&rect(dx, HEAD_Y * s, dx + 1.0 * s, 158.0 * s), &self.brush(grey(0.1, a))?);
