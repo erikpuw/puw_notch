@@ -28,6 +28,12 @@ const DUE_Y: f32 = 80.0;
 const SLOT_Y: f32 = 102.0;
 const SNOOZE_Y: f32 = 124.0;
 const DATE_W: f32 = 52.0;
+const PICK_HEAD_Y: f32 = 30.0;
+const PICK_WEEK_Y: f32 = 50.0;
+const PICK_GRID_Y: f32 = 64.0;
+const PICK_ROW_H: f32 = 17.0;
+const PICK_CHIP_W: f32 = 19.0;
+const ICON_CALENDAR: &str = "\u{E787}";
 const TIME_W: f32 = 38.0;
 const SNOOZE_W: f32 = 56.0;
 const REPEATS: [(task::Repeat, f32); 4] = [(task::Repeat::Once, 40.0), (task::Repeat::Weekly, 40.0), (task::Repeat::Monthly, 44.0), (task::Repeat::Quarterly, 36.0)];
@@ -50,13 +56,23 @@ fn slot_label(slot: u8) -> &'static str {
     }
 }
 
-pub(super) fn edit_buttons(r: &dyn Fn(f32, f32, f32, f32) -> D2D_RECT_F, cl: f32, cw: f32, rows: usize, scroll: usize) -> Vec<(Button, D2D_RECT_F)> {
+pub(super) fn edit_buttons(r: &dyn Fn(f32, f32, f32, f32) -> D2D_RECT_F, cl: f32, cw: f32, rows: usize, scroll: usize, picking: bool) -> Vec<(Button, D2D_RECT_F)> {
     let mut out = vec![(Button::ListInput, r(cl, NAME_Y, EDIT_LIST_W, FIELD_H))];
     for (row, i) in (scroll..rows.min(scroll + TASK_ROWS)).enumerate() {
         out.push((Button::TaskPick(i), r(cl, EDIT_ROW_Y + row as f32 * EDIT_ROW_H, EDIT_LIST_W, EDIT_ROW_H)));
     }
     let px = cl + PANE_X;
     let pw = cw - PANE_X;
+    if picking && rows > 0 {
+        out.push((Button::TaskPickMonth(-1), r(px, PICK_HEAD_Y, STEP, STEP)));
+        out.push((Button::TaskPickMonth(1), r(px + pw - STEP, PICK_HEAD_Y, STEP, STEP)));
+        let col = pw / 7.0;
+        for i in 0..42 {
+            out.push((Button::TaskPickDay(i), r(px + (i % 7) as f32 * col, PICK_GRID_Y + (i / 7) as f32 * PICK_ROW_H, col, PICK_ROW_H)));
+        }
+        out.push((Button::TaskPickClose, r(px - 6.0, PICK_HEAD_Y - 2.0, pw + 6.0, PICK_GRID_Y + 6.0 * PICK_ROW_H - PICK_HEAD_Y + 4.0)));
+        return out;
+    }
     out.push((Button::TaskBack, r(cl + cw - 44.0, NAME_Y, 44.0, FIELD_H)));
     if rows == 0 {
         return out;
@@ -68,8 +84,7 @@ pub(super) fn edit_buttons(r: &dyn Fn(f32, f32, f32, f32) -> D2D_RECT_F, cl: f32
         x += w + CHIP_GAP;
     }
     let x = px + PANE_LABEL_W;
-    out.push((Button::TaskDue(-1), r(x, DUE_Y, STEP, STEP)));
-    out.push((Button::TaskDue(1), r(x + STEP + DATE_W, DUE_Y, STEP, STEP)));
+    out.push((Button::TaskDueOpen, r(x, DUE_Y, 2.0 * STEP + DATE_W, STEP)));
     let hx = x + 2.0 * STEP + DATE_W + 6.0;
     out.push((Button::TaskHour(-1), r(hx, DUE_Y, STEP, STEP)));
     out.push((Button::TaskHour(1), r(hx + STEP + TIME_W, DUE_Y, STEP, STEP)));
@@ -130,8 +145,8 @@ impl Renderer {
         hovered: Option<Button>,
     ) -> Result<()> {
         let Some(tasks) = tv.tasks else { return Ok(()) };
-        if settings == Some(Card::TaskEdit) {
-            return self.draw_task_edit(text, draw_input, btns, tasks, tv, scroll, (cl, cr), s, a, hovered);
+        if matches!(settings, Some(Card::TaskEdit | Card::TaskDate)) {
+            return self.draw_task_edit(text, draw_input, btns, fonts, tasks, tv, scroll, (cl, cr), s, a, hovered);
         }
         let rt = &self.rt;
         let (center, lead, trail) = (DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING);
@@ -246,6 +261,7 @@ impl Renderer {
         text: &dyn Fn(&str, usize, D2D_RECT_F, DWRITE_TEXT_ALIGNMENT, D2D1_COLOR_F) -> Result<()>,
         draw_input: &dyn Fn(&str) -> Result<()>,
         btns: &[(Button, D2D_RECT_F)],
+        fonts: &[IDWriteTextFormat],
         tasks: &Tasks,
         tv: &TaskView,
         scroll: usize,
@@ -317,6 +333,45 @@ impl Renderer {
                 text(glyph, F_TINY_ICON, sb, center, grey(1.0, a))
             };
             let label = |y: f32, l: &str| text(l, F_LABEL, rect(px, (y - 1.0) * s, px + PANE_LABEL_W * s, (y + STEP - 1.0) * s), lead, grey(0.6, a));
+            if let Some((vy, vm)) = tv.pick {
+                let english = crate::i18n::english();
+                let today = task::date_of(tv.now);
+                let head = rect(px + STEP * s, PICK_HEAD_Y * s, cr - STEP * s, (PICK_HEAD_Y + STEP) * s);
+                text(&crate::calendar::month_title(vy, vm, english), F_TITLE, head, center, grey(1.0, a))?;
+                let can_back = vy * 12 + vm as i32 > (today / 10_000) as i32 * 12 + (today / 100 % 100) as i32;
+                for (b, glyph, on) in [(Button::TaskPickMonth(-1), ICON_LEFT, can_back), (Button::TaskPickMonth(1), ICON_RIGHT, true)] {
+                    if let Some(r) = rect_of(b) {
+                        let ink = if !on { grey(0.2, a) } else if hovered == Some(b) { grey(1.0, a) } else { grey(0.6, a) };
+                        text(glyph, F_SMALL_ICON, r, center, ink)?;
+                    }
+                }
+                let col = (cr - px) / 7.0;
+                for k in 0..7u32 {
+                    let x = px + k as f32 * col;
+                    text(crate::calendar::weekday_short(k, english), F_LABEL, rect(x, PICK_WEEK_Y * s, x + col, (PICK_WEEK_Y + 14.0) * s), center, grey(0.46, a))?;
+                }
+                let chosen = task::date_of(t.due);
+                for c in 0..42usize {
+                    let Some(cell) = rect_of(Button::TaskPickDay(c)) else { continue };
+                    let (cy, cm, cd, in_month) = crate::calendar::cell_date(vy, vm, c);
+                    let date = cy as u32 * 10_000 + cm * 100 + cd;
+                    let (mx, my) = (((cell.left + cell.right) / 2.0).round(), ((cell.top + cell.bottom) / 2.0).round());
+                    let (hw, hh) = ((PICK_CHIP_W * s / 2.0).round(), (PICK_ROW_H * s / 2.0).round());
+                    let chip = rect(mx - hw, my - hh, mx + hw, my + hh);
+                    let past = date < today;
+                    if date == chosen {
+                        rt.FillRoundedRectangle(&rounded(chip, hh), &self.brush(solid(GREEN, a))?);
+                    } else if date == today {
+                        let inner = rect(chip.left + 0.5, chip.top + 0.5, chip.right - 0.5, chip.bottom - 0.5);
+                        rt.DrawRoundedRectangle(&rounded(inner, hh - 0.5), &self.brush(solid(BLUE, a))?, 1.0 * s, None);
+                    } else if !past && hovered == Some(Button::TaskPickDay(c)) {
+                        rt.FillRoundedRectangle(&rounded(chip, hh), &self.brush(grey(0.14, a))?);
+                    }
+                    let ink = if date == chosen { color(0.02, 0.13, 0.04, a) } else if date == today { solid(BLUE, a) } else if past { grey(0.22, a) } else if !in_month { grey(0.35, a) } else { grey(0.92, a) };
+                    self.day_number(&cd.to_string(), &fonts[if date == chosen { F_CAL_BOLD } else { F_CAL }], mx, my, ink)?;
+                }
+                return Ok(());
+            }
 
             if let Some(nb) = rect_of(Button::TaskName) {
                 let hot = hovered == Some(Button::TaskName);
@@ -328,15 +383,17 @@ impl Renderer {
                 chip(Button::TaskRepeat(rep), repeat_label(rep), t.repeat == rep)?;
             }
             label(DUE_Y, tr("Hạn", "Due"))?;
-            stepper(Button::TaskDue(-1), ICON_MINUS)?;
-            stepper(Button::TaskDue(1), ICON_PLUS)?;
             stepper(Button::TaskHour(-1), ICON_MINUS)?;
             stepper(Button::TaskHour(1), ICON_PLUS)?;
             let date = task::date_of(t.due);
             let (y, m, d) = ((date / 10_000) as i32, date / 100 % 100, date % 100);
             let day = format!("{} {d}/{m}", crate::calendar::weekday_short(crate::calendar::weekday(y, m, d), crate::i18n::english()));
-            let x = px + (PANE_LABEL_W + STEP) * s;
-            text(&day, F_LABEL, rect(x, (DUE_Y - 1.0) * s, x + DATE_W * s, (DUE_Y + STEP - 1.0) * s), center, grey(1.0, a))?;
+            if let Some(db) = rect_of(Button::TaskDueOpen) {
+                let hot = hovered == Some(Button::TaskDueOpen);
+                rt.FillRoundedRectangle(&rounded(db, (db.bottom - db.top) / 2.0), &self.brush(grey(if hot { 0.2 } else { 0.12 }, a))?);
+                text(ICON_CALENDAR, F_SMALL_ICON, rect(db.left + 7.0 * s, db.top, db.left + 19.0 * s, db.bottom), center, grey(0.6, a))?;
+                text(&day, F_LABEL, rect(db.left + 20.0 * s, db.top - 1.0 * s, db.right - 6.0 * s, db.bottom - 1.0 * s), center, grey(1.0, a))?;
+            }
             let hx = px + (PANE_LABEL_W + 3.0 * STEP + DATE_W + 6.0) * s;
             text(&format!("{:02}:{:02}", t.due / 100 % 100, t.due % 100), F_LABEL, rect(hx, (DUE_Y - 1.0) * s, hx + TIME_W * s, (DUE_Y + STEP - 1.0) * s), center, grey(1.0, a))?;
             label(SLOT_Y, tr("Nhắc", "Remind"))?;

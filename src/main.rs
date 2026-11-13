@@ -200,6 +200,7 @@ struct App {
     todo: todo::Todo,
     tasks: task::Tasks,
     task_sel: Option<usize>,
+    task_pick: (i32, u32),
     task_alert: Option<task_alert::Alert>,
     task_pending: Vec<usize>,
     task_minute: u64,
@@ -319,7 +320,7 @@ impl App {
             weather: &self.wx,
             page_age: self.page_since.elapsed().as_secs_f32(),
             unit: self.unit, sun_view: self.sun_view, cal,
-            task: render::TaskView { tasks: Some(&self.tasks), now, sel: self.task_sel },
+            task: render::TaskView { tasks: Some(&self.tasks), now, sel: self.task_sel, pick: (self.settings_open == Some(Card::TaskDate)).then_some(self.task_pick) },
         };
         self.icons_morphing = self.renderer.present(self.hwnd, x, y, w, h, self.scale, &view).unwrap_or(false);
         if self.icons_morphing && !self.animating {
@@ -1156,6 +1157,7 @@ impl App {
             }
             Button::TaskPick(i) => {
                 self.task_sel = Some(i);
+                self.settings_open = Some(Card::TaskEdit);
                 self.cancel_task_edit();
             }
             Button::TaskName => {
@@ -1177,13 +1179,35 @@ impl App {
                     self.clamp_scroll();
                 }
             }
-            Button::TaskRepeat(_) | Button::TaskDue(_) | Button::TaskHour(_) | Button::TaskSlot(_) | Button::TaskSnooze(_) => {
+            Button::TaskDueOpen => {
+                if let Some(i) = render::picked(self.task_sel, self.tasks.items.len()) {
+                    let date = task::date_of(self.tasks.items[i].due);
+                    self.task_pick = ((date / 10_000) as i32, date / 100 % 100);
+                    self.settings_open = Some(Card::TaskDate);
+                }
+            }
+            Button::TaskPickMonth(dir) => {
+                let (y, m) = calendar::shift_month(self.task_pick.0, self.task_pick.1, dir);
+                if y * 12 + m as i32 >= (self.today / 10_000) as i32 * 12 + (self.today / 100 % 100) as i32 {
+                    self.task_pick = (y, m);
+                }
+            }
+            Button::TaskPickDay(c) => {
+                let (y, m, d, _) = calendar::cell_date(self.task_pick.0, self.task_pick.1, c);
+                if let Some(i) = render::picked(self.task_sel, self.tasks.items.len()) {
+                    if task::set_due_date(&mut self.tasks.items[i], y as u32 * 10_000 + m * 100 + d, self.today) {
+                        self.tasks.save();
+                        self.settings_open = Some(Card::TaskEdit);
+                    }
+                }
+            }
+            Button::TaskPickClose => self.settings_open = Some(Card::TaskEdit),
+            Button::TaskRepeat(_) | Button::TaskHour(_) | Button::TaskSlot(_) | Button::TaskSnooze(_) => {
                 if let Some(i) = render::picked(self.task_sel, self.tasks.items.len()) {
                     let today = self.today;
                     let t = &mut self.tasks.items[i];
                     match button {
                         Button::TaskRepeat(r) => task::set_repeat(t, r, today),
-                        Button::TaskDue(dir) => task::step_due(t, dir, today),
                         Button::TaskHour(dir) => task::step_hour(t, dir),
                         Button::TaskSlot(slot) => t.slots ^= slot,
                         Button::TaskSnooze(dir) => t.snooze = task::step_snooze(t.snooze, dir),
@@ -2505,6 +2529,7 @@ fn run() -> windows::core::Result<()> {
             todo: todo::Todo::load(system::now_stamp()),
             tasks: task::Tasks::load(system::now_stamp()),
             task_sel: None,
+            task_pick: (2026, 1),
             task_alert: None,
             task_pending: Vec::new(),
             task_minute: 0,

@@ -98,6 +98,7 @@ pub struct TaskView<'a> {
     pub tasks: Option<&'a crate::task::Tasks>,
     pub now: u64,
     pub sel: Option<usize>,
+    pub pick: Option<(i32, u32)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -186,6 +187,7 @@ pub enum Card {
     Sit,
     Tasks,
     TaskEdit,
+    TaskDate,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -235,7 +237,10 @@ pub enum Button {
     TaskPick(usize),
     TaskName,
     TaskRepeat(crate::task::Repeat),
-    TaskDue(i32),
+    TaskDueOpen,
+    TaskPickMonth(i32),
+    TaskPickDay(usize),
+    TaskPickClose,
     TaskHour(i32),
     TaskSlot(u8),
     TaskSnooze(i32),
@@ -458,7 +463,7 @@ fn setting_rows(card: Card) -> &'static [(Setting, bool)] {
     match card {
         Card::Water => &[(Setting::WaterOn, true), (Setting::Cup, false), (Setting::Goal, false), (Setting::From, false), (Setting::To, false)],
         Card::Sit => &[(Setting::SitOn, true), (Setting::SitEvery, false)],
-        Card::Tasks | Card::TaskEdit => &[],
+        Card::Tasks | Card::TaskEdit | Card::TaskDate => &[],
     }
 }
 
@@ -476,7 +481,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     let (cl, cw) = (SIDE, w - 2.0 * SIDE);
     match page {
         Page::Music => out.extend(buttons(cx, scale, wide)),
-        Page::Task if settings == Some(Card::TaskEdit) => out.extend(task_page::edit_buttons(&r, cl, cw, rows, scroll)),
+        Page::Task if matches!(settings, Some(Card::TaskEdit | Card::TaskDate)) => out.extend(task_page::edit_buttons(&r, cl, cw, rows, scroll, settings == Some(Card::TaskDate))),
         Page::Task => {
             use task_page::*;
             let x0 = cl + LIST_X;
@@ -2683,7 +2688,7 @@ mod tests {
                 task("Gia hạn tên miền", Repeat::Once, 202611250900, vec![], false),
             ];
             let empty = Tasks::default();
-            let frames = [(&empty, None, ""), (&full, None, ""), (&full, Some(Card::TaskEdit), ""), (&full, Some(Card::TaskEdit), "Nộp tờ khai VAT")];
+            let frames = [(&empty, None, ""), (&full, None, ""), (&full, Some(Card::TaskEdit), ""), (&full, Some(Card::TaskEdit), "Nộp tờ khai VAT"), (&full, Some(Card::TaskDate), "")];
             let mut renderer = Renderer::new().unwrap();
             renderer.grab = true;
             let mut sheet = Vec::new();
@@ -2691,7 +2696,7 @@ mod tests {
                 let view = View { mode: Mode::Expanded, size: target(Mode::Expanded, false), time: "10:00", date: "T6, 13/11", battery: Some(Battery { percent: 82, charging: false, saver: false }),
                     banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Task,
                     leaving: None, todos: &[], notes: &[], weather: &weather::State::default(), page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(),
-                    task: TaskView { tasks: Some(tasks), now, sel: Some(0) },
+                    task: TaskView { tasks: Some(tasks), now, sel: Some(if settings == Some(Card::TaskDate) { 2 } else { 0 }), pick: (settings == Some(Card::TaskDate)).then_some((2026, 11)) },
                     list: ListView { counts: (0, 0), remind_before: 15, now, draft: typed, editing: !typed.is_empty(), edit_item: None, caret: true, scroll: 0, note_pos: 0.0 },
                     focus: &Focus::default(), health: HealthView { h: &Health::default(), now: 0, minute_of_day: 0, settings } };
                 for _ in 0..3 {
@@ -3136,7 +3141,7 @@ mod tests {
                 let eyes = |face, gaze: (f32, f32)| Some(Eyes { face, alpha: 1.0, gaze, curious: 0.0, open: 1.0, time: 0.4 });
                 let robot = match name { "robot" => eyes(Face::Normal, (0.5, 0.9)), "robot-happy" => eyes(Face::Happy, (0.0, 0.0)), _ => None };
                 let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: nav.then_some(Button::GoPage(Page::Todo)), page,
-                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: std::env::var("PUW_PREVIEW_AGE").ok().and_then(|s| s.parse().ok()).unwrap_or(9.0), unit: weather::Unit::C, cal: crate::calendar::CalView { year: 2026, month: 11, sel: 7, today: (2026, 11, 7), zone: name.starts_with("page-calendar").then_some(7.0), lunar_on: name == "page-calendar-lunar" }, task: TaskView { tasks: (name == "page-task").then_some(&tasks), now: 202611071000, sel: None }, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
+                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: std::env::var("PUW_PREVIEW_AGE").ok().and_then(|s| s.parse().ok()).unwrap_or(9.0), unit: weather::Unit::C, cal: crate::calendar::CalView { year: 2026, month: 11, sel: 7, today: (2026, 11, 7), zone: name.starts_with("page-calendar").then_some(7.0), lunar_on: name == "page-calendar-lunar" }, task: TaskView { tasks: (name == "page-task").then_some(&tasks), now: 202611071000, sel: None, pick: None }, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: if name.ends_with("-focus") { &running_focus } else { &Focus::default() }, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 let mut renderer = Renderer::new().unwrap();

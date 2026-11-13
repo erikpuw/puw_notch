@@ -111,23 +111,13 @@ pub fn next_due(t: &Task) -> u64 {
     next as u64 * 10_000 + t.due % 10_000
 }
 
-fn prev_day(date: u32) -> u32 {
-    let (y, m, d) = ((date / 10_000) as i32, date / 100 % 100, date % 100);
-    if d > 1 {
-        return date - 1;
+pub fn set_due_date(t: &mut Task, date: u32, today: u32) -> bool {
+    if date < today {
+        return false;
     }
-    let (py, pm) = shift_month(y, m, -1);
-    py as u32 * 10_000 + pm * 100 + days_in_month(py as u32, pm)
-}
-
-pub fn step_due(t: &mut Task, dir: i32, today: u32) {
-    let date = date_of(t.due);
-    let moved = if dir > 0 { next_day(date) } else { prev_day(date) };
-    if moved < today {
-        return;
-    }
-    t.due = moved as u64 * 10_000 + t.due % 10_000;
-    t.day = moved % 100;
+    t.due = date as u64 * 10_000 + t.due % 10_000;
+    t.day = date % 100;
+    true
 }
 
 pub fn step_hour(t: &mut Task, dir: i32) {
@@ -462,19 +452,13 @@ mod tests {
     }
 
     #[test]
-    fn deadline_steps_a_day_and_never_before_today() {
+    fn a_picked_date_keeps_the_time_and_never_lands_before_today() {
         let mut t = task("Thuế", Repeat::Monthly, 202611200900);
-        step_due(&mut t, 1, 20261113);
-        assert_eq!((t.due, t.day), (202611210900, 21));
-        step_due(&mut t, -1, 20261113);
-        step_due(&mut t, -1, 20261113);
-        assert_eq!(t.due, 202611190900);
-        let mut u = task("Họp", Repeat::Once, 202611130900);
-        step_due(&mut u, -1, 20261113);
-        assert_eq!(u.due, 202611130900, "not before today");
-        let mut w = task("Lương", Repeat::Monthly, 202611300900);
-        step_due(&mut w, 1, 20261113);
-        assert_eq!((w.due, w.day), (202612010900, 1));
+        assert!(set_due_date(&mut t, 20261231, 20261113));
+        assert_eq!((t.due, t.day), (202612310900, 31));
+        assert!(set_due_date(&mut t, 20261113, 20261113), "today is fine");
+        assert!(!set_due_date(&mut t, 20261112, 20261113), "yesterday is not");
+        assert_eq!(t.due, 202611130900);
     }
 
     #[test]
