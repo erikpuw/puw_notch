@@ -21,6 +21,7 @@ mod robot;
 mod screen;
 mod status;
 mod system;
+mod task;
 mod todo;
 mod usage;
 mod usb;

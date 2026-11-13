@@ -4,7 +4,7 @@ pub fn days_in_month(year: i32, month: u32) -> u32 {
     crate::todo::days_in_month(year as u32, month)
 }
 
-fn jd(year: i32, month: u32, day: u32) -> i64 {
+pub(crate) fn jd(year: i32, month: u32, day: u32) -> i64 {
     let (y, m, d) = (year as i64, month as i64, day as i64);
     let a = (14 - m) / 12;
     let y = y + 4800 - a;
