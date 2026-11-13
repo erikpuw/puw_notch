@@ -34,6 +34,13 @@ pub fn key_choice(vk: u16, shown: &[usize]) -> Option<Choice> {
     }
 }
 
+pub fn forget(list: &mut Vec<usize>, removed: usize) {
+    list.retain(|&j| j != removed);
+    for j in list.iter_mut().filter(|j| **j > removed) {
+        *j -= 1;
+    }
+}
+
 pub fn card_height(rows: usize) -> f32 {
     match rows {
         0 | 1 => SINGLE_H,
@@ -197,6 +204,15 @@ mod tests {
         assert_eq!(key_choice(0x0D, &[3, 4]), None);
         assert_eq!(key_choice(0x1B, &[3, 4]), Some(Choice::AllNotYet));
         assert_eq!(key_choice(0x41, &[3]), None);
+    }
+
+    #[test]
+    fn a_deleted_task_leaves_the_list_and_later_ones_move_up() {
+        let mut v = vec![0, 2, 3];
+        forget(&mut v, 2);
+        assert_eq!(v, vec![0, 2]);
+        forget(&mut v, 0);
+        assert_eq!(v, vec![1]);
     }
 
     #[test]

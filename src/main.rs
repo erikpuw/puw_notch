@@ -930,6 +930,9 @@ impl App {
             }
             self.todo.mark(i, ring);
             if render::page_shown(Page::Todo) {
+                if self.page != Page::Todo {
+                    self.cancel_task_edit();
+                }
                 self.page = Page::Todo;
             }
         }
@@ -1165,6 +1168,10 @@ impl App {
             Button::TaskDelete => {
                 if let Some(i) = render::picked(self.task_sel, self.tasks.items.len()) {
                     self.tasks.remove(i);
+                    task_alert::forget(&mut self.task_pending, i);
+                    if let Some(alert) = &mut self.task_alert {
+                        task_alert::forget(&mut alert.shown, i);
+                    }
                     self.task_sel = None;
                     self.cancel_task_edit();
                     self.clamp_scroll();
