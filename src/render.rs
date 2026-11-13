@@ -31,6 +31,7 @@ use crate::notch::{self, target, Mode, LYRICS_EXTRA_W};
 use crate::notify::{BannerKind, Note, Row, RowState, Toast};
 use crate::system::Battery;
 
+mod alert;
 mod aurora;
 mod battery;
 mod calendar_page;
@@ -49,6 +50,7 @@ mod sun_path;
 mod task_page;
 mod usage_page;
 pub use task_page::picked;
+pub use alert::{alert_buttons, AlertView};
 
 pub const WM_ICONS: u32 = WM_APP + 10;
 
@@ -2705,6 +2707,48 @@ mod tests {
             bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
             bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
             std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/task-preview.bmp"), bytes).unwrap();
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "writes target/alert-preview.bmp: the centre reminder for one late task, one due today, and a list of six"]
+    fn alert_preview() {
+        use crate::task::{Repeat, Task, Tasks};
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (560i32, 420i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Alert preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let now = 202611131200;
+            let task = |title: &str, due: u64, told: u32| Task { title: title.into(), repeat: Repeat::Once, day: 1, due, slots: 7, snooze: 30, done: vec![], nag_at: None, told, finished: false };
+            let mut t = Tasks::default();
+            t.items = vec![
+                task("Báo cáo thuế quý 4", 202611110900, 3),
+                task("Họp tuần với phòng kế toán", 202611131600, 1),
+                task("Gửi lương tháng", 202611150900, 2),
+                task("Gia hạn tên miền", 202611180900, 1),
+                task("Nộp BHXH", 202611190900, 1),
+                task("Đặt lịch bảo dưỡng xe", 202611200900, 1),
+            ];
+            let frames: Vec<Vec<usize>> = vec![vec![0], vec![1], vec![0, 1, 2], vec![0, 1, 2, 3, 4, 5]];
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            let mut sheet = Vec::new();
+            for shown in &frames {
+                let rows = crate::task_alert::alert_rows(&t, shown, now);
+                let view = alert::AlertView { rows: &rows, appear: 1.0, hovered: None, locked: false };
+                renderer.present_alert(hwnd, w, h, 1.0, &view).unwrap();
+                sheet.extend_from_slice(&renderer.grabbed[..]);
+            }
+            let sh = h * frames.len() as i32;
+            let mut bytes = Vec::new(); bytes.extend_from_slice(b"BM");
+            bytes.extend_from_slice(&(54u32 + sheet.len() as u32).to_le_bytes()); bytes.extend_from_slice(&[0; 4]);
+            bytes.extend_from_slice(&54u32.to_le_bytes()); bytes.extend_from_slice(&40u32.to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes()); bytes.extend_from_slice(&(-sh).to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes()); bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(&[0; 24]); bytes.extend_from_slice(&sheet);
+            std::fs::write(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/alert-preview.bmp"), bytes).unwrap();
             DestroyWindow(hwnd).unwrap();
         }
     }

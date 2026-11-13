@@ -22,6 +22,7 @@ mod screen;
 mod status;
 mod system;
 mod task;
+mod task_alert;
 mod todo;
 mod usage;
 mod usb;
@@ -199,6 +200,9 @@ struct App {
     todo: todo::Todo,
     tasks: task::Tasks,
     task_sel: Option<usize>,
+    task_alert: Option<task_alert::Alert>,
+    task_pending: Vec<usize>,
+    task_minute: u64,
     task_scroll: usize,
     today: u32,
     draft: String,
@@ -576,10 +580,88 @@ impl App {
         }
     }
 
+    fn check_tasks(&mut self) {
+        let now = system::now_stamp();
+        if now != self.task_minute {
+            let starting = self.task_minute == 0;
+            self.task_minute = now;
+            for i in self.tasks.due_now(now, starting) {
+                if !self.task_pending.contains(&i) {
+                    self.task_pending.push(i);
+                }
+            }
+        }
+        if self.task_pending.is_empty() || self.hidden {
+            return;
+        }
+        let pending = std::mem::take(&mut self.task_pending);
+        match &mut self.task_alert {
+            Some(alert) => {
+                for i in pending {
+                    if !alert.shown.contains(&i) {
+                        alert.shown.push(i);
+                    }
+                }
+            }
+            None => self.task_alert = task_alert::Alert::open(self.monitor, self.scale, pending),
+        }
+        if let Some(alert) = &mut self.task_alert {
+            alert.draw(&self.tasks, now);
+        }
+    }
+
+    fn choose_task(&mut self, choice: task_alert::Choice) {
+        let Some(alert) = &mut self.task_alert else { return };
+        let now = system::now_stamp();
+        let picked = alert.take(choice);
+        for i in picked {
+            match choice {
+                task_alert::Choice::Done(_) => self.tasks.mark_done(i, now),
+                _ => self.tasks.not_yet(i, now),
+            }
+        }
+        if alert.shown.is_empty() {
+            self.task_alert = None;
+        } else {
+            alert.hovered = None;
+            alert.draw(&self.tasks, now);
+        }
+        self.redraw();
+    }
+
+    fn handle_alert(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+        let alert = self.task_alert.as_mut()?;
+        let now = system::now_stamp();
+        match msg {
+            WM_TIMER => alert.draw(&self.tasks, now),
+            WM_MOUSEMOVE => {
+                let hit = alert.hit((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32);
+                if hit != alert.hovered {
+                    alert.hovered = hit;
+                    alert.draw(&self.tasks, now);
+                }
+            }
+            WM_LBUTTONUP => {
+                let hit = alert.hit((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32);
+                if let Some(choice) = hit.filter(|_| !alert.locked()) {
+                    self.choose_task(choice);
+                }
+            }
+            WM_KEYDOWN => {
+                if let Some(choice) = task_alert::key_choice(wp.0 as u16, &alert.shown).filter(|_| !alert.locked()) {
+                    self.choose_task(choice);
+                }
+            }
+            _ => return None,
+        }
+        Some(LRESULT(0))
+    }
+
     fn tick(&mut self) {
         if self.editing && unsafe { GetForegroundWindow() } != self.hwnd {
             self.end_edit();
         }
+        self.check_tasks();
         self.beat();
         let mut lap = Instant::now();
         let mut laps = [0u32; 6];
@@ -2287,6 +2369,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
+extern "system" fn alert_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let handled = APP.with(|a| a.try_borrow_mut().ok().and_then(|mut g| g.as_mut().and_then(|app| app.handle_alert(msg, wp, lp))));
+    handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
+}
+
 fn main() -> windows::core::Result<()> {
     watchdog();
     std::panic::set_hook(Box::new(|info| system::log(&format!("panic: {info}"))));
@@ -2327,6 +2414,7 @@ fn run() -> windows::core::Result<()> {
             ..Default::default()
         };
         RegisterClassExW(&wc);
+        RegisterClassExW(&WNDCLASSEXW { lpfnWndProc: Some(alert_wndproc), lpszClassName: task_alert::CLASS, ..wc });
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class,
@@ -2410,6 +2498,9 @@ fn run() -> windows::core::Result<()> {
             todo: todo::Todo::load(system::now_stamp()),
             tasks: task::Tasks::load(system::now_stamp()),
             task_sel: None,
+            task_alert: None,
+            task_pending: Vec::new(),
+            task_minute: 0,
             task_scroll: 0,
             today: system::today(),
             draft: String::new(),
