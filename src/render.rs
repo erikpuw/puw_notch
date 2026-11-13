@@ -3054,7 +3054,7 @@ mod tests {
             let english = std::env::var("PUW_README_LANG").is_ok_and(|v| v == "en");
             crate::i18n::set_english(english);
             let tl = |vi: &'static str, en: &'static str| if english { en } else { vi };
-            let en_date = |d: &'static str| if english { match d { "T7, 24/10" => "Sat, 24/10", "T2, 26/10" => "Mon, 26/10", "T5, 29/10" => "Thu, 29/10", d => d } } else { d };
+            let en_date = |d: &'static str| if english { match d { "T7, 24/10" => "Sat, 24/10", "T2, 26/10" => "Mon, 26/10", "T5, 29/10" => "Thu, 29/10", "T7, 7/11" => "Sat, 7/11", d => d } } else { d };
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("README shots"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let lines = [
                 (0, tl("Lời mẫu cho ảnh xem trước", "Sample lyrics for the preview")),
@@ -3086,7 +3086,15 @@ mod tests {
             (health.water_on, health.sit_on, health.taken_ml, health.water_mark, health.sitting_since) = (true, true, 750, Some(999_970), Some(999_958));
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
             let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
-            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 18] = [
+            let readme_task = |title: &str, repeat, due: u64, done: Vec<u32>, finished: bool| crate::task::Task { title: title.into(), repeat, day: (due / 10_000 % 100) as u32, due, slots: 7, snooze: 30, done, nag_at: None, told: 0, finished };
+            let mut tasks = crate::task::Tasks::default();
+            tasks.items = vec![
+                readme_task(tl("Báo cáo thuế quý", "Quarterly tax report"), crate::task::Repeat::Quarterly, 202611050900, vec![], false),
+                readme_task(tl("Họp tuần", "Weekly meeting"), crate::task::Repeat::Weekly, 202611071100, vec![20261031], false),
+                readme_task(tl("Gửi lương tháng", "Send the monthly pay"), crate::task::Repeat::Monthly, 202611100900, vec![], false),
+                readme_task(tl("Đóng BHXH", "Pay social insurance"), crate::task::Repeat::Once, 202611060900, vec![20261106], true),
+            ];
+            let shots: [(&str, Mode, Option<&Track>, Page, bool, &State, Option<Battery>, &str, &str); 19] = [
                 ("page-nav", Mode::Expanded, Some(&playing), Page::Music, false, &none, charging(70), "23:16", "T7, 24/10"),
                 ("pill-idle", Mode::Collapsed, None, Page::Music, false, &none, charging(76), "20:50", ""),
                 ("robot", Mode::Collapsed, None, Page::Music, false, &none, on_battery, "20:50", ""),
@@ -3105,6 +3113,7 @@ mod tests {
                 ("page-weather-night", Mode::Expanded, None, Page::Weather, false, &night, on_battery, "02:05", "T5, 29/10"),
                 ("page-calendar", Mode::Expanded, None, Page::Calendar, false, &none, on_battery, "04:21", "T7, 7/11"),
                 ("page-calendar-lunar", Mode::Expanded, None, Page::Calendar, false, &none, on_battery, "04:21", "T7, 7/11"),
+                ("page-task", Mode::Expanded, None, Page::Task, false, &none, on_battery, "10:00", "T7, 7/11"),
             ];
             let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if english { "target/readme-en" } else { "target/readme" });
             std::fs::create_dir_all(&dir).unwrap();
@@ -3127,7 +3136,7 @@ mod tests {
                 let eyes = |face, gaze: (f32, f32)| Some(Eyes { face, alpha: 1.0, gaze, curious: 0.0, open: 1.0, time: 0.4 });
                 let robot = match name { "robot" => eyes(Face::Normal, (0.5, 0.9)), "robot-happy" => eyes(Face::Happy, (0.0, 0.0)), _ => None };
                 let view = View { mode, size, time, date, battery, banner: None, music, live, robot, phase: 1.3, banner_age: 0.0, lyrics, hovered: nav.then_some(Button::GoPage(Page::Todo)), page,
-                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: std::env::var("PUW_PREVIEW_AGE").ok().and_then(|s| s.parse().ok()).unwrap_or(9.0), unit: weather::Unit::C, cal: crate::calendar::CalView { year: 2026, month: 11, sel: 7, today: (2026, 11, 7), zone: name.starts_with("page-calendar").then_some(7.0), lunar_on: name == "page-calendar-lunar" }, task: Default::default(), sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
+                    leaving: None, todos: &[], notes: &[], weather: wx, page_age: std::env::var("PUW_PREVIEW_AGE").ok().and_then(|s| s.parse().ok()).unwrap_or(9.0), unit: weather::Unit::C, cal: crate::calendar::CalView { year: 2026, month: 11, sel: 7, today: (2026, 11, 7), zone: name.starts_with("page-calendar").then_some(7.0), lunar_on: name == "page-calendar-lunar" }, task: TaskView { tasks: (name == "page-task").then_some(&tasks), now: 202611071000, sel: None }, sun_view: matches!(name, "page-weather-sun" | "page-weather-night"),
                     list: ListView { counts: (0, 0), remind_before: 15, now: 202610290205, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
                     focus: if name.ends_with("-focus") { &running_focus } else { &Focus::default() }, health: HealthView { h: &health, now: 1_000_000, minute_of_day: 840, settings: None } };
                 let mut renderer = Renderer::new().unwrap();

@@ -78,6 +78,9 @@ Turn on in **tray → More features → Live tasks** (off by default). One task 
 | ![Calendar](assets/screenshots/en/page-calendar.png)<br>**Calendar**: the day large, weeks from Monday, ‹ › change the month | ![Lunar calendar](assets/screenshots/en/page-calendar-lunar.png)<br>**Lunar**: the Solar \| Lunar choice swaps the grid's numbers (only where the region has one) |
 |---|---|
 
+| ![Task](assets/screenshots/en/page-task.png)<br>**Task**: this week with a coloured dot per day, and the scheduled tasks on the right |
+|---|
+
 | ![Wi-Fi on](assets/screenshots/en/banner-wifi.png)<br>**Wi-Fi on**: the connection, then the VPN that was up before | ![Airplane mode off](assets/screenshots/en/banner-airplane-off.png)<br>**Airplane mode off**: the steps are listed from the start and tick off as they happen |
 |---|---|
 | ![Airplane mode on](assets/screenshots/en/banner-airplane-on.png)<br>**Airplane mode on**: Wi-Fi, Bluetooth and the VPN go off with it | ![Two Bluetooth devices](assets/screenshots/en/banner-bluetooth.png)<br>**Bluetooth**: two or more devices, a line each with its battery |

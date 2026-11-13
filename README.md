@@ -78,6 +78,9 @@ Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặ
 | ![Lịch](assets/screenshots/page-calendar.png)<br>**Lịch**: ngày lớn, tuần từ thứ Hai, ‹ › đổi tháng | ![Lịch âm](assets/screenshots/page-calendar-lunar.png)<br>**Âm lịch**: nút Dương \| Âm đổi số trên lưới (chỉ ở vùng có âm lịch) |
 |---|---|
 
+| ![Task](assets/screenshots/page-task.png)<br>**Task**: tuần này với chấm màu cho từng ngày, bên phải là các task đã lên lịch |
+|---|
+
 | ![Bật Wi-Fi](assets/screenshots/banner-wifi.png)<br>**Bật Wi-Fi**: kết nối mạng, rồi VPN đã chạy trước đó | ![Tắt chế độ máy bay](assets/screenshots/banner-airplane-off.png)<br>**Tắt chế độ máy bay**: các bước hiện sẵn, tích dần khi xong |
 |---|---|
 | ![Bật chế độ máy bay](assets/screenshots/banner-airplane-on.png)<br>**Bật chế độ máy bay**: Wi-Fi, Bluetooth, VPN tắt theo | ![Hai thiết bị Bluetooth](assets/screenshots/banner-bluetooth.png)<br>**Bluetooth**: hai thiết bị trở lên, mỗi thiết bị một dòng kèm pin |
