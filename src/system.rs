@@ -289,14 +289,34 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn task_xml(exe: &std::path::Path, user: &str) -> String {
+fn is_uiaccess() -> bool {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Security::{GetTokenInformation, TokenUIAccess, TOKEN_QUERY};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut value = 0u32;
+        let mut len = 0u32;
+        let ok = GetTokenInformation(token, TokenUIAccess, Some((&mut value as *mut u32).cast()), size_of::<u32>() as u32, &mut len).is_ok();
+        let _ = CloseHandle(token);
+        ok && value != 0
+    }
+}
+
+fn task_xml(exe: &std::path::Path, user: &str, uiaccess: bool) -> String {
     let user = xml_escape(user);
     let dir = xml_escape(&exe.parent().map_or(String::new(), |d| d.display().to_string()));
-    let rundll = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
-        .join(r"System32\rundll32.exe");
-    let command = xml_escape(&rundll.display().to_string());
-    // UIAccess executables need ShellExecute; rundll32 is WINDOWS_GUI so no console flashes at logon.
-    let arguments = xml_escape(&format!(r#"shell32.dll,ShellExec_RunDLL "{}""#, exe.display()));
+    let quoted = xml_escape(&autostart_command(exe));
+    let exec = if uiaccess {
+        let explorer = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into())).join("explorer.exe");
+        let command = xml_escape(&explorer.display().to_string());
+        format!("<Command>{command}</Command><Arguments>{quoted}</Arguments><WorkingDirectory>{dir}</WorkingDirectory>")
+    } else {
+        format!("<Command>{quoted}</Command><WorkingDirectory>{dir}</WorkingDirectory>")
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -309,7 +329,7 @@ fn task_xml(exe: &std::path::Path, user: &str) -> String {
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Enabled>true</Enabled>
   </Settings>
-  <Actions Context="Author"><Exec><Command>{command}</Command><Arguments>{arguments}</Arguments><WorkingDirectory>{dir}</WorkingDirectory></Exec></Actions>
+  <Actions Context="Author"><Exec>{exec}</Exec></Actions>
 </Task>
 "#
     )
@@ -376,7 +396,7 @@ pub fn set_autostart(on: bool) {
     spawn("autostart", move || {
         let user = format!("{}\\{}", std::env::var("USERDOMAIN").unwrap_or_default(), std::env::var("USERNAME").unwrap_or_default());
         let file = std::env::temp_dir().join("puw_notch_task.xml");
-        let utf16: Vec<u8> = [0xFEFFu16].into_iter().chain(task_xml(&exe, &user).encode_utf16()).flat_map(u16::to_le_bytes).collect();
+        let utf16: Vec<u8> = [0xFEFFu16].into_iter().chain(task_xml(&exe, &user, is_uiaccess()).encode_utf16()).flat_map(u16::to_le_bytes).collect();
         let made = std::fs::write(&file, utf16).is_ok() && schtasks_as_admin(&format!("/create /tn {TASK_NAME} /xml \"{}\" /f", file.display()));
         let _ = std::fs::remove_file(&file);
         log(&format!("autostart task {}", if made { "created" } else { "not created" }));
@@ -419,21 +439,21 @@ mod tests {
 
     #[test]
     fn task_opens_uiaccess_apps_through_the_shell() {
-        let xml = task_xml(std::path::Path::new(r"C:\Apps & Co\O'Brien $HOME `\puw_notch.exe"), r"PC\A");
-        let rundll = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
-            .join(r"System32\rundll32.exe");
-        assert!(xml.contains(&format!("<Command>{}</Command>", xml_escape(&rundll.display().to_string()))));
-        assert!(xml.contains(r"<Arguments>shell32.dll,ShellExec_RunDLL &quot;C:\Apps &amp; Co\O'Brien $HOME `\puw_notch.exe&quot;</Arguments>"));
+        let xml = task_xml(std::path::Path::new(r"C:\Apps & Co\O'Brien $HOME `\puw_notch.exe"), r"PC\A", true);
+        let explorer = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into())).join("explorer.exe");
+        assert!(xml.contains(&format!("<Command>{}</Command>", xml_escape(&explorer.display().to_string()))));
+        assert!(xml.contains(r"<Arguments>&quot;C:\Apps &amp; Co\O'Brien $HOME `\puw_notch.exe&quot;</Arguments>"));
         assert!(xml.contains(r"<WorkingDirectory>C:\Apps &amp; Co\O'Brien $HOME `</WorkingDirectory>"));
     }
 
     #[test]
     fn task_runs_at_logon_with_highest_rights_and_survives_battery() {
-        let xml = task_xml(std::path::Path::new(r"C:\Apps & Co\puw_notch.exe"), r"PC\A <b>");
+        let xml = task_xml(std::path::Path::new(r"C:\Apps & Co\puw_notch.exe"), r"PC\A <b>", false);
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>") && xml.contains("<LogonTrigger>"));
         assert!(xml.contains("<Delay>PT15S</Delay>"), "not before the startup apps have loaded");
         assert!(xml.contains("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>") && xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
-        assert!(xml.contains(r"shell32.dll,ShellExec_RunDLL &quot;C:\Apps &amp; Co\puw_notch.exe&quot;"), "path quoted and escaped");
+        assert!(xml.contains(r"<Command>&quot;C:\Apps &amp; Co\puw_notch.exe&quot;</Command>"), "normal builds launch exe directly with zero wrapper");
+        assert!(!xml.contains("<Arguments>"));
         assert!(xml.contains(r"<UserId>PC\A &lt;b&gt;</UserId>"), "user escaped");
     }
 
