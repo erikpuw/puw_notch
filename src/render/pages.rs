@@ -117,7 +117,7 @@ impl Renderer {
                 };
                 let time_color = |due: u64, quiet: bool| {
                     let left = minutes(due) - minutes(lv.now);
-                    if quiet { grey(0.4, a) } else if left <= 0 { color(1.0, 0.35, 0.3, a) }
+                    if quiet { grey(0.4, a) } else if left < 0 { color(1.0, 0.35, 0.3, a) }
                     else if left <= lv.remind_before.max(15) as i64 { color(1.0, 0.62, 0.2, a) } else { grey(0.6, a) }
                 };
 

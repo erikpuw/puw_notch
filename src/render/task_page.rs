@@ -37,7 +37,7 @@ const ICON_CALENDAR: &str = "\u{E787}";
 const TIME_W: f32 = 38.0;
 const SNOOZE_W: f32 = 56.0;
 const REPEATS: [(task::Repeat, f32); 4] = [(task::Repeat::Once, 40.0), (task::Repeat::Weekly, 40.0), (task::Repeat::Monthly, 44.0), (task::Repeat::Quarterly, 36.0)];
-const SLOTS: [(u8, f32); 3] = [(task::SLOT_BOOT, 54.0), (task::SLOT_NOON, 44.0), (task::SLOT_FOUR, 44.0)];
+const SLOTS: [(u8, f32); 1] = [(task::SLOT_BOOT, 54.0)];
 
 fn repeat_label(r: task::Repeat) -> &'static str {
     match r {
@@ -45,14 +45,6 @@ fn repeat_label(r: task::Repeat) -> &'static str {
         task::Repeat::Weekly => tr("Tuần", "Week"),
         task::Repeat::Monthly => tr("Tháng", "Month"),
         task::Repeat::Quarterly => tr("Quý", "Qtr"),
-    }
-}
-
-fn slot_label(slot: u8) -> &'static str {
-    match slot {
-        task::SLOT_BOOT => tr("Mở máy", "Startup"),
-        task::SLOT_NOON => "12:00",
-        _ => "16:00",
     }
 }
 
@@ -116,6 +108,7 @@ pub(super) fn due_label(tasks: &Tasks, i: usize, now: u64) -> String {
     let due = tasks.items[i].due;
     match tasks.status(i, now) {
         Status::Done => tr("đã làm", "done").to_string(),
+        Status::Late(0) => format!("{} {:02}:{:02}", tr("trễ", "late"), due / 100 % 100, due % 100),
         Status::Late(d) => if crate::i18n::english() { format!("{d} day{} late", if d == 1 { "" } else { "s" }) } else { format!("trễ {d} ngày") },
         Status::Today => format!("{:02}:{:02}", due / 100 % 100, due % 100),
         Status::Waiting => {
@@ -178,7 +171,7 @@ impl Renderer {
                     rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: mx, Y: my + 15.0 * s }, radiusX: r, radiusY: r }, &self.brush(solid(status_color(st), a))?);
                 }
             }
-            let due_today = (0..tasks.items.len()).filter(|&i| tasks.status(i, now) == Status::Today).count();
+            let due_today = (0..tasks.items.len()).filter(|&i| matches!(tasks.status(i, now), Status::Today | Status::Late(0))).count();
             let summary = match (due_today, english) {
                 (0, false) => "Hôm nay trống".to_string(),
                 (0, true) => "Nothing today".to_string(),
@@ -398,7 +391,7 @@ impl Renderer {
             text(&format!("{:02}:{:02}", t.due / 100 % 100, t.due % 100), F_LABEL, rect(hx, (DUE_Y - 1.0) * s, hx + TIME_W * s, (DUE_Y + STEP - 1.0) * s), center, grey(1.0, a))?;
             label(SLOT_Y, tr("Nhắc", "Remind"))?;
             for (slot, _) in SLOTS {
-                chip(Button::TaskSlot(slot), slot_label(slot), t.slots & slot != 0)?;
+                chip(Button::TaskSlot(slot), tr("Mở máy", "Startup"), t.slots & slot != 0)?;
             }
             label(SNOOZE_Y, tr("Chưa làm", "Not yet"))?;
             stepper(Button::TaskSnooze(-1), ICON_MINUS)?;

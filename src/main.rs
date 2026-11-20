@@ -62,7 +62,6 @@ use render::{Button, Card, HealthView, ListView, Page, Renderer, View, LIST_ROWS
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_FRAME: u32 = WM_APP + 7;
 const WM_MOUSELEAVE: u32 = 0x02A3;
-const T_ANIM: usize = 1;
 const T_CHECK: usize = 2;
 const T_DWELL: usize = 3;
 const T_ALERT: usize = 4;
@@ -187,7 +186,7 @@ struct App {
     robot_at: Instant,
     paused_since: Option<Instant>,
     started: Instant,
-    frame_ms: u32,
+    vsync_on: bool,
     vsync: Vsync,
     hovered_button: Option<Button>,
     last_foreground: Option<(isize, RECT)>,
@@ -238,9 +237,6 @@ struct App {
     cal_zone_at: Option<Instant>,
     unit_chosen: bool,
 }
-
-const VSYNC: u32 = 1;
-const BARS_FRAME_MS: u32 = 50;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -328,17 +324,10 @@ impl App {
         }
     }
 
-    fn set_frame_interval(&mut self, ms: u32) {
-        if self.frame_ms != ms {
-            self.frame_ms = ms;
-            self.vsync.set(ms == VSYNC);
-            unsafe {
-                if ms == BARS_FRAME_MS {
-                    SetTimer(Some(self.hwnd), T_ANIM, ms, None);
-                } else {
-                    let _ = KillTimer(Some(self.hwnd), T_ANIM);
-                }
-            }
+    fn set_vsync(&mut self, on: bool) {
+        if self.vsync_on != on {
+            self.vsync_on = on;
+            self.vsync.set(on);
         }
     }
 
@@ -349,7 +338,7 @@ impl App {
             self.animating = true;
             self.last_frame = Instant::now();
         }
-        self.set_frame_interval(VSYNC);
+        self.set_vsync(true);
     }
 
     fn bars_active(&self) -> bool {
@@ -396,7 +385,7 @@ impl App {
         let gap = (now - self.last_frame).as_secs_f32();
         let dt = gap.min(0.05);
         self.last_frame = now;
-        let limit = if self.frame_ms == BARS_FRAME_MS { 0.125 } else { 0.08 };
+        let limit = 0.08;
         if gap > limit && self.animating && self.last_gap_log.is_none_or(|t| t.elapsed().as_secs() >= 10) {
             self.last_gap_log = Some(now);
             system::log(&format!("late frame: {:.0} ms (mode {:?}, page {})", gap * 1000.0, self.notch.mode, self.page.name()));        }
@@ -413,8 +402,9 @@ impl App {
         let mut moving = self.notch.step(dt);
         if self.hidden && self.notch.is_hidden() {
             unsafe { let _ = ShowWindow(self.hwnd, SW_HIDE); }
+            self.renderer.set_moving(false);
             self.animating = false;
-            self.set_frame_interval(0);
+            self.set_vsync(false);
             return;
         }
         let goal = self.note_scroll as f32;
@@ -433,14 +423,21 @@ impl App {
             }
             None => false,
         };
+        let alert_moving = if let Some(alert) = &mut self.task_alert {
+            if alert.animating() {
+                alert.draw(&self.tasks, system::now_stamp());
+            }
+            alert.animating()
+        } else {
+            false
+        };
+        self.renderer.set_moving(moving);
         self.redraw();
-        if moving || morphing || self.icons_morphing {
-            self.set_frame_interval(VSYNC);
-        } else if self.bars_active() || self.renderer.slow_frames {
-            self.set_frame_interval(BARS_FRAME_MS);
+        if moving || morphing || self.icons_morphing || self.bars_active() || self.renderer.slow_frames || alert_moving {
+            self.set_vsync(true);
         } else {
             self.animating = false;
-            self.set_frame_interval(0);
+            self.set_vsync(false);
             if self.notch.mode != Mode::Alert && self.banner.is_some() {
                 self.banner = None;
                 self.renderer.forget_morph("banner");
@@ -583,7 +580,8 @@ impl App {
 
     fn check_tasks(&mut self) {
         let now = system::now_stamp();
-        if now != self.task_minute {
+        let minute_changed = now != self.task_minute;
+        if minute_changed {
             let starting = self.task_minute == 0;
             self.task_minute = now;
             for i in self.tasks.due_now(now, starting) {
@@ -593,6 +591,11 @@ impl App {
             }
         }
         if self.task_pending.is_empty() || self.hidden {
+            if minute_changed {
+                if let Some(alert) = &mut self.task_alert {
+                    alert.draw(&self.tasks, now);
+                }
+            }
             return;
         }
         let pending = std::mem::take(&mut self.task_pending);
@@ -608,6 +611,9 @@ impl App {
         }
         if let Some(alert) = &mut self.task_alert {
             alert.draw(&self.tasks, now);
+            if alert.animating() {
+                self.kick();
+            }
         }
     }
 
@@ -634,7 +640,6 @@ impl App {
         let alert = self.task_alert.as_mut()?;
         let now = system::now_stamp();
         match msg {
-            WM_TIMER => alert.draw(&self.tasks, now),
             WM_MOUSEMOVE => {
                 let hit = alert.hit((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32);
                 if hit != alert.hovered {
@@ -877,7 +882,7 @@ impl App {
                 self.approval = Some(p);
                 return;
             }
-            p.answer(approve::Answer::Ask);
+            p.answer(approve::Answer::Busy);
         }
     }
 
@@ -915,6 +920,9 @@ impl App {
     }
 
     fn remind(&mut self) {
+        if self.notch.mode == Mode::Alert {
+            return;
+        }
         let now = system::now_stamp();
         let hhmm = |d: u64| format!("{:02}:{:02}", d / 100 % 100, d % 100);
         let (tasks, health) = (render::page_shown(Page::Todo), render::page_shown(Page::Health));
@@ -936,6 +944,7 @@ impl App {
                 }
                 self.page = Page::Todo;
             }
+            return;
         }
         let h = &self.health;
         let (cup, goal) = (h.cup_ml, h.goal_ml);
@@ -1129,7 +1138,7 @@ impl App {
                 self.refresh_notes();
             }
             Button::Gear(card) => self.settings_open = if self.settings_open == Some(card) { None } else { Some(card) },
-            Button::RemindStep(dir) => self.todo.step_remind(dir),
+            Button::RemindStep(dir) => self.todo.step_remind(dir, system::now_stamp()),
             Button::Drink => self.health.drink(todo::minutes(system::now_stamp())),
             Button::Snooze => self.health.snooze(todo::minutes(system::now_stamp())),
             Button::Stood => self.health.stood_up(todo::minutes(system::now_stamp())),
@@ -1501,12 +1510,11 @@ impl App {
         match msg {
             WM_FRAME => {
                 FRAME_PENDING.store(false, Ordering::Relaxed);
-                if self.frame_ms == VSYNC {
+                if self.vsync_on {
                     self.frame();
                 }
             }
             WM_TIMER => match wp.0 {
-                T_ANIM => self.frame(),
                 T_CHECK => self.tick(),
                 T_DWELL => {
                     unsafe { let _ = KillTimer(Some(self.hwnd), T_DWELL); }
@@ -2516,7 +2524,7 @@ fn run() -> windows::core::Result<()> {
             robot_at: Instant::now(),
             paused_since: None,
             started: Instant::now(),
-            frame_ms: 0,
+            vsync_on: false,
             vsync: Vsync::start(hwnd),
             hovered_button: None,
             last_foreground: None,

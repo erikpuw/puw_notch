@@ -28,6 +28,7 @@ pub enum Answer {
     Deny,
     Choice(usize),
     Ask,
+    Busy,
 }
 
 impl Answer {
@@ -36,7 +37,7 @@ impl Answer {
             Answer::Allow => b"allow\n".to_vec(),
             Answer::Deny => b"deny\n".to_vec(),
             Answer::Choice(i) => format!("choice:{i}\n").into_bytes(),
-            Answer::Ask => b"ask\n".to_vec(),
+            Answer::Ask | Answer::Busy => b"ask\n".to_vec(),
         }
     }
 }

@@ -78,6 +78,7 @@ pub fn alert_rows(tasks: &Tasks, shown: &[usize], now: u64) -> Vec<AlertRow> {
             let next = format!("{:02}:{:02}", again / 100 % 100, again % 100);
             let left = task::days_left(t.due, now);
             let (kind, big) = match status {
+                Status::Late(0) => (tr("trễ hạn", "late"), tr("Đã quá giờ hạn", "Past due time").to_string()),
                 Status::Late(n) => (tr("trễ hạn", "late"), if english() { format!("{n} day{} late", if n == 1 { "" } else { "s" }) } else { format!("Trễ {n} ngày") }),
                 Status::Today => (tr("đến hạn", "due"), tr("Đến hạn hôm nay", "Due today").to_string()),
                 _ => (tr("sắp đến hạn", "coming up"), if english() { format!("{left} day{} left", if left == 1 { "" } else { "s" }) } else { format!("Còn {left} ngày") }),
@@ -88,8 +89,6 @@ pub fn alert_rows(tasks: &Tasks, shown: &[usize], now: u64) -> Vec<AlertRow> {
 }
 
 pub const CLASS: windows::core::PCWSTR = windows::core::w!("PuwTaskAlert");
-pub const T_FRAME: usize = 1;
-const FRAME_MS: u32 = 16;
 const APPEAR: Duration = Duration::from_millis(250);
 const WCA_ACCENT_POLICY: u32 = 19;
 const ACCENT_ACRYLIC: u32 = 4;
@@ -101,12 +100,13 @@ pub struct Alert {
     pub shown: Vec<usize>,
     pub opened: Instant,
     pub hovered: Option<Choice>,
+    settled: bool,
     size: (i32, i32),
     scale: f32,
 }
 
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, KillTimer, SetForegroundWindow, SetTimer, ShowWindow, SW_SHOW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP};
+use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, SetForegroundWindow, ShowWindow, SW_SHOW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP};
 
 fn blur_behind(hwnd: HWND) {
     #[repr(C)]
@@ -138,9 +138,12 @@ impl Alert {
             };
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
-            SetTimer(Some(hwnd), T_FRAME, FRAME_MS, None);
-            Some(Alert { hwnd, renderer, shown, opened: Instant::now(), hovered: None, size: (w, h), scale })
+            Some(Alert { hwnd, renderer, shown, opened: Instant::now(), hovered: None, settled: false, size: (w, h), scale })
         }
+    }
+
+    pub fn animating(&self) -> bool {
+        !self.settled
     }
 
     pub fn locked(&self) -> bool {
@@ -153,11 +156,7 @@ impl Alert {
         let locked = self.locked();
         let view = crate::render::AlertView { rows: &rows, appear, hovered: self.hovered, locked };
         let _ = self.renderer.present_alert(self.hwnd, self.size.0, self.size.1, self.scale, &view);
-        if appear >= 1.0 && !locked {
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), T_FRAME);
-            }
-        }
+        self.settled = appear >= 1.0 && !locked;
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Choice> {
@@ -223,14 +222,15 @@ mod tests {
 
     #[test]
     fn rows_say_how_late_or_how_soon() {
-        use crate::task::{Repeat, Task, Tasks};
-        let task = |due: u64| Task { title: "Thuế".into(), repeat: Repeat::Once, day: 1, due, slots: 7, snooze: 30, done: vec![], nag_at: None, told: 2, finished: false };
+        use crate::task::{Repeat, Task, Tasks, SLOT_BOOT};
+        let task = |due: u64| Task { title: "Thuế".into(), repeat: Repeat::Once, day: 1, due, slots: SLOT_BOOT, snooze: 30, done: vec![], nag_at: None, told: 2, finished: false, due_fired: false };
         let mut t = Tasks::default();
-        t.items = vec![task(202611110900), task(202611131600), task(202611160900)];
-        let rows = alert_rows(&t, &[0, 1, 2], 202611131000);
+        t.items = vec![task(202611110900), task(202611131600), task(202611160900), task(202611130900)];
+        let rows = alert_rows(&t, &[0, 1, 2, 3], 202611131000);
         assert_eq!(rows[0].big, "Trễ 2 ngày");
         assert_eq!(rows[1].big, "Đến hạn hôm nay");
         assert_eq!(rows[2].big, "Còn 3 ngày");
+        assert_eq!(rows[3].big, "Đã quá giờ hạn");
         assert_eq!(rows[0].due, "Hạn: T4 11/11, 09:00");
         assert_eq!(rows[0].when, "T4 11/11, 09:00");
         assert_eq!(rows[0].next, "10:30", "Not yet rings again after the task's own minutes");

@@ -1004,6 +1004,7 @@ pub struct Renderer {
     h: i32,
     placed: (i32, i32, i32, i32),
     region: (i32, i32, i32, i32),
+    moving: bool,
     pub usage: crate::usage::Snapshot,
     pub usage_tab: usize,
     pub close_hot: bool,
@@ -1111,7 +1112,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), moving: false, usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
                 owner: Owner::Pill,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_fade: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
@@ -1180,15 +1181,28 @@ impl Renderer {
         Ok(())
     }
 
+    pub fn set_moving(&mut self, moving: bool) {
+        self.moving = moving;
+    }
+
     fn place(&mut self, hwnd: HWND, at: (i32, i32, i32, i32), region: (i32, i32, i32, i32)) {
         unsafe {
             if at != self.placed {
                 self.placed = at;
                 let _ = SetWindowPos(hwnd, None, at.0, at.1, at.2, at.3, SWP_NOZORDER | SWP_NOACTIVATE);
             }
-            if region != self.region {
-                self.region = region;
-                SetWindowRgn(hwnd, Some(CreateRectRgn(region.0, region.1, region.2, region.3)), false);
+            let target = if self.moving {
+                if region.0 < self.region.0 || region.1 < self.region.1 || region.2 > self.region.2 || region.3 > self.region.3 {
+                    (0, 0, at.2, at.3)
+                } else {
+                    self.region
+                }
+            } else {
+                region
+            };
+            if target != self.region {
+                self.region = target;
+                SetWindowRgn(hwnd, Some(CreateRectRgn(target.0, target.1, target.2, target.3)), false);
             }
         }
     }
@@ -2671,14 +2685,14 @@ mod tests {
     #[test]
     #[ignore = "writes target/task-preview.bmp: the Task page empty and with late, today, upcoming and done tasks"]
     fn task_preview() {
-        use crate::task::{Repeat, Task, Tasks, SLOT_BOOT, SLOT_FOUR, SLOT_NOON};
+        use crate::task::{Repeat, Task, Tasks, SLOT_BOOT};
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let (w, h) = (530i32, 210i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Task preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let now = 202611131000;
-            let task = |title: &str, repeat: Repeat, due: u64, done: Vec<u32>, finished: bool| Task { title: title.into(), repeat, day: (due / 10_000 % 100) as u32, due, slots: SLOT_BOOT | SLOT_NOON | SLOT_FOUR, snooze: 30, done, nag_at: None, told: 0, finished };
+            let task = |title: &str, repeat: Repeat, due: u64, done: Vec<u32>, finished: bool| Task { title: title.into(), repeat, day: (due / 10_000 % 100) as u32, due, slots: SLOT_BOOT, snooze: 30, done, nag_at: None, told: 0, finished, due_fired: false };
             let mut full = Tasks::default();
             full.items = vec![
                 task("Báo cáo thuế quý", Repeat::Quarterly, 202611110900, vec![], false),
@@ -2726,7 +2740,7 @@ mod tests {
             let (w, h) = (560i32, 420i32);
             let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Alert preview"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
             let now = 202611131200;
-            let task = |title: &str, due: u64, told: u32| Task { title: title.into(), repeat: Repeat::Once, day: 1, due, slots: 7, snooze: 30, done: vec![], nag_at: None, told, finished: false };
+            let task = |title: &str, due: u64, told: u32| Task { title: title.into(), repeat: Repeat::Once, day: 1, due, slots: crate::task::SLOT_BOOT, snooze: 30, done: vec![], nag_at: None, told, finished: false, due_fired: false };
             let mut t = Tasks::default();
             t.items = vec![
                 task("Báo cáo thuế quý 4", 202611110900, 3),
@@ -3091,7 +3105,7 @@ mod tests {
             (health.water_on, health.sit_on, health.taken_ml, health.water_mark, health.sitting_since) = (true, true, 750, Some(999_970), Some(999_958));
             let charging = |percent| Some(Battery { percent, charging: true, saver: false });
             let on_battery = Some(Battery { percent: 76, charging: false, saver: false });
-            let readme_task = |title: &str, repeat, due: u64, done: Vec<u32>, finished: bool| crate::task::Task { title: title.into(), repeat, day: (due / 10_000 % 100) as u32, due, slots: 7, snooze: 30, done, nag_at: None, told: 0, finished };
+            let readme_task = |title: &str, repeat, due: u64, done: Vec<u32>, finished: bool| crate::task::Task { title: title.into(), repeat, day: (due / 10_000 % 100) as u32, due, slots: crate::task::SLOT_BOOT, snooze: 30, done, nag_at: None, told: 0, finished, due_fired: false };
             let mut tasks = crate::task::Tasks::default();
             tasks.items = vec![
                 readme_task(tl("Báo cáo thuế quý", "Quarterly tax report"), crate::task::Repeat::Quarterly, 202611050900, vec![], false),

@@ -4,9 +4,7 @@ use crate::calendar::{jd, shift_month};
 use crate::todo::{days_in_month, next_day, stamp};
 
 pub const SLOT_BOOT: u8 = 1;
-pub const SLOT_NOON: u8 = 2;
-pub const SLOT_FOUR: u8 = 4;
-const ALL_SLOTS: u8 = SLOT_BOOT | SLOT_NOON | SLOT_FOUR;
+const ALL_SLOTS: u8 = SLOT_BOOT;
 pub const WINDOW_DAYS: i64 = 7;
 pub const SNOOZE_STEPS: [u32; 7] = [10, 15, 30, 45, 60, 90, 120];
 const SNOOZE_DEFAULT: u32 = 30;
@@ -49,6 +47,7 @@ pub struct Task {
     pub nag_at: Option<u64>,
     pub told: u32,
     pub finished: bool,
+    pub due_fired: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -117,6 +116,7 @@ pub fn set_due_date(t: &mut Task, date: u32, today: u32) -> bool {
     }
     t.due = date as u64 * 10_000 + t.due % 10_000;
     t.day = date % 100;
+    t.due_fired = false;
     true
 }
 
@@ -124,6 +124,7 @@ pub fn step_hour(t: &mut Task, dir: i32) {
     let m = (t.due % 10_000 / 100 * 60 + t.due % 100) as i32 + 30 * dir.signum();
     if (0..24 * 60).contains(&m) {
         t.due = stamp(date_of(t.due), m as u32 / 60, m as u32 % 60);
+        t.due_fired = false;
     }
 }
 
@@ -136,6 +137,7 @@ pub fn set_repeat(t: &mut Task, r: Repeat, today: u32) {
     t.repeat = r;
     if t.finished && r != Repeat::Once {
         t.finished = false;
+        t.due_fired = false;
         while date_of(t.due) < today {
             t.due = next_due(t);
         }
@@ -187,7 +189,7 @@ impl Tasks {
             return None;
         }
         let date = days_after(date_of(now), NEW_TASK_DAYS);
-        self.items.push(Task { title, repeat: Repeat::Once, day: date % 100, due: stamp(date, NEW_TASK_HOUR, 0), slots: ALL_SLOTS, snooze: SNOOZE_DEFAULT, done: Vec::new(), nag_at: None, told: 0, finished: false });
+        self.items.push(Task { title, repeat: Repeat::Once, day: date % 100, due: stamp(date, NEW_TASK_HOUR, 0), slots: ALL_SLOTS, snooze: SNOOZE_DEFAULT, done: Vec::new(), nag_at: None, told: 0, finished: false, due_fired: false });
         self.save();
         Some(self.items.len() - 1)
     }
@@ -213,7 +215,7 @@ impl Tasks {
         if t.done.len() > KEEP_DONE {
             t.done.remove(0);
         }
-        (t.told, t.nag_at) = (0, None);
+        (t.told, t.nag_at, t.due_fired) = (0, None, false);
         match t.repeat {
             Repeat::Once => t.finished = true,
             _ => t.due = next_due(t),
@@ -232,15 +234,16 @@ impl Tasks {
         if self.fired_day != today {
             (self.fired_day, self.fired) = (today, 0);
         }
-        let hm = now % 10_000;
-        let passed = [(SLOT_BOOT, starting), (SLOT_NOON, hm >= 1200), (SLOT_FOUR, hm >= 1600)];
-        let fresh = passed.iter().filter(|(slot, on)| *on && self.fired & slot == 0).fold(0, |m, (slot, _)| m | slot);
+        let fresh = if starting && self.fired & SLOT_BOOT == 0 { SLOT_BOOT } else { 0 };
         self.fired |= fresh;
         let picks: Vec<usize> = if self.enabled {
             (0..self.items.len())
                 .filter(|&i| {
                     let t = &self.items[i];
-                    !t.finished && days_left(t.due, now) <= WINDOW_DAYS && (t.slots & fresh != 0 || t.nag_at.is_some_and(|a| a <= now))
+                    !t.finished
+                        && ((days_left(t.due, now) <= WINDOW_DAYS && t.slots & fresh != 0)
+                            || (!t.due_fired && t.due <= now)
+                            || t.nag_at.is_some_and(|a| a <= now))
                 })
                 .collect()
         } else {
@@ -250,6 +253,9 @@ impl Tasks {
             let t = &mut self.items[i];
             t.told += 1;
             t.nag_at = None;
+            if t.due <= now {
+                t.due_fired = true;
+            }
         }
         if fresh != 0 || !picks.is_empty() {
             self.save();
@@ -264,6 +270,7 @@ impl Tasks {
         }
         match days_left(t.due, now) {
             d if d < 0 => Status::Late((-d) as u32),
+            0 if t.due < now => Status::Late(0),
             0 => Status::Today,
             _ => Status::Waiting,
         }
@@ -325,7 +332,11 @@ fn parse(text: &str) -> Tasks {
 
 fn parse_task(line: &str) -> Option<Task> {
     let f: Vec<&str> = line.split('\t').collect();
-    let [title, repeat, day, due, slots, snooze, done, nag, told, finished] = f[..] else { return None };
+    let (title, repeat, day, due, slots, snooze, done, nag, told, finished, due_fired) = match f[..] {
+        [title, repeat, day, due, slots, snooze, done, nag, told, finished] => (title, repeat, day, due, slots, snooze, done, nag, told, finished, false),
+        [title, repeat, day, due, slots, snooze, done, nag, told, finished, fired] => (title, repeat, day, due, slots, snooze, done, nag, told, finished, fired == "1"),
+        _ => return None,
+    };
     let title = clean(title);
     let done = done.split(',').filter(|d| !d.is_empty()).map(str::parse).collect::<Result<Vec<u32>, _>>().ok()?;
     let nag_at = if nag == "-" { None } else { Some(nag.parse().ok()?) };
@@ -341,6 +352,7 @@ fn parse_task(line: &str) -> Option<Task> {
         nag_at,
         told: told.parse().ok()?,
         finished: finished == "1",
+        due_fired,
     })
 }
 
@@ -349,7 +361,7 @@ fn serialize(t: &Tasks) -> String {
     for it in &t.items {
         let done: Vec<String> = it.done.iter().map(u32::to_string).collect();
         let nag = it.nag_at.map_or("-".to_string(), |n| n.to_string());
-        out += &format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", clean(&it.title), it.repeat.tag(), it.day, it.due, it.slots, it.snooze, done.join(","), nag, it.told, it.finished as u8);
+        out += &format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", clean(&it.title), it.repeat.tag(), it.day, it.due, it.slots, it.snooze, done.join(","), nag, it.told, it.finished as u8, it.due_fired as u8);
     }
     out
 }
@@ -359,7 +371,7 @@ mod tests {
     use super::*;
 
     fn task(title: &str, repeat: Repeat, due: u64) -> Task {
-        Task { title: title.into(), repeat, day: (due / 10_000 % 100) as u32, due, slots: SLOT_BOOT | SLOT_NOON | SLOT_FOUR, snooze: 30, done: Vec::new(), nag_at: None, told: 0, finished: false }
+        Task { title: title.into(), repeat, day: (due / 10_000 % 100) as u32, due, slots: SLOT_BOOT, snooze: 30, done: Vec::new(), nag_at: None, told: 0, finished: false, due_fired: false }
     }
 
     fn tasks_with(t: Task) -> Tasks {
@@ -383,41 +395,60 @@ mod tests {
     }
 
     #[test]
-    fn window_opens_seven_days_before() {
+    fn window_opens_seven_days_before_on_boot() {
         let t = tasks_with(task("Thuế", Repeat::Once, 202611201600));
-        assert!(t.clone().due_now(202611121200, false).is_empty());
-        assert_eq!(t.clone().due_now(202611131200, false), vec![0]);
+        assert!(t.clone().due_now(202611120800, true).is_empty());
+        assert_eq!(t.clone().due_now(202611130800, true), vec![0]);
     }
 
     #[test]
-    fn boot_slot_only_on_start() {
-        let mut t = tasks_with(task("Thuế", Repeat::Once, 202611151600));
-        assert_eq!(t.due_now(202611130800, true), vec![0]);
-        assert!(t.due_now(202611130900, false).is_empty());
-        assert!(t.due_now(202611140001, false).is_empty(), "midnight while running is not a boot");
-        assert_eq!(t.due_now(202611141200, false), vec![0]);
+    fn fires_at_exact_due_time_and_not_at_noon_or_four() {
+        let mut t = tasks_with(task("Thuế", Repeat::Once, 202611151430));
+        assert_eq!(t.due_now(202611150800, true), vec![0], "startup reminder");
+        assert!(t.due_now(202611151200, false).is_empty(), "12:00 removed");
+        assert!(t.due_now(202611151429, false).is_empty(), "1 min before due");
+        assert_eq!(t.due_now(202611151430, false), vec![0], "exact due time");
+        assert!(t.due_now(202611151431, false).is_empty(), "fires once for this due");
+        assert!(t.due_now(202611151600, false).is_empty(), "16:00 removed");
     }
 
     #[test]
-    fn missed_slots_fire_once() {
-        let mut t = tasks_with(task("Thuế", Repeat::Once, 202611151600));
-        t.fired_day = 20261113;
-        t.fired = SLOT_BOOT;
-        assert_eq!(t.due_now(202611131700, false), vec![0]);
-        assert!(t.due_now(202611131701, false).is_empty());
+    fn boot_off_still_fires_at_exact_due_time() {
+        let mut item = task("Họp", Repeat::Once, 202611151430);
+        item.slots = 0;
+        let mut t = tasks_with(item);
+        assert!(t.due_now(202611150800, true).is_empty());
+        assert_eq!(t.due_now(202611151430, false), vec![0]);
+    }
+
+    #[test]
+    fn same_day_past_due_hour_is_late() {
+        let t = tasks_with(task("Họp", Repeat::Once, 202611150900));
+        assert_eq!(t.status(0, 202611150859), Status::Today);
+        assert_eq!(t.status(0, 202611150900), Status::Today);
+        assert_eq!(t.status(0, 202611150901), Status::Late(0));
+        assert_eq!(t.status(0, 202611160800), Status::Late(1));
     }
 
     #[test]
     fn not_yet_nags_every_n_minutes_until_done() {
-        let mut t = tasks_with(task("Thuế", Repeat::Once, 202611151600));
-        t.fired_day = 20261113;
-        t.fired = SLOT_BOOT | SLOT_NOON;
-        t.not_yet(0, 202611131200);
-        assert!(t.due_now(202611131229, false).is_empty());
-        assert_eq!(t.due_now(202611131230, false), vec![0]);
-        t.mark_done(0, 202611131231);
-        assert!(t.due_now(202611131600, false).is_empty());
-        assert_eq!(t.status(0, 202611131600), Status::Done);
+        let mut t = tasks_with(task("Thuế", Repeat::Once, 202611151430));
+        assert_eq!(t.due_now(202611151430, false), vec![0]);
+        t.not_yet(0, 202611151430);
+        assert!(t.due_now(202611151459, false).is_empty());
+        assert_eq!(t.due_now(202611151500, false), vec![0]);
+        t.mark_done(0, 202611151501);
+        assert!(t.due_now(202611151600, false).is_empty());
+        assert_eq!(t.status(0, 202611151600), Status::Done);
+    }
+
+    #[test]
+    fn legacy_ten_column_format_keeps_boot_slot() {
+        let legacy = "# on 1 fired 20261113 7\nThuế\tmonth\t20\t202611200900\t7\t30\t\t-\t1\t0\n";
+        let parsed = parse(legacy);
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].slots, SLOT_BOOT);
+        assert!(!parsed.items[0].due_fired);
     }
 
     #[test]
@@ -447,7 +478,7 @@ mod tests {
         let mut t = Tasks::default();
         let i = t.add("Nộp BHXH", 202611131000).unwrap();
         let it = &t.items[i];
-        assert_eq!((it.repeat, it.due, it.slots, it.snooze), (Repeat::Once, 202611200900, SLOT_BOOT | SLOT_NOON | SLOT_FOUR, 30));
+        assert_eq!((it.repeat, it.due, it.slots, it.snooze), (Repeat::Once, 202611200900, SLOT_BOOT, 30));
         assert!(t.add("   ", 202611131000).is_none());
     }
 

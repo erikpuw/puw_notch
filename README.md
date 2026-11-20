@@ -39,7 +39,7 @@ Trang ẩn ở tray thì ngừng hẳn.
 |---|---|
 | **Nhạc** | Ảnh bìa, lời đồng bộ, điều khiển phát, kéo thanh để tua (Windows, iTunes, foobar2000). Nút lời mở rộng bảng; nền theo màu bìa. |
 | **Ghi chú** | Ghi chú và lịch hẹn trong một danh sách. Gõ "Họp 20:00" hay "Khám răng 28/10 14:30". Quá giờ tô đỏ; ⚙ chọn nhắc trước. |
-| **Task** | Việc lặp theo tuần, tháng hoặc quý, kèm lịch tuần có chấm màu. Từ 7 ngày trước hạn, mỗi ngày nhắc lúc mở máy, 12:00 và 16:00 bằng hộp giữa màn hình, phía sau mờ đi. "Đã làm" là xong kỳ đó; "Nhắc lại sau" thì báo tiếp sau 30 phút (chỉnh được). |
+| **Task** | Việc lặp theo tuần, tháng hoặc quý, kèm lịch tuần có chấm màu. Báo đúng giờ hạn đã đặt (và nhắc khi mở máy từ 7 ngày trước hạn nếu bật) bằng hộp giữa màn hình, phía sau mờ đi. "Đã làm" là xong kỳ đó; "Nhắc lại sau" thì báo tiếp sau 30 phút (chỉnh được). |
 | **Tập trung** | Pomodoro: cả chu kỳ (4 vòng 25 phút, nghỉ 5 và 15) trên một thanh. Hết đoạn thì banner báo và đoạn kế tự chạy. |
 | **Thông báo** | ~30 thông báo Windows gần nhất, bấm để mở app. "Xóa hết" chỉ ẩn trong notch. |
 | **Sức khỏe** | Nhắc uống nước và đứng dậy, nút tròn để ghi nhận, chỉnh ở ⚙. |

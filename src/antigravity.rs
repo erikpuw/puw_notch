@@ -11,8 +11,8 @@ use crate::approve::{self, Answer, Pending};
 use crate::i18n::tr;
 use crate::usage;
 
-const POLL: Duration = Duration::from_secs(2);
-const POLL_CLOSED: Duration = Duration::from_secs(30);
+const POLL: Duration = Duration::from_millis(500);
+const POLL_CLOSED: Duration = Duration::from_secs(5);
 const POLL_ABSENT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, PartialEq)]
@@ -62,10 +62,8 @@ fn busy_runs(text: &str) -> Vec<(String, i64)> {
     out
 }
 
-fn parse_waiting(text: &str) -> Option<Waiting> {
-    let steps = JsonObject::Parse(&key(text)).ok()?.GetNamedArray(&key("steps")).ok()?;
-    let step = steps.GetObjectAt(steps.Size().ok()?.checked_sub(1)?).ok()?;
-    if !string(&step, "status")?.contains("WAITING") {
+fn parse_step(step: &JsonObject) -> Option<Waiting> {
+    if !string(step, "status")?.contains("WAITING") {
         return None;
     }
     let from = step.GetNamedObject(&key("metadata")).ok()?.GetNamedObject(&key("sourceTrajectoryStepInfo")).ok()?;
@@ -87,6 +85,13 @@ fn parse_waiting(text: &str) -> Option<Waiting> {
         Ask::Permission { action: string(&resource, "action")?, target: string(&resource, "target")? }
     };
     Some(Waiting { cascade, trajectory, step: index, ask })
+}
+
+fn parse_waitings(text: &str) -> Vec<Waiting> {
+    let Ok(steps) = JsonObject::Parse(&key(text)).and_then(|o| o.GetNamedArray(&key("steps"))) else {
+        return Vec::new();
+    };
+    array_items(&steps).iter().filter_map(parse_step).collect()
 }
 
 fn short_label(text: &str) -> String {
@@ -123,7 +128,13 @@ fn waiting_now(server: &usage::LocalServer) -> Option<Vec<Waiting>> {
         busy_runs(&list)
             .into_iter()
             .filter(|(id, _)| id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
-            .filter_map(|(id, steps)| parse_waiting(&server.call("GetCascadeTrajectorySteps", &format!(r#"{{"cascadeId":"{id}","stepOffset":{}}}"#, steps - 1))?))
+            .flat_map(|(id, steps)| {
+                let offset = (steps - 8).max(0);
+                server
+                    .call("GetCascadeTrajectorySteps", &format!(r#"{{"cascadeId":"{id}","stepOffset":{offset}}}"#))
+                    .map(|s| parse_waitings(&s))
+                    .unwrap_or_default()
+            })
             .collect(),
     )
 }
@@ -132,7 +143,7 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
     let target = hwnd.0 as isize;
     crate::system::spawn("antigravity", move || {
         unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
-        let mut seen: HashMap<(String, i64), Option<u64>> = HashMap::new();
+        let seen: Arc<Mutex<HashMap<(String, i64), Option<u64>>>> = Arc::default();
         let mut server: Option<usage::LocalServer> = None;
         loop {
             if !enabled.load(Ordering::Relaxed) {
@@ -140,13 +151,13 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
             }
             if server.is_none() {
                 if !usage::installed(usage::App::Antigravity) {
-                    seen.clear();
+                    if let Ok(mut s) = seen.lock() { s.clear(); }
                     std::thread::sleep(POLL_ABSENT);
                     continue;
                 }
                 server = if enabled.load(Ordering::Relaxed) { usage::antigravity_server() } else { None };
                 if server.is_none() {
-                    seen.clear();
+                    if let Ok(mut s) = seen.lock() { s.clear(); }
                     std::thread::sleep(POLL_CLOSED);
                     continue;
                 }
@@ -156,14 +167,16 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
                 server = None;
                 continue;
             };
-            for (key, id) in seen.iter_mut() {
-                if id.is_some() && !now.iter().any(|w| (&w.cascade, w.step) == (&key.0, key.1)) {
-                    approve::cancel(&cancelled, target, id.take().unwrap_or(0));
+            if let Ok(mut s) = seen.lock() {
+                for (key, id) in s.iter_mut() {
+                    if id.is_some() && !now.iter().any(|w| (&w.cascade, w.step) == (&key.0, key.1)) {
+                        approve::cancel(&cancelled, target, id.take().unwrap_or(0));
+                    }
                 }
             }
             for waiting in now {
                 let key = (waiting.cascade.clone(), waiting.step);
-                if seen.contains_key(&key) {
+                if seen.lock().is_ok_and(|s| s.contains_key(&key)) {
                     continue;
                 }
                 let (title, detail, mut options) = match &waiting.ask {
@@ -174,12 +187,24 @@ pub fn watch(queue: Arc<Mutex<VecDeque<Pending>>>, cancelled: Arc<Mutex<HashSet<
                     options.push(tr("Trong app", "In the app").to_string());
                 }
                 let (id, rx) = approve::enqueue(&queue, target, "Antigravity".into(), title, detail, options);
-                seen.insert(key, Some(id));
+                if let Ok(mut s) = seen.lock() {
+                    s.insert(key.clone(), Some(id));
+                }
+                let cached = server.clone();
+                let seen_reply = seen.clone();
                 crate::system::spawn("antigravity-answer", move || {
                     unsafe { let _ = RoInitialize(RO_INIT_MULTITHREADED); }
                     let answer = rx.recv_timeout(approve::TIMEOUT + Duration::from_secs(5)).unwrap_or(Answer::Ask);
-                    if let (Some(body), Some(server)) = (answer_body(&waiting, answer), usage::antigravity_server()) {
-                        let _ = server.call("HandleCascadeUserInteraction", &body);
+                    if answer == Answer::Busy {
+                        if let Ok(mut s) = seen_reply.lock() {
+                            s.remove(&key);
+                        }
+                        return;
+                    }
+                    if let Some(body) = answer_body(&waiting, answer) {
+                        if let Some(srv) = cached.or_else(usage::antigravity_server) {
+                            let _ = srv.call("HandleCascadeUserInteraction", &body);
+                        }
                     }
                 });
             }
@@ -196,22 +221,27 @@ mod tests {
 
     #[test]
     fn a_waiting_question_and_permission_are_read() {
-        let q = parse_waiting(QUESTION).unwrap();
+        let q = parse_waitings(QUESTION).into_iter().next().unwrap();
         assert_eq!((q.cascade.as_str(), q.trajectory.as_str(), q.step), ("c-1", "t-1", 2));
         assert!(matches!(&q.ask, Ask::Question { question, options } if question == "Cho phép?" && options.len() == 2 && options[1].0 == "2"));
-        let p = parse_waiting(PERMISSION).unwrap();
+        let p = parse_waitings(PERMISSION).into_iter().next().unwrap();
         assert_eq!(p.ask, Ask::Permission { action: "mcp".into(), target: "codebase-memory-mcp/list_projects".into() });
-        assert!(parse_waiting(&QUESTION.replace("WAITING", "DONE")).is_none(), "a step that is done waits for nobody");
+        assert!(parse_waitings(&QUESTION.replace("WAITING", "DONE")).is_empty(), "a step that is done waits for nobody");
+
+        let parallel = r#"{"steps":[{"type":"CORTEX_STEP_TYPE_GENERIC","status":"CORTEX_STEP_STATUS_WAITING","metadata":{"sourceTrajectoryStepInfo":{"trajectoryId":"t-1","stepIndex":7,"cascadeId":"c-1"}},"requestedInteraction":{"permission":{"resource":{"action":"mcp","target":"tool-a"}}}},{"type":"CORTEX_STEP_TYPE_GENERIC","status":"CORTEX_STEP_STATUS_RUNNING"}]}"#;
+        let found = parse_waitings(parallel);
+        assert_eq!(found.len(), 1, "waiting step followed by a running parallel step is still found");
+        assert_eq!(found[0].step, 7);
     }
 
     #[test]
     fn answers_name_the_run_the_step_and_the_choice() {
-        let q = parse_waiting(QUESTION).unwrap();
+        let q = parse_waitings(QUESTION).into_iter().next().unwrap();
         let body = answer_body(&q, Answer::Choice(1)).unwrap();
         assert_eq!(body, r#"{"cascadeId":"c-1","interaction":{"trajectoryId":"t-1","stepIndex":2,"askQuestion":{"responses":[{"question":"Cho phép?","selectedOptionIds":["2"]}]}}}"#);
         assert!(answer_body(&q, Answer::Choice(2)).is_none(), "the app's own button sends nothing");
         assert!(answer_body(&q, Answer::Ask).is_none());
-        let p = parse_waiting(PERMISSION).unwrap();
+        let p = parse_waitings(PERMISSION).into_iter().next().unwrap();
         assert!(answer_body(&p, Answer::Allow).unwrap().contains(r#""permission":{"allow":true,"scope":"PERMISSION_SCOPE_ONCE"}"#));
         assert!(answer_body(&p, Answer::Deny).unwrap().contains(r#""allow":false"#));
     }

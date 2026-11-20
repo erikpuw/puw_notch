@@ -382,6 +382,7 @@ fn antigravity_port() -> Option<u16> {
     line.split("port at ").nth(1)?.split_whitespace().next()?.parse().ok()
 }
 
+#[derive(Clone)]
 pub struct LocalServer {
     port: u16,
     token: String,

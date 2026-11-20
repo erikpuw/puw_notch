@@ -106,7 +106,7 @@ impl Renderer {
                             else if day == todo::next_day(today) { format!("{} {h:02}:{m:02}", tr("Mai", "Tmrw")) }
                             else { format!("{:02}/{:02} {h:02}:{m:02}", day % 100, day / 100 % 100) };
                         let left = minutes(at) - minutes(lv.now);
-                        let flag = if done { "" } else if left <= 0 { tr("Trễ", "Late") } else if left <= lv.remind_before.max(15) as i64 { tr("Sắp", "Soon") } else { "" };
+                        let flag = if done { "" } else if left < 0 { tr("Trễ", "Late") } else if left == 0 { tr("Đến giờ", "Now") } else if left <= lv.remind_before.max(15) as i64 { tr("Sắp", "Soon") } else { "" };
                         let when = if !flag.is_empty() && day != today { format!("{:02}/{:02}", day % 100, day / 100 % 100) } else { when };
                         let label = if flag.is_empty() { when } else { format!("{flag} {when}") };
                         let lw = width(&label, F_LABEL) + 4.0 * s;

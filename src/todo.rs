@@ -193,7 +193,7 @@ impl Todo {
         let before = self.remind_before as i64;
         for it in &mut self.items {
             if let Some(at) = it.at {
-                it.told_now = at <= now;
+                it.told_now = at < now;
                 it.told_soon = minutes(at) - minutes(now) <= before;
             }
         }
@@ -209,7 +209,8 @@ impl Todo {
     pub fn add(&mut self, text: &str, now: u64) -> bool {
         let Some((text, at)) = read(text, now) else { return false };
         let told_soon = at.is_some_and(|a| minutes(a) - minutes(now) <= self.remind_before as i64);
-        self.items.insert(0, Item { text, done: None, at, told_soon, told_now: false });
+        let told_now = at.is_some_and(|a| a < now);
+        self.items.insert(0, Item { text, done: None, at, told_soon, told_now });
         self.sort((now / 10_000) as u32);
         self.save();
         true
@@ -221,7 +222,7 @@ impl Todo {
         let Some(it) = self.items.get_mut(i) else { return false };
         if it.at != at {
             it.told_soon = at.is_some_and(|a| minutes(a) - minutes(now) <= before);
-            it.told_now = false;
+            it.told_now = at.is_some_and(|a| a < now);
         }
         (it.text, it.at) = (text, at);
         self.sort((now / 10_000) as u32);
@@ -269,9 +270,15 @@ impl Todo {
         gone
     }
 
-    pub fn step_remind(&mut self, dir: i32) {
+    pub fn step_remind(&mut self, dir: i32, now: u64) {
         let i = REMIND_STEPS.iter().position(|&m| m == self.remind_before).unwrap_or(3) as i32;
         self.remind_before = REMIND_STEPS[(i + dir).clamp(0, REMIND_STEPS.len() as i32 - 1) as usize];
+        let before = self.remind_before as i64;
+        for it in &mut self.items {
+            if let Some(at) = it.at {
+                it.told_soon = before == 0 || minutes(at) - minutes(now) <= before;
+            }
+        }
         self.save();
     }
 
@@ -457,15 +464,40 @@ mod tests {
     #[test]
     fn remind_steps_through_the_choices() {
         let mut t = Todo::default();
-        t.step_remind(1);
+        t.step_remind(1, NOW);
         assert_eq!(t.remind_before, 30);
-        t.step_remind(1);
-        t.step_remind(1);
+        t.step_remind(1, NOW);
+        t.step_remind(1, NOW);
         assert_eq!(t.remind_before, 60, "stops at the last choice");
         for _ in 0..9 {
-            t.step_remind(-1);
+            t.step_remind(-1, NOW);
         }
         assert_eq!(t.remind_before, 0);
+    }
+
+    #[test]
+    fn lowering_remind_before_rearms_early_reminder_and_past_add_stays_quiet() {
+        let mut t = Todo::default();
+        t.remind_before = 30;
+        t.add("Họp 14:50", NOW);
+        assert!(t.items[0].told_soon, "within 30 min when added");
+        t.step_remind(-2, NOW);
+        assert_eq!(t.remind_before, 10);
+        assert!(!t.items[0].told_soon, "re-armed for 10 min before");
+        assert_eq!(t.rings(202610251440), vec![(0, Ring::Soon)]);
+
+        let mut past = Todo::default();
+        past.add("Họp hôm nay 13:00", NOW);
+        assert!(past.rings(NOW).is_empty(), "past time today does not immediately ring Now");
+    }
+
+    #[test]
+    fn settle_reminders_still_rings_exact_current_minute() {
+        let mut t = Todo::default();
+        t.items.push(Item { text: "Đúng giờ".into(), done: None, at: Some(NOW), told_soon: false, told_now: false });
+        t.items.push(Item { text: "Đã qua".into(), done: None, at: Some(202610251429), told_soon: false, told_now: false });
+        t.settle_reminders(NOW);
+        assert_eq!(t.rings(NOW), vec![(0, Ring::Now)]);
     }
 
     #[test]
