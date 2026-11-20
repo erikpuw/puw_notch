@@ -8,10 +8,10 @@
 
 <p align="center">
   Music, tasks, notifications, weather, a calendar and a tiny robot, tucked into the top edge of your screen, Dynamic Island style.<br>
-  Written in Rust, ~1073 KB exe, no WebView, no Visual C++ Redistributable to install.
+  Written in Rust, ~1081 KB exe, no WebView, no Visual C++ Redistributable to install.
 </p>
 
-<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b></p>
+<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="docs/release-notes/v1.0.41.md">Latest: v1.0.41</a></p>
 
 > **Download only from the author's source.** PUW Notch is published by its author (erikpuw) only at [github.com/erikpuw/puw_notch](https://github.com/erikpuw/puw_notch). A copy from anywhere else (file-sharing sites, other repositories, repackaged builds, files sent over the internet) is not controlled by the author and comes with no guarantee: it may have been modified or had code added. Use only the build in this repository's [Releases](https://github.com/erikpuw/puw_notch/releases).
 
