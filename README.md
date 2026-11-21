@@ -192,6 +192,32 @@ Hạn mức của Codex notch đọc thẳng từ `~/.codex`, không cần thi�
 - Từ đó khi Codex xin quyền, banner **Codex** hiện trên notch; bấm **Đồng ý** hoặc **Không**. Notch không chạy hoặc không bấm trong 50 giây thì Codex hỏi như bình thường.
 - `-App` là tên hiện trên banner. `-Log` ghi những gì hook nhận vào `%TEMP%\puw-notch-hook.log` để xem một app gửi gì; đừng để bật thường xuyên vì nó lưu cả lệnh.
 
+## Thiết lập cho Antigravity (tuỳ chọn)
+
+Để **duyệt lệnh của Antigravity ngay trên notch** qua cơ chế Hook chính thức (nhanh và ổn định hơn đọc tiến trình), dùng chung script `puw-notch-approve.ps1` rồi thêm vào `~/.gemini/config/hooks.json` (thay `<tên>` bằng tên người dùng Windows):
+
+```json
+{
+  "puw-notch-approve": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/<tên>/.claude/puw-notch-approve.ps1 -App Antigravity",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- Lệnh chạy trong sandbox được cho qua ngay; chỉ lệnh cần thoát sandbox (`BypassSandbox: true`) mới bật banner **Antigravity** trên notch.
+- Notch không chạy, đang mở bảng hoặc quá 20 giây chưa bấm thì hook trả `{"decision":"ask"}` để Antigravity hỏi lại như bình thường.
+
 ## Ủng hộ
 
 Nếu PUW Notch có ích, mời tôi một ly cà phê ☕ [paypal.me/erikpuw](https://paypal.me/erikpuw)

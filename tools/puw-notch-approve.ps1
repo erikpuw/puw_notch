@@ -48,6 +48,32 @@ try {
     $raw = $stdin.ReadToEnd()
     Write-Log "in: $raw"
     $request = $raw | ConvertFrom-Json
+
+    if ($null -ne $request.toolCall) {
+        # Antigravity PreToolUse hook (camelCase protojson): toolCall = { name, args }
+        $tool = [string]$request.toolCall.name
+        $toolArgs = $request.toolCall.args
+        if ($tool -eq 'run_command' -and -not ($toolArgs.BypassSandbox -eq $true)) {
+            '{"decision":"allow"}'
+            exit 0
+        }
+        $detail = ''
+        foreach ($key in 'CommandLine', 'command', 'Path', 'path', 'file_path', 'url', 'ToolName', 'description') {
+            if ($toolArgs.$key) { $detail = [string]$toolArgs.$key; break }
+        }
+        if (-not $detail) { $detail = Format-ToolDetail $toolArgs }
+        $answer = Ask-Notch $tool $detail @()
+        Write-Log "answer(agy): $answer"
+        if ($answer -eq 'allow') {
+            '{"decision":"allow"}'
+        } elseif ($answer -eq 'deny') {
+            '{"decision":"deny","reason":"Denied on PUW Notch."}'
+        } else {
+            '{"decision":"ask"}'
+        }
+        exit 0
+    }
+
     $tool = [string]$request.tool_name
     if ($tool -eq 'ExitPlanMode') { exit 0 }
 

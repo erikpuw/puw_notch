@@ -192,6 +192,32 @@ The notch reads Codex's limits straight from `~/.codex`, no setup. To **approve 
 - From then on, when Codex asks for permission, a **Codex** banner shows on the notch; click **Allow** or **Deny**. If the notch is not running, or nobody clicks within 50 seconds, Codex asks as usual.
 - `-App` is the name on the banner. `-Log` writes what the hook receives to `%TEMP%\puw-notch-hook.log` to see what an app sends; do not leave it on, as it stores the commands too.
 
+## Setting up Antigravity (optional)
+
+To **approve Antigravity commands on the notch** using its official Hooks system, share the same `puw-notch-approve.ps1` script and add this entry to `~/.gemini/config/hooks.json` (replace `<name>` with your Windows user name):
+
+```json
+{
+  "puw-notch-approve": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/<name>/.claude/puw-notch-approve.ps1 -App Antigravity",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- Sandboxed commands are allowed straight away; only commands requesting `BypassSandbox: true` show the **Antigravity** banner on the notch.
+- If the notch is closed, expanded, or nobody clicks in time, the hook returns `{"decision":"ask"}` so Antigravity prompts in its own window as usual.
+
 ## Support
 
 If PUW Notch helps you, buy me a coffee ☕ [paypal.me/erikpuw](https://paypal.me/erikpuw)
