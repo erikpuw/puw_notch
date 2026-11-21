@@ -11,7 +11,7 @@
   Viết bằng Rust, exe ~1081 KB, không WebView, không cần cài Visual C++ Redistributable.
 </p>
 
-<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="docs/release-notes/v1.0.43.md">Bản mới nhất: v1.0.43</a></p>
+<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="docs/release-notes/v1.0.42.md">Bản mới nhất: v1.0.42</a></p>
 
 > **Chỉ tải từ nguồn của tác giả.** PUW Notch do tác giả (erikpuw) phát hành duy nhất tại [github.com/erikpuw/puw_notch](https://github.com/erikpuw/puw_notch). Bản tải từ nơi khác (trang chia sẻ, kho khác, bản đóng gói lại, tệp gửi qua mạng) không do tác giả kiểm soát và không được đảm bảo: có thể đã bị sửa đổi hoặc chèn thêm mã. Hãy chỉ dùng bản ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) của kho này.
 
