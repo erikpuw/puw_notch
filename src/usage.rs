@@ -7,11 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Data::Json::{JsonArray, JsonObject};
-use windows::Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS};
-use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HWND, LPARAM, UNICODE_STRING, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM};
 use windows::Win32::Networking::WinInet::*;
-use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
-use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
@@ -340,107 +338,48 @@ impl Drop for Process {
     }
 }
 
-fn matches_language_server(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.starts_with("language_server") && lower.ends_with(".exe")
+#[derive(Debug, PartialEq)]
+struct Hub {
+    pid: u32,
+    port: u16,
+    token: String,
 }
 
-fn process_created(h: HANDLE) -> u64 {
-    let (mut c, mut e, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
-    if unsafe { GetProcessTimes(h, &mut c, &mut e, &mut k, &mut u) }.is_ok() {
-        ((c.dwHighDateTime as u64) << 32) | c.dwLowDateTime as u64
-    } else {
-        0
+fn parse_hub(text: &str) -> Option<Hub> {
+    let o = JsonObject::Parse(&key(text)).ok()?;
+    let token = o.GetNamedString(&key("csrfToken")).ok()?.to_string();
+    let port = num(&o, "httpPort")? as u16;
+    let pid = num(&o, "pid")? as u32;
+    (!token.is_empty() && port > 0).then_some(Hub { pid, port, token })
+}
+
+fn is_antigravity_server(pid: u32) -> bool {
+    let Ok(h) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else { return false };
+    let _process = Process(h);
+    let mut buf = [0u16; 520];
+    let mut n = buf.len() as u32;
+    if unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut n) }.is_err() {
+        return false;
     }
+    let path = String::from_utf16_lossy(&buf[..n as usize]).to_lowercase();
+    path.contains("antigravity") && Path::new(&path).file_name().is_some_and(|f| f.to_string_lossy().starts_with("language_server"))
 }
 
-fn extract_csrf_token(command: &str) -> Option<String> {
-    let mut parts = command.split_whitespace();
-    while let Some(arg) = parts.next() {
-        let clean = arg.trim_matches('"');
-        if clean == "--csrf_token" {
-            return parts.next().map(|v| v.trim_matches('"').to_string()).filter(|v| !v.is_empty());
-        }
-        if let Some(val) = clean.strip_prefix("--csrf_token=") {
-            let val = val.trim_matches('"');
-            if !val.is_empty() {
-                return Some(val.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn find_antigravity_token(dir_hint: &str) -> Result<String, &'static str> {
-    unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            return Err("process snapshot failed");
-        };
-        let snapshot = Process(snap);
-        let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        let mut more = Process32FirstW(snapshot.0, &mut entry).is_ok();
-        let mut matched = 0usize;
-        let mut read_cmd = 0usize;
-        let mut best: Option<(u64, String)> = None;
-        while more {
-            let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
-            if matches_language_server(&name) {
-                if let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, entry.th32ProcessID) {
-                    let process = Process(h);
-                    let mut buf = [0u16; 520];
-                    let mut n = buf.len() as u32;
-                    if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut n).is_ok()
-                        && String::from_utf16_lossy(&buf[..n as usize]).to_lowercase().contains(dir_hint)
-                    {
-                        matched += 1;
-                        if let Some(cmd) = command_line(&process) {
-                            read_cmd += 1;
-                            if let Some(token) = extract_csrf_token(&cmd) {
-                                let created = process_created(h);
-                                if best.as_ref().is_none_or(|(t, _)| created >= *t) {
-                                    best = Some((created, token));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            more = Process32NextW(snapshot.0, &mut entry).is_ok();
-        }
-        if let Some((_, token)) = best {
-            Ok(token)
-        } else if matched == 0 {
-            Err("no language_server*.exe process found")
-        } else if read_cmd == 0 {
-            Err("could not read process command line")
-        } else {
-            Err("no --csrf_token in any language_server command line")
-        }
-    }
-}
-
-fn command_line(process: &Process) -> Option<String> {
-    unsafe {
-        let mut buf = vec![0u64; 2048];
-        let mut got = 0u32;
-        NtQueryInformationProcess(process.0, PROCESSINFOCLASS(60), buf.as_mut_ptr() as *mut c_void, (buf.len() * 8) as u32, &mut got).ok().ok()?;
-        let us = &*(buf.as_ptr() as *const UNICODE_STRING);
-        Some(String::from_utf16_lossy(std::slice::from_raw_parts(us.Buffer.0, us.Length as usize / 2)))
-    }
-}
-
-fn parse_port_from_log(text: &str) -> Option<u16> {
-    text.lines()
-        .rev()
-        .filter(|l| l.contains("for HTTP"))
-        .find_map(|l| l.split("port at ").nth(1)?.split_whitespace().next()?.trim_matches(|c: char| !c.is_ascii_digit()).parse().ok())
-}
-
-fn antigravity_port() -> Option<u16> {
-    let log = PathBuf::from(std::env::var_os("APPDATA")?).join("Antigravity").join("logs").join("language_server.log");
-    let text = std::fs::read_to_string(log).ok()?;
-    parse_port_from_log(&text)
+fn find_hub() -> Result<Hub, &'static str> {
+    let home = std::env::var_os("USERPROFILE").ok_or("no USERPROFILE")?;
+    let dir = PathBuf::from(home).join(".gemini").join("antigravity").join("daemon");
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&dir)
+        .map_err(|_| "no ~/.gemini/antigravity/daemon folder")?
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("hub_"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files
+        .iter()
+        .filter_map(|(_, p)| parse_hub(&std::fs::read_to_string(p).ok()?))
+        .find(|hub| is_antigravity_server(hub.pid))
+        .ok_or("no hub_*.json belongs to a running Antigravity language_server")
 }
 
 fn log_ag_err(msg: &str) {
@@ -466,18 +405,13 @@ impl LocalServer {
 }
 
 pub fn antigravity_server() -> Option<LocalServer> {
-    let token = match find_antigravity_token("antigravity") {
-        Ok(t) => t,
+    match find_hub() {
+        Ok(hub) => Some(LocalServer { port: hub.port, token: hub.token }),
         Err(reason) => {
             log_ag_err(reason);
-            return None;
+            None
         }
-    };
-    let Some(port) = antigravity_port() else {
-        log_ag_err("no HTTP port in language_server.log");
-        return None;
-    };
-    Some(LocalServer { port, token })
+    }
 }
 
 fn read_antigravity() -> Option<Vec<Bar>> {
@@ -818,14 +752,11 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_process_and_log_port_matching() {
-        assert!(matches_language_server("language_server.exe"));
-        assert!(matches_language_server("language_server_windows_x64.exe"));
-        assert!(!matches_language_server("other.exe"));
-        assert_eq!(extract_csrf_token("ls.exe --csrf_token abc-123 --port 1"), Some("abc-123".into()));
-        assert_eq!(extract_csrf_token("ls.exe --csrf_token=xyz-789"), Some("xyz-789".into()));
-        assert_eq!(extract_csrf_token("ls.exe --port 1"), None);
-        let log = "listening on port at 51234 for HTTP\nlistening on port at 54321 for HTTP (ready)\n";
-        assert_eq!(parse_port_from_log(log), Some(54321));
+    fn antigravity_hub_file_gives_port_and_token() {
+        let hub = r#"{"pid":16184,"httpsPort":50924,"httpPort":50925,"lsVersion":"2.34.0","csrfToken":"tok-42"}"#;
+        assert_eq!(parse_hub(hub), Some(Hub { pid: 16184, port: 50925, token: "tok-42".into() }));
+        assert_eq!(parse_hub(r#"{"pid":1,"httpPort":50925,"csrfToken":""}"#), None);
+        assert_eq!(parse_hub(r#"{"pid":1,"csrfToken":"x"}"#), None);
+        assert!(!is_antigravity_server(std::process::id()));
     }
 }
