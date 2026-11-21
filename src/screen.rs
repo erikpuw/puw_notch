@@ -80,10 +80,21 @@ fn is_empty_title(answer: isize, drag_bar: Option<RECT>, x: i32) -> bool {
     answer == HTCAPTION && drag_bar.is_none_or(|r| x >= r.left && x < r.right)
 }
 
-const OFFICE_CLASSES: [&str; 4] = ["OpusApp", "XLMAIN", "PPTFrameClass", "Framework::CFrame"];
+const ALWAYS_BUSY_CLASSES: [&str; 6] = [
+    "OpusApp",
+    "XLMAIN",
+    "PPTFrameClass",
+    "Framework::CFrame",
+    "ApplicationFrameWindow",
+    "WinUIDesktopWin32WindowClass",
+];
+
+fn always_busy(class: &str) -> bool {
+    ALWAYS_BUSY_CLASSES.contains(&class)
+}
 
 fn covers_something(hwnd: HWND, center_x: i32, half: i32, y: i32) -> Option<bool> {
-    if OFFICE_CLASSES.contains(&class_name(hwnd).as_str()) {
+    if always_busy(&class_name(hwnd)) {
         return Some(true);
     }
     let drag_bar = unsafe { FindWindowExW(Some(hwnd), None, w!("DRAG_BAR_WINDOW_CLASS"), None) }.ok().and_then(|bar| {
@@ -198,8 +209,17 @@ fn reaches_pill(r: RECT, center_x: i32, top: i32, scale: f32, pill_w: f32) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::{body_half, clip_span, is_empty_title, reaches_pill, HTCAPTION};
+    use super::{always_busy, body_half, clip_span, is_empty_title, reaches_pill, HTCAPTION};
     use windows::Win32::Foundation::RECT;
+
+    #[test]
+    fn uwp_and_office_titlebars_always_shrink_the_notch() {
+        assert!(always_busy("ApplicationFrameWindow"), "Microsoft Store and UWP apps");
+        assert!(always_busy("WinUIDesktopWin32WindowClass"), "WinUI 3 apps");
+        assert!(always_busy("OpusApp"), "Word");
+        assert!(!always_busy("Chrome_WidgetWin_1"));
+        assert!(!always_busy("Notepad"));
+    }
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
         RECT { left, top, right, bottom }
