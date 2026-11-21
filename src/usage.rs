@@ -354,12 +354,34 @@ fn process_created(h: HANDLE) -> u64 {
     }
 }
 
-fn find_newest_process(dir_hint: &str) -> Option<Process> {
+fn extract_csrf_token(command: &str) -> Option<String> {
+    let mut parts = command.split_whitespace();
+    while let Some(arg) = parts.next() {
+        let clean = arg.trim_matches('"');
+        if clean == "--csrf_token" {
+            return parts.next().map(|v| v.trim_matches('"').to_string()).filter(|v| !v.is_empty());
+        }
+        if let Some(val) = clean.strip_prefix("--csrf_token=") {
+            let val = val.trim_matches('"');
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn find_antigravity_token(dir_hint: &str) -> Result<String, &'static str> {
     unsafe {
-        let snapshot = Process(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?);
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return Err("process snapshot failed");
+        };
+        let snapshot = Process(snap);
         let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         let mut more = Process32FirstW(snapshot.0, &mut entry).is_ok();
-        let mut best: Option<(u64, Process)> = None;
+        let mut matched = 0usize;
+        let mut read_cmd = 0usize;
+        let mut best: Option<(u64, String)> = None;
         while more {
             let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
             let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
@@ -371,16 +393,30 @@ fn find_newest_process(dir_hint: &str) -> Option<Process> {
                     if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut n).is_ok()
                         && String::from_utf16_lossy(&buf[..n as usize]).to_lowercase().contains(dir_hint)
                     {
-                        let created = process_created(h);
-                        if best.as_ref().is_none_or(|(t, _)| created >= *t) {
-                            best = Some((created, process));
+                        matched += 1;
+                        if let Some(cmd) = command_line(&process) {
+                            read_cmd += 1;
+                            if let Some(token) = extract_csrf_token(&cmd) {
+                                let created = process_created(h);
+                                if best.as_ref().is_none_or(|(t, _)| created >= *t) {
+                                    best = Some((created, token));
+                                }
+                            }
                         }
                     }
                 }
             }
             more = Process32NextW(snapshot.0, &mut entry).is_ok();
         }
-        best.map(|(_, p)| p)
+        if let Some((_, token)) = best {
+            Ok(token)
+        } else if matched == 0 {
+            Err("no language_server*.exe process found")
+        } else if read_cmd == 0 {
+            Err("could not read process command line")
+        } else {
+            Err("no --csrf_token in any language_server command line")
+        }
     }
 }
 
@@ -430,17 +466,12 @@ impl LocalServer {
 }
 
 pub fn antigravity_server() -> Option<LocalServer> {
-    let Some(process) = find_newest_process("antigravity") else {
-        log_ag_err("no language_server*.exe process found");
-        return None;
-    };
-    let Some(command) = command_line(&process) else {
-        log_ag_err("could not read process command line");
-        return None;
-    };
-    let Some(token) = command.split_whitespace().skip_while(|a| *a != "--csrf_token").nth(1).map(str::to_string) else {
-        log_ag_err("no --csrf_token in command line");
-        return None;
+    let token = match find_antigravity_token("antigravity") {
+        Ok(t) => t,
+        Err(reason) => {
+            log_ag_err(reason);
+            return None;
+        }
     };
     let Some(port) = antigravity_port() else {
         log_ag_err("no HTTP port in language_server.log");
@@ -791,6 +822,9 @@ mod tests {
         assert!(matches_language_server("language_server.exe"));
         assert!(matches_language_server("language_server_windows_x64.exe"));
         assert!(!matches_language_server("other.exe"));
+        assert_eq!(extract_csrf_token("ls.exe --csrf_token abc-123 --port 1"), Some("abc-123".into()));
+        assert_eq!(extract_csrf_token("ls.exe --csrf_token=xyz-789"), Some("xyz-789".into()));
+        assert_eq!(extract_csrf_token("ls.exe --port 1"), None);
         let log = "listening on port at 51234 for HTTP\nlistening on port at 54321 for HTTP (ready)\n";
         assert_eq!(parse_port_from_log(log), Some(54321));
     }
