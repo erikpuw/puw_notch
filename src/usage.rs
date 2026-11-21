@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Data::Json::{JsonArray, JsonObject};
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, UNICODE_STRING, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HWND, LPARAM, UNICODE_STRING, WPARAM};
 use windows::Win32::Networking::WinInet::*;
 use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
-use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
@@ -340,14 +340,30 @@ impl Drop for Process {
     }
 }
 
-fn find_process(exe: &str, dir_hint: &str) -> Option<Process> {
+fn matches_language_server(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("language_server") && lower.ends_with(".exe")
+}
+
+fn process_created(h: HANDLE) -> u64 {
+    let (mut c, mut e, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+    if unsafe { GetProcessTimes(h, &mut c, &mut e, &mut k, &mut u) }.is_ok() {
+        ((c.dwHighDateTime as u64) << 32) | c.dwLowDateTime as u64
+    } else {
+        0
+    }
+}
+
+fn find_newest_process(dir_hint: &str) -> Option<Process> {
     unsafe {
         let snapshot = Process(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?);
         let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         let mut more = Process32FirstW(snapshot.0, &mut entry).is_ok();
+        let mut best: Option<(u64, Process)> = None;
         while more {
             let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-            if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(exe) {
+            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            if matches_language_server(&name) {
                 if let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, entry.th32ProcessID) {
                     let process = Process(h);
                     let mut buf = [0u16; 520];
@@ -355,13 +371,16 @@ fn find_process(exe: &str, dir_hint: &str) -> Option<Process> {
                     if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut n).is_ok()
                         && String::from_utf16_lossy(&buf[..n as usize]).to_lowercase().contains(dir_hint)
                     {
-                        return Some(process);
+                        let created = process_created(h);
+                        if best.as_ref().is_none_or(|(t, _)| created >= *t) {
+                            best = Some((created, process));
+                        }
                     }
                 }
             }
             more = Process32NextW(snapshot.0, &mut entry).is_ok();
         }
-        None
+        best.map(|(_, p)| p)
     }
 }
 
@@ -375,11 +394,27 @@ fn command_line(process: &Process) -> Option<String> {
     }
 }
 
+fn parse_port_from_log(text: &str) -> Option<u16> {
+    text.lines()
+        .rev()
+        .filter(|l| l.contains("for HTTP"))
+        .find_map(|l| l.split("port at ").nth(1)?.split_whitespace().next()?.trim_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+}
+
 fn antigravity_port() -> Option<u16> {
     let log = PathBuf::from(std::env::var_os("APPDATA")?).join("Antigravity").join("logs").join("language_server.log");
     let text = std::fs::read_to_string(log).ok()?;
-    let line = text.lines().rev().find(|l| l.trim_end().ends_with("for HTTP"))?;
-    line.split("port at ").nth(1)?.split_whitespace().next()?.parse().ok()
+    parse_port_from_log(&text)
+}
+
+fn log_ag_err(msg: &str) {
+    use std::sync::atomic::AtomicI64;
+    static LAST: AtomicI64 = AtomicI64::new(0);
+    let now = now_secs();
+    if now - LAST.load(Ordering::Relaxed) >= 60 {
+        LAST.store(now, Ordering::Relaxed);
+        crate::system::log(&format!("antigravity: {msg}"));
+    }
 }
 
 #[derive(Clone)]
@@ -395,14 +430,36 @@ impl LocalServer {
 }
 
 pub fn antigravity_server() -> Option<LocalServer> {
-    let process = find_process("language_server.exe", "antigravity")?;
-    let command = command_line(&process)?;
-    let token = command.split_whitespace().skip_while(|a| *a != "--csrf_token").nth(1)?.to_string();
-    Some(LocalServer { port: antigravity_port()?, token })
+    let Some(process) = find_newest_process("antigravity") else {
+        log_ag_err("no language_server*.exe process found");
+        return None;
+    };
+    let Some(command) = command_line(&process) else {
+        log_ag_err("could not read process command line");
+        return None;
+    };
+    let Some(token) = command.split_whitespace().skip_while(|a| *a != "--csrf_token").nth(1).map(str::to_string) else {
+        log_ag_err("no --csrf_token in command line");
+        return None;
+    };
+    let Some(port) = antigravity_port() else {
+        log_ag_err("no HTTP port in language_server.log");
+        return None;
+    };
+    Some(LocalServer { port, token })
 }
 
 fn read_antigravity() -> Option<Vec<Bar>> {
-    some(parse_antigravity(&antigravity_server()?.call("RetrieveUserQuotaSummary", "{}")?))
+    let server = antigravity_server()?;
+    let Some(raw) = server.call("RetrieveUserQuotaSummary", "{}") else {
+        log_ag_err(&format!("RetrieveUserQuotaSummary failed on port {}", server.port));
+        return None;
+    };
+    let bars = some(parse_antigravity(&raw));
+    if bars.is_none() {
+        log_ag_err("quota response parsed 0 bars");
+    }
+    bars
 }
 
 fn post_local(port: u16, path: &str, token: &str, body: &str) -> Option<String> {
@@ -727,5 +784,14 @@ mod tests {
         next.apps[App::Codex as usize].as_mut().unwrap()[0].resets_at = 2_000_000;
         assert!(watch.check(&next, 2).is_empty());
         assert_eq!(watch.check(&weekly(85.0), 2)[0].reason, Reason::Warn);
+    }
+
+    #[test]
+    fn antigravity_process_and_log_port_matching() {
+        assert!(matches_language_server("language_server.exe"));
+        assert!(matches_language_server("language_server_windows_x64.exe"));
+        assert!(!matches_language_server("other.exe"));
+        let log = "listening on port at 51234 for HTTP\nlistening on port at 54321 for HTTP (ready)\n";
+        assert_eq!(parse_port_from_log(log), Some(54321));
     }
 }
