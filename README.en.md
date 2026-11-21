@@ -8,7 +8,7 @@
 
 <p align="center">
   Music, tasks, notifications, weather, a calendar and a tiny robot, tucked into the top edge of your screen, Dynamic Island style.<br>
-  Written in Rust, ~1081 KB exe, no WebView, no Visual C++ Redistributable to install.
+  Written in Rust, ~1084 KB exe, no WebView, no Visual C++ Redistributable to install.
 </p>
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="docs/release-notes/v1.0.43.md">Latest: v1.0.43</a></p>
