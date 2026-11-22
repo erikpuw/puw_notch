@@ -10,32 +10,22 @@ use install::{
 use std::cell::RefCell;
 use std::path::PathBuf;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
-};
-use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget, D2D1_DRAW_TEXT_OPTIONS_CLIP,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_PRESENT_OPTIONS_NONE, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
-};
-use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
-    DWRITE_WORD_WRAPPING_WRAP,
-};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
+    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetStockObject,
+    InvalidateRect, LineTo, MoveToEx, RoundRect, SelectObject, SetBkMode, SetTextColor,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DT_CENTER,
+    DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP, DT_VCENTER, DT_WORDBREAK,
+    FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, HDC, HFONT, NULL_BRUSH, NULL_PEN, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows_numerics::Vector2;
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_AUTO_RUN: u32 = WM_APP + 1;
@@ -147,17 +137,20 @@ fn is_windows_dark_mode() -> bool {
     ok.is_ok() && val == 0
 }
 
-fn rgb(r: u8, g: u8, b: u8) -> D2D1_COLOR_F {
-    D2D1_COLOR_F {
-        r: r as f32 / 255.0,
-        g: g as f32 / 255.0,
-        b: b as f32 / 255.0,
-        a: 1.0,
-    }
+const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
+    COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
 }
 
-fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {
-    D2D_RECT_F {
+#[derive(Clone, Copy)]
+struct RectF {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+const fn rect(l: f32, t: f32, r: f32, b: f32) -> RectF {
+    RectF {
         left: l,
         top: t,
         right: r,
@@ -165,125 +158,156 @@ fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {
     }
 }
 
-fn rrect(r: D2D_RECT_F, rad: f32) -> D2D1_ROUNDED_RECT {
-    D2D1_ROUNDED_RECT {
-        rect: r,
-        radiusX: rad,
-        radiusY: rad,
-    }
-}
-
-fn contains(r: D2D_RECT_F, x: f32, y: f32) -> bool {
+fn contains(r: RectF, x: f32, y: f32) -> bool {
     x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
 }
 
-struct Gfx {
-    _d2d: ID2D1Factory,
-    rt: ID2D1HwndRenderTarget,
-    f_title: IDWriteTextFormat,
-    f_bold: IDWriteTextFormat,
-    f_body: IDWriteTextFormat,
-    f_small: IDWriteTextFormat,
-    f_btn: IDWriteTextFormat,
+#[derive(Clone, Copy)]
+enum TextStyle {
+    Title,
+    Bold,
+    Body,
+    Small,
+    Btn,
 }
 
-impl Gfx {
-    fn new(hwnd: HWND, px_w: u32, px_h: u32, dpi: f32) -> windows::core::Result<Self> {
-        unsafe {
-            let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
-                pixelFormat: D2D1_PIXEL_FORMAT {
-                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_IGNORE,
-                },
-                dpiX: dpi,
-                dpiY: dpi,
-                ..Default::default()
-            };
-            let hwnd_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                hwnd,
-                pixelSize: D2D_SIZE_U {
-                    width: px_w,
-                    height: px_h,
-                },
-                presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-            };
-            let rt = d2d.CreateHwndRenderTarget(&rt_props, &hwnd_props)?;
-            let dw: IDWriteFactory = DWriteCreateFactory(
-                windows::Win32::Graphics::DirectWrite::DWRITE_FACTORY_TYPE_SHARED,
-            )?;
-            let fmt = |size: f32, bold: bool, center: bool, wrap: bool| -> windows::core::Result<IDWriteTextFormat> {
-                let f = dw.CreateTextFormat(
+struct GdiFonts {
+    title: HFONT,
+    bold: HFONT,
+    body: HFONT,
+    small: HFONT,
+    btn: HFONT,
+}
+
+impl GdiFonts {
+    fn new(dpi: f32) -> Self {
+        let mk = |dip_px: f32, bold: bool| -> HFONT {
+            let h = -((dip_px * dpi / 96.0).round() as i32);
+            unsafe {
+                CreateFontW(
+                    h,
+                    0,
+                    0,
+                    0,
+                    if bold { FW_SEMIBOLD.0 as i32 } else { FW_NORMAL.0 as i32 },
+                    0,
+                    0,
+                    0,
+                    DEFAULT_CHARSET,
+                    OUT_DEFAULT_PRECIS,
+                    CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY,
+                    (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
                     w!("Segoe UI"),
-                    None,
-                    if bold { DWRITE_FONT_WEIGHT_SEMI_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL },
-                    DWRITE_FONT_STYLE_NORMAL,
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    size,
-                    w!(""),
-                )?;
-                f.SetTextAlignment(if center { DWRITE_TEXT_ALIGNMENT_CENTER } else { DWRITE_TEXT_ALIGNMENT_LEADING })?;
-                f.SetParagraphAlignment(if center { DWRITE_PARAGRAPH_ALIGNMENT_CENTER } else { DWRITE_PARAGRAPH_ALIGNMENT_NEAR })?;
-                f.SetWordWrapping(if wrap { DWRITE_WORD_WRAPPING_WRAP } else { DWRITE_WORD_WRAPPING_NO_WRAP })?;
-                if !wrap {
-                    let trim = DWRITE_TRIMMING {
-                        granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                        delimiter: 0,
-                        delimiterCount: 0,
-                    };
-                    let _ = f.SetTrimming(&trim, None);
+                )
+            }
+        };
+        Self {
+            title: mk(20.0, true),
+            bold: mk(12.5, true),
+            body: mk(12.5, false),
+            small: mk(11.5, false),
+            btn: mk(12.5, true),
+        }
+    }
+
+    fn get(&self, style: TextStyle) -> HFONT {
+        match style {
+            TextStyle::Title => self.title,
+            TextStyle::Bold => self.bold,
+            TextStyle::Body => self.body,
+            TextStyle::Small => self.small,
+            TextStyle::Btn => self.btn,
+        }
+    }
+}
+
+impl Drop for GdiFonts {
+    fn drop(&mut self) {
+        unsafe {
+            for f in [self.title, self.bold, self.body, self.small, self.btn] {
+                if !f.is_invalid() {
+                    let _ = DeleteObject(f.into());
                 }
-                Ok(f)
-            };
-            Ok(Gfx {
-                _d2d: d2d,
-                rt,
-                f_title: fmt(20.0, true, false, false)?,
-                f_bold: fmt(12.5, true, false, false)?,
-                f_body: fmt(12.5, false, false, false)?,
-                f_small: fmt(11.5, false, false, true)?,
-                f_btn: fmt(12.5, true, true, false)?,
-            })
-        }
-    }
-
-    fn text(&self, s: &str, f: &IDWriteTextFormat, r: D2D_RECT_F, c: D2D1_COLOR_F) {
-        let wide: Vec<u16> = s.encode_utf16().collect();
-        unsafe {
-            if let Ok(br) = self.rt.CreateSolidColorBrush(&c, None) {
-                self.rt
-                    .DrawText(&wide, f, &r, &br, D2D1_DRAW_TEXT_OPTIONS_CLIP, Default::default());
             }
         }
     }
+}
 
-    fn fill_rrect(&self, r: D2D_RECT_F, rad: f32, c: D2D1_COLOR_F) {
-        unsafe {
-            if let Ok(br) = self.rt.CreateSolidColorBrush(&c, None) {
-                self.rt.FillRoundedRectangle(&rrect(r, rad), &br);
-            }
+struct Canvas<'a> {
+    hdc: HDC,
+    scale: f32,
+    fonts: &'a GdiFonts,
+}
+
+impl<'a> Canvas<'a> {
+    fn px(&self, v: f32) -> i32 {
+        (v * self.scale).round() as i32
+    }
+
+    fn to_rect(&self, r: RectF) -> RECT {
+        RECT {
+            left: self.px(r.left),
+            top: self.px(r.top),
+            right: self.px(r.right),
+            bottom: self.px(r.bottom),
         }
     }
 
-    fn stroke_rrect(&self, r: D2D_RECT_F, rad: f32, c: D2D1_COLOR_F, w: f32) {
+    fn text(&self, s: &str, style: TextStyle, r: RectF, c: COLORREF) {
+        let mut wide: Vec<u16> = s.encode_utf16().collect();
+        let mut rc = self.to_rect(r);
+        let flags = match style {
+            TextStyle::Btn => DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+            TextStyle::Small => DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX,
+            _ => DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
+        };
         unsafe {
-            if let Ok(br) = self.rt.CreateSolidColorBrush(&c, None) {
-                self.rt.DrawRoundedRectangle(&rrect(r, rad), &br, w, None);
-            }
+            let old = SelectObject(self.hdc, self.fonts.get(style).into());
+            SetTextColor(self.hdc, c);
+            let _ = DrawTextW(self.hdc, &mut wide, &mut rc, flags);
+            SelectObject(self.hdc, old);
         }
     }
 
-    fn line(&self, a: (f32, f32), b: (f32, f32), c: D2D1_COLOR_F, w: f32) {
+    fn fill_rrect(&self, r: RectF, rad: f32, c: COLORREF) {
+        let rc = self.to_rect(r);
+        let d = self.px(rad * 2.0);
         unsafe {
-            if let Ok(br) = self.rt.CreateSolidColorBrush(&c, None) {
-                self.rt.DrawLine(
-                    Vector2 { X: a.0, Y: a.1 },
-                    Vector2 { X: b.0, Y: b.1 },
-                    &br,
-                    w,
-                    None,
-                );
-            }
+            let br = CreateSolidBrush(c);
+            let old_br = SelectObject(self.hdc, br.into());
+            let old_pen = SelectObject(self.hdc, GetStockObject(NULL_PEN));
+            let _ = RoundRect(self.hdc, rc.left, rc.top, rc.right + 1, rc.bottom + 1, d, d);
+            SelectObject(self.hdc, old_pen);
+            SelectObject(self.hdc, old_br);
+            let _ = DeleteObject(br.into());
+        }
+    }
+
+    fn stroke_rrect(&self, r: RectF, rad: f32, c: COLORREF, w: f32) {
+        let rc = self.to_rect(r);
+        let d = self.px(rad * 2.0);
+        let pw = self.px(w).max(1);
+        unsafe {
+            let pen = CreatePen(PS_SOLID, pw, c);
+            let old_pen = SelectObject(self.hdc, pen.into());
+            let old_br = SelectObject(self.hdc, GetStockObject(NULL_BRUSH));
+            let _ = RoundRect(self.hdc, rc.left, rc.top, rc.right, rc.bottom, d, d);
+            SelectObject(self.hdc, old_br);
+            SelectObject(self.hdc, old_pen);
+            let _ = DeleteObject(pen.into());
+        }
+    }
+
+    fn line(&self, a: (f32, f32), b: (f32, f32), c: COLORREF, w: f32) {
+        let pw = self.px(w).max(1);
+        unsafe {
+            let pen = CreatePen(PS_SOLID, pw, c);
+            let old_pen = SelectObject(self.hdc, pen.into());
+            let _ = MoveToEx(self.hdc, self.px(a.0), self.px(a.1), None);
+            let _ = LineTo(self.hdc, self.px(b.0), self.px(b.1));
+            SelectObject(self.hdc, old_pen);
+            let _ = DeleteObject(pen.into());
         }
     }
 }
@@ -291,7 +315,9 @@ impl Gfx {
 struct App {
     hwnd: HWND,
     dpi: f32,
-    gfx: Gfx,
+    px_w: i32,
+    px_h: i32,
+    fonts: GdiFonts,
     mode: Mode,
     is_vi: bool,
     dark: bool,
@@ -327,7 +353,7 @@ impl App {
         }
     }
 
-    fn layout_hits(&self) -> Vec<(Hit, D2D_RECT_F)> {
+    fn layout_hits(&self) -> Vec<(Hit, RectF)> {
         let mut out = vec![(Hit::Lang, rect(WIN_W - 22.0 - 44.0, 22.0, WIN_W - 22.0, 48.0))];
         if self.mode == Mode::Install {
             out.push((Hit::Browse, rect(36.0, 114.0, WIN_W - 36.0, 144.0)));
@@ -363,7 +389,7 @@ impl App {
         }
     }
 
-    fn draw(&self) {
+    fn draw(&self, target_hdc: HDC) {
         let (bg, card, border, input_bg, btn_bg, btn_hov, text_pri, text_sec, accent, accent_hov, warn_col, ok_col, err_col) =
             if self.dark {
                 (
@@ -400,27 +426,39 @@ impl App {
             };
         let accent_ink = if self.dark { rgb(12, 18, 24) } else { rgb(255, 255, 255) };
 
-        let g = &self.gfx;
-        unsafe {
-            g.rt.BeginDraw();
-            g.rt.Clear(Some(&bg));
-        }
+        let (mem_dc, bmp, old_bmp) = unsafe {
+            let mem_dc = CreateCompatibleDC(Some(target_hdc));
+            let bmp = CreateCompatibleBitmap(target_hdc, self.px_w, self.px_h);
+            let old_bmp = SelectObject(mem_dc, bmp.into());
+            SetBkMode(mem_dc, TRANSPARENT);
+            let bg_br = CreateSolidBrush(bg);
+            let full = RECT { left: 0, top: 0, right: self.px_w, bottom: self.px_h };
+            FillRect(mem_dc, &full, bg_br);
+            let _ = DeleteObject(bg_br.into());
+            (mem_dc, bmp, old_bmp)
+        };
+
+        let g = Canvas {
+            hdc: mem_dc,
+            scale: self.dpi / 96.0,
+            fonts: &self.fonts,
+        };
 
         // Header
-        g.text(&format!("{APP_NAME} v{APP_VERSION} Setup"), &g.f_title, rect(22.0, 18.0, 460.0, 46.0), text_pri);
+        g.text(&format!("{APP_NAME} v{APP_VERSION} Setup"), TextStyle::Title, rect(22.0, 18.0, 460.0, 46.0), text_pri);
         let sub = match (self.mode, self.is_vi) {
             (Mode::Install, true) => "Trình cài đặt chiếc notch sống cho Windows",
             (Mode::Install, false) => "Installer for a living notch on Windows",
             (Mode::Uninstall, true) => "Gỡ cài đặt PUW Notch khỏi máy tính này",
             (Mode::Uninstall, false) => "Uninstall PUW Notch from this computer",
         };
-        g.text(sub, &g.f_small, rect(22.0, 46.0, 460.0, 66.0), text_sec);
+        g.text(sub, TextStyle::Small, rect(22.0, 46.0, 460.0, 66.0), text_sec);
 
         // EN / VI button
         let lang_r = rect(WIN_W - 22.0 - 44.0, 22.0, WIN_W - 22.0, 48.0);
         g.fill_rrect(lang_r, 6.0, if self.hovered == Some(Hit::Lang) { btn_hov } else { btn_bg });
         g.stroke_rrect(lang_r, 6.0, border, 1.0);
-        g.text(if self.is_vi { "EN" } else { "VI" }, &g.f_btn, lang_r, text_pri);
+        g.text(if self.is_vi { "EN" } else { "VI" }, TextStyle::Btn, lang_r, text_pri);
 
         // Card 1: Folder + options
         let card1_b = if self.mode == Mode::Install { 268.0 } else { 140.0 };
@@ -431,7 +469,7 @@ impl App {
         if self.mode == Mode::Install {
             g.text(
                 if self.is_vi { "Thư mục cài đặt" } else { "Installation folder" },
-                &g.f_bold,
+                TextStyle::Bold,
                 rect(36.0, 90.0, 360.0, 110.0),
                 text_pri,
             );
@@ -441,14 +479,14 @@ impl App {
             g.stroke_rrect(path_r, 6.0, if self.hovered == Some(Hit::Browse) { accent } else { border }, 1.0);
             g.text(
                 &self.install_dir.display().to_string(),
-                &g.f_body,
-                rect(path_r.left + 10.0, path_r.top + 6.0, path_r.right - 8.0, path_r.bottom - 4.0),
+                TextStyle::Body,
+                rect(path_r.left + 10.0, path_r.top + 7.0, path_r.right - 8.0, path_r.bottom - 4.0),
                 text_pri,
             );
             let browse_r = rect(WIN_W - 142.0, 114.0, WIN_W - 36.0, 144.0);
             g.fill_rrect(browse_r, 6.0, if self.hovered == Some(Hit::Browse) { btn_hov } else { btn_bg });
             g.stroke_rrect(browse_r, 6.0, border, 1.0);
-            g.text(if self.is_vi { "Chọn thư mục…" } else { "Browse…" }, &g.f_btn, browse_r, text_pri);
+            g.text(if self.is_vi { "Chọn thư mục…" } else { "Browse…" }, TextStyle::Btn, browse_r, text_pri);
 
             let checkboxes = [
                 (
@@ -490,18 +528,18 @@ impl App {
                     g.fill_rrect(box_r, 4.0, input_bg);
                     g.stroke_rrect(box_r, 4.0, if self.hovered == Some(hit) { accent } else { border }, 1.2);
                 }
-                g.text(label, &g.f_body, rect(62.0, y + 2.0, WIN_W - 36.0, y + 22.0), text_pri);
+                g.text(label, TextStyle::Body, rect(62.0, y + 3.0, WIN_W - 36.0, y + 22.0), text_pri);
             }
         } else {
             g.text(
                 if self.is_vi { "Gỡ cài đặt PUW Notch khỏi máy tính này" } else { "Uninstall PUW Notch from this computer" },
-                &g.f_bold,
+                TextStyle::Bold,
                 rect(36.0, 90.0, WIN_W - 36.0, 110.0),
                 text_pri,
             );
             g.text(
                 &format!("{}: {}", if self.is_vi { "Thư mục" } else { "Folder" }, self.install_dir.display()),
-                &g.f_small,
+                TextStyle::Small,
                 rect(36.0, 112.0, WIN_W - 36.0, 132.0),
                 text_sec,
             );
@@ -521,7 +559,7 @@ impl App {
 
         g.text(
             if self.is_vi { "Quyền & thay đổi trên máy" } else { "Permissions & system changes" },
-            &g.f_bold,
+            TextStyle::Bold,
             rect(36.0, c2_top + 10.0, WIN_W - 36.0, c2_top + 28.0),
             text_pri,
         );
@@ -546,7 +584,7 @@ impl App {
                 ok_col,
             )
         };
-        g.text(uac_txt, &g.f_small, rect(36.0, c2_top + 31.0, WIN_W - 36.0, c2_top + 48.0), uac_col);
+        g.text(uac_txt, TextStyle::Small, rect(36.0, c2_top + 31.0, WIN_W - 36.0, c2_top + 48.0), uac_col);
 
         let detail_txt = match self.mode {
             Mode::Install => {
@@ -576,7 +614,7 @@ impl App {
                 }
             }
         };
-        g.text(&detail_txt, &g.f_small, rect(36.0, c2_top + 50.0, WIN_W - 36.0, c2_bot - 6.0), text_sec);
+        g.text(&detail_txt, TextStyle::Small, rect(36.0, c2_top + 50.0, WIN_W - 36.0, c2_bot - 6.0), text_sec);
 
         // Footer note & status message
         g.text(
@@ -585,7 +623,7 @@ impl App {
             } else {
                 "Unsigned installer build · Download only from github.com/erikpuw/puw_notch"
             },
-            &g.f_small,
+            TextStyle::Small,
             rect(22.0, c2_bot + 8.0, WIN_W - 22.0, c2_bot + 24.0),
             text_sec,
         );
@@ -596,7 +634,7 @@ impl App {
                 Status::Failed => err_col,
                 Status::Ready => text_sec,
             };
-            g.text(&self.message, &g.f_small, rect(22.0, c2_bot + 26.0, WIN_W - 22.0, self.win_h() - 58.0), col);
+            g.text(&self.message, TextStyle::Small, rect(22.0, c2_bot + 26.0, WIN_W - 22.0, self.win_h() - 58.0), col);
         }
 
         // Bottom buttons
@@ -604,7 +642,7 @@ impl App {
         if self.status == Status::Done {
             let fin_r = rect(WIN_W - 22.0 - 116.0, by, WIN_W - 22.0, by + 34.0);
             g.fill_rrect(fin_r, 6.0, if self.hovered == Some(Hit::Primary) { accent_hov } else { accent });
-            g.text(if self.is_vi { "Hoàn tất" } else { "Finish" }, &g.f_btn, fin_r, accent_ink);
+            g.text(if self.is_vi { "Hoàn tất" } else { "Finish" }, TextStyle::Btn, fin_r, accent_ink);
         } else {
             let pri_r = rect(WIN_W - 22.0 - 92.0 - 10.0 - 138.0, by, WIN_W - 22.0 - 92.0 - 10.0, by + 34.0);
             g.fill_rrect(pri_r, 6.0, if self.hovered == Some(Hit::Primary) { accent_hov } else { accent });
@@ -618,16 +656,19 @@ impl App {
                 (Mode::Uninstall, false, true) => "Uninstall (UAC)",
                 (Mode::Uninstall, false, false) => "Uninstall",
             };
-            g.text(pri_txt, &g.f_btn, pri_r, accent_ink);
+            g.text(pri_txt, TextStyle::Btn, pri_r, accent_ink);
 
             let can_r = rect(WIN_W - 22.0 - 92.0, by, WIN_W - 22.0, by + 34.0);
             g.fill_rrect(can_r, 6.0, if self.hovered == Some(Hit::Cancel) { btn_hov } else { btn_bg });
             g.stroke_rrect(can_r, 6.0, border, 1.0);
-            g.text(if self.is_vi { "Đóng" } else { "Cancel" }, &g.f_btn, can_r, text_pri);
+            g.text(if self.is_vi { "Đóng" } else { "Cancel" }, TextStyle::Btn, can_r, text_pri);
         }
 
         unsafe {
-            let _ = g.rt.EndDraw(None, None);
+            let _ = BitBlt(target_hdc, 0, 0, self.px_w, self.px_h, Some(mem_dc), 0, 0, SRCCOPY);
+            SelectObject(mem_dc, old_bmp);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem_dc);
         }
     }
 
@@ -711,24 +752,7 @@ impl App {
     fn on_click(&mut self, hit: Hit) {
         match hit {
             Hit::Lang => self.is_vi = !self.is_vi,
-            Hit::Browse => {
-                let title = if self.is_vi {
-                    "Chọn thư mục cài đặt PUW Notch"
-                } else {
-                    "Choose PUW Notch installation folder"
-                };
-                if let Some(chosen) = shortcut::pick_folder(Some(self.hwnd), &self.install_dir, title) {
-                    self.install_dir = if chosen
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.eq_ignore_ascii_case(APP_NAME) || n.eq_ignore_ascii_case("PuwNotch"))
-                    {
-                        chosen
-                    } else {
-                        chosen.join(APP_NAME)
-                    };
-                }
-            }
+            Hit::Browse => return,
             Hit::ChkStartup => self.enable_startup_task = !self.enable_startup_task,
             Hit::ChkStartMenu => self.create_start_menu = !self.create_start_menu,
             Hit::ChkDesktop => self.create_desktop = !self.create_desktop,
@@ -751,10 +775,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         WM_PAINT => {
             unsafe {
                 let mut ps = PAINTSTRUCT::default();
-                let _ = BeginPaint(hwnd, &mut ps);
+                let hdc = BeginPaint(hwnd, &mut ps);
                 APP.with(|a| {
                     if let Some(app) = a.borrow().as_ref() {
-                        app.draw();
+                        app.draw(hdc);
                     }
                 });
                 let _ = EndPaint(hwnd, &ps);
@@ -813,11 +837,43 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             let y = ((lp.0 >> 16) & 0xFFFF) as i16 as i32;
             let hit = APP.with(|a| a.borrow().as_ref().and_then(|app| app.hit_at(x, y)));
             if let Some(h) = hit {
-                APP.with(|a| {
-                    if let Some(app) = a.borrow_mut().as_mut() {
-                        app.on_click(h);
+                if h == Hit::Browse {
+                    let info = APP.with(|a| {
+                        a.borrow().as_ref().map(|app| (app.hwnd, app.install_dir.clone(), app.is_vi))
+                    });
+                    if let Some((owner, cur_dir, is_vi)) = info {
+                        let title = if is_vi {
+                            "Chọn thư mục cài đặt PUW Notch"
+                        } else {
+                            "Choose PUW Notch installation folder"
+                        };
+                        if let Some(chosen) = shortcut::pick_folder(Some(owner), &cur_dir, title) {
+                            APP.with(|a| {
+                                if let Some(app) = a.borrow_mut().as_mut() {
+                                    app.install_dir = if chosen
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .is_some_and(|n| {
+                                            n.eq_ignore_ascii_case(APP_NAME)
+                                                || n.eq_ignore_ascii_case("PuwNotch")
+                                        })
+                                    {
+                                        chosen
+                                    } else {
+                                        chosen.join(APP_NAME)
+                                    };
+                                    app.repaint();
+                                }
+                            });
+                        }
                     }
-                });
+                } else {
+                    APP.with(|a| {
+                        if let Some(app) = a.borrow_mut().as_mut() {
+                            app.on_click(h);
+                        }
+                    });
+                }
             }
             LRESULT(0)
         }
@@ -847,7 +903,7 @@ fn main() {
 
     unsafe {
         let hinst = GetModuleHandleW(None).unwrap_or_default();
-        let class = w!("PuwNotchSetupD2D");
+        let class = w!("PuwNotchSetupGDI");
         let wc = WNDCLASSEXW {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(wndproc),
@@ -901,7 +957,7 @@ fn main() {
         let sy = (GetSystemMetrics(SM_CYSCREEN) - wh) / 2;
         let _ = SetWindowPos(hwnd, None, sx.max(0), sy.max(0), ww, wh, SWP_NOZORDER);
 
-        let gfx = Gfx::new(hwnd, px_w as u32, px_h as u32, dpi).expect("Direct2D init failed");
+        let fonts = GdiFonts::new(dpi);
         let initial_dir = cli.dir.unwrap_or_else(|| {
             if cli.mode == Mode::Uninstall {
                 std::env::current_exe()
@@ -916,7 +972,9 @@ fn main() {
         let app = App {
             hwnd,
             dpi,
-            gfx,
+            px_w,
+            px_h,
+            fonts,
             mode: cli.mode,
             is_vi: cli.is_vi,
             dark,

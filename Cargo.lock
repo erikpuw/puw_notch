@@ -70,7 +70,6 @@ dependencies = [
  "flate2",
  "windows",
  "windows-core",
- "windows-numerics",
 ]
 
 [[package]]
