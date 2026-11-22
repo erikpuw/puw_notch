@@ -6,7 +6,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use windows::core::{w, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -91,13 +91,13 @@ pub fn needs_elevation(opts: &InstallOptions) -> bool {
     opts.enable_startup_task || path_needs_admin(&opts.install_dir)
 }
 
-pub fn relaunch_elevated(owner: HWND, args: &str) -> Result<(), String> {
+pub fn relaunch_elevated(args: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("Cannot locate installer exe: {e}"))?;
     let exe_h = HSTRING::from(exe.as_os_str());
     let args_h = HSTRING::from(args);
     let r = unsafe {
         ShellExecuteW(
-            Some(owner),
+            None,
             w!("runas"),
             &exe_h,
             &args_h,

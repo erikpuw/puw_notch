@@ -3,52 +3,31 @@
 mod install;
 mod shortcut;
 
+use eframe::egui;
+use egui::{
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Stroke,
+    Vec2,
+};
 use install::{
-    default_install_dir, is_elevated, launch_installed_app, needs_elevation, path_needs_admin,
-    perform_install, perform_uninstall, relaunch_elevated, InstallOptions, APP_NAME, APP_VERSION,
+    default_install_dir, is_elevated, launch_installed_app, needs_elevation, perform_install,
+    perform_uninstall, relaunch_elevated, InstallOptions, APP_NAME, APP_VERSION,
 };
-use std::cell::RefCell;
 use std::path::PathBuf;
-use windows::core::{w, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    CreateFontW, CreateSolidBrush, DeleteObject, GetStockObject, SetBkColor, SetBkMode,
-    SetTextColor, CLEARTYPE_QUALITY, DEFAULT_CHARSET, DEFAULT_PITCH, FF_DONTCARE, FW_NORMAL,
-    FW_SEMIBOLD, HBRUSH, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, TRANSPARENT,
-    WHITE_BRUSH,
-};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-use windows::Win32::UI::WindowsAndMessaging::*;
-
-const BST_UNCHECKED: usize = 0;
-const BST_CHECKED: usize = 1;
-
-const ID_LANG: isize = 101;
-const ID_DIR_EDIT: isize = 102;
-const ID_BROWSE: isize = 103;
-const ID_CHK_STARTUP: isize = 104;
-const ID_CHK_STARTMENU: isize = 105;
-const ID_CHK_DESKTOP: isize = 106;
-const ID_CHK_LAUNCH: isize = 107;
-const ID_ACTION: isize = 108;
-const ID_CLOSE: isize = 109;
-const ID_TITLE: isize = 110;
-const ID_SUBTITLE: isize = 111;
-const ID_DIR_LABEL: isize = 112;
-const ID_PERM_TITLE: isize = 113;
-const ID_PERM_BODY: isize = 114;
-const ID_STATUS: isize = 115;
-
-const BCM_SETSHIELD: u32 = 0x160C;
-const WM_AUTO_RUN: u32 = WM_APP + 1;
+use std::sync::Arc;
+use windows::core::w;
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Install,
     Uninstall,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Status {
+    Ready,
+    Done,
+    Failed,
 }
 
 struct CliArgs {
@@ -64,8 +43,14 @@ struct CliArgs {
 
 impl CliArgs {
     fn parse() -> Self {
+        let self_is_uninstaller = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()))
+            .map(|n| n.contains("uninstall"))
+            .unwrap_or(false);
+
         let mut out = CliArgs {
-            mode: Mode::Install,
+            mode: if self_is_uninstaller { Mode::Uninstall } else { Mode::Install },
             auto_run: false,
             is_vi: true,
             dir: None,
@@ -109,85 +94,73 @@ impl CliArgs {
     }
 }
 
-struct UiState {
-    hwnd: HWND,
+fn is_windows_dark_mode() -> bool {
+    let mut val = 1u32;
+    let mut size = size_of::<u32>() as u32;
+    let ok = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut val as *mut u32).cast()),
+            Some(&mut size),
+        )
+    };
+    ok.is_ok() && val == 0
+}
+
+struct InstallerApp {
     mode: Mode,
     is_vi: bool,
+    dark: bool,
     elevated: bool,
-    done: bool,
-    failed: bool,
-    status_text: String,
-    dir_edit: HWND,
-    browse_btn: HWND,
-    lang_btn: HWND,
-    chk_startup: HWND,
-    chk_startmenu: HWND,
-    chk_desktop: HWND,
-    chk_launch: HWND,
-    action_btn: HWND,
-    close_btn: HWND,
-    title_lbl: HWND,
-    subtitle_lbl: HWND,
-    dir_lbl: HWND,
-    perm_title_lbl: HWND,
-    perm_body_lbl: HWND,
-    status_lbl: HWND,
-    font_title: HFONT,
-    font_bold: HFONT,
-    font_body: HFONT,
-    bg_brush: HBRUSH,
-    card_brush: HBRUSH,
+    auto_run_pending: bool,
+    install_dir_text: String,
+    create_start_menu: bool,
+    create_desktop: bool,
+    enable_startup_task: bool,
+    launch_after: bool,
+    status: Status,
+    message: String,
+    installed_exe: Option<PathBuf>,
 }
 
-thread_local! {
-    static STATE: RefCell<Option<UiState>> = const { RefCell::new(None) };
-}
-
-fn set_text(hwnd: HWND, text: &str) {
-    let h = HSTRING::from(text);
-    unsafe {
-        let _ = SetWindowTextW(hwnd, &h);
-    }
-}
-
-fn get_text(hwnd: HWND) -> String {
-    unsafe {
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return String::new();
+impl InstallerApp {
+    fn new(cc: &eframe::CreationContext<'_>, cli: CliArgs) -> Self {
+        configure_fonts(&cc.egui_ctx);
+        let dark = is_windows_dark_mode();
+        apply_visuals(&cc.egui_ctx, dark);
+        let dir = cli.dir.unwrap_or_else(|| {
+            if cli.mode == Mode::Uninstall {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    .unwrap_or_else(default_install_dir)
+            } else {
+                default_install_dir()
+            }
+        });
+        Self {
+            mode: cli.mode,
+            is_vi: cli.is_vi,
+            dark,
+            elevated: is_elevated(),
+            auto_run_pending: cli.auto_run,
+            install_dir_text: dir.display().to_string(),
+            create_start_menu: cli.start_menu,
+            create_desktop: cli.desktop,
+            enable_startup_task: cli.startup,
+            launch_after: cli.launch,
+            status: Status::Ready,
+            message: String::new(),
+            installed_exe: None,
         }
-        let mut buf = vec![0u16; len as usize + 1];
-        let got = GetWindowTextW(hwnd, &mut buf);
-        String::from_utf16_lossy(&buf[..got as usize])
     }
-}
 
-fn is_checked(hwnd: HWND) -> bool {
-    unsafe { SendMessageW(hwnd, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 == BST_CHECKED as isize }
-}
-
-fn set_checked(hwnd: HWND, on: bool) {
-    let v = if on { BST_CHECKED } else { BST_UNCHECKED };
-    unsafe {
-        let _ = SendMessageW(hwnd, BM_SETCHECK, Some(WPARAM(v)), Some(LPARAM(0)));
-    }
-}
-
-fn set_shield(hwnd: HWND, on: bool) {
-    unsafe {
-        let _ = SendMessageW(hwnd, BCM_SETSHIELD, Some(WPARAM(0)), Some(LPARAM(on as isize)));
-    }
-}
-
-fn set_font(hwnd: HWND, font: HFONT) {
-    unsafe {
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
-    }
-}
-
-impl UiState {
     fn current_options(&self) -> InstallOptions {
-        let raw = get_text(self.dir_edit).trim().to_string();
+        let raw = self.install_dir_text.trim();
         let install_dir = if raw.is_empty() {
             default_install_dir()
         } else {
@@ -195,178 +168,14 @@ impl UiState {
         };
         InstallOptions {
             install_dir,
-            create_start_menu: is_checked(self.chk_startmenu),
-            create_desktop: is_checked(self.chk_desktop),
-            enable_startup_task: is_checked(self.chk_startup),
-            launch_after: is_checked(self.chk_launch),
+            create_start_menu: self.create_start_menu,
+            create_desktop: self.create_desktop,
+            enable_startup_task: self.enable_startup_task,
+            launch_after: self.launch_after,
         }
     }
 
-    fn refresh_texts(&self) {
-        let vi = self.is_vi;
-        set_text(
-            self.hwnd,
-            &format!(
-                "{APP_NAME} v{APP_VERSION} {}",
-                match (self.mode, vi) {
-                    (Mode::Install, true) => "Cài đặt",
-                    (Mode::Install, false) => "Setup",
-                    (Mode::Uninstall, true) => "Gỡ cài đặt",
-                    (Mode::Uninstall, false) => "Uninstall",
-                }
-            ),
-        );
-        set_text(self.lang_btn, if vi { "EN" } else { "VI" });
-        set_text(self.title_lbl, &format!("{APP_NAME} v{APP_VERSION}"));
-        set_text(
-            self.subtitle_lbl,
-            match (self.mode, vi) {
-                (Mode::Install, true) => "Trình cài đặt PUW Notch cho Windows",
-                (Mode::Install, false) => "PUW Notch Installer for Windows",
-                (Mode::Uninstall, true) => "Gỡ bỏ PUW Notch khỏi máy tính này",
-                (Mode::Uninstall, false) => "Remove PUW Notch from this computer",
-            },
-        );
-        set_text(
-            self.dir_lbl,
-            if vi { "Thư mục cài đặt:" } else { "Installation folder:" },
-        );
-        set_text(self.browse_btn, if vi { "Chọn thư mục…" } else { "Browse…" });
-        set_text(
-            self.chk_startup,
-            if vi {
-                "Khởi động cùng Windows (Task Scheduler, không chớp cửa sổ)"
-            } else {
-                "Start with Windows (Task Scheduler, no console flash)"
-            },
-        );
-        set_text(
-            self.chk_startmenu,
-            if vi { "Tạo lối tắt trong Start Menu" } else { "Create Start Menu shortcut" },
-        );
-        set_text(
-            self.chk_desktop,
-            if vi { "Tạo lối tắt ngoài Desktop" } else { "Create Desktop shortcut" },
-        );
-        set_text(
-            self.chk_launch,
-            if vi { "Mở PUW Notch sau khi cài xong" } else { "Launch PUW Notch after installation" },
-        );
-        set_text(
-            self.perm_title_lbl,
-            if vi { "Quyền & thay đổi trên máy:" } else { "Permissions & system changes:" },
-        );
-        set_text(
-            self.close_btn,
-            if self.done {
-                if vi { "Đóng" } else { "Close" }
-            } else if vi {
-                "Huỷ"
-            } else {
-                "Cancel"
-            },
-        );
-        self.refresh_permissions();
-    }
-
-    fn refresh_permissions(&self) {
-        let vi = self.is_vi;
-        let opts = self.current_options();
-        let need_uac = match self.mode {
-            Mode::Install => needs_elevation(&opts),
-            Mode::Uninstall => path_needs_admin(&opts.install_dir) || true,
-        };
-        let show_shield = !self.done && need_uac && !self.elevated;
-        set_shield(self.action_btn, show_shield);
-
-        let action_label = if self.done {
-            if vi { "Đã xong ✓" } else { "Done ✓" }
-        } else {
-            match (self.mode, vi) {
-                (Mode::Install, true) => "Cài đặt",
-                (Mode::Install, false) => "Install",
-                (Mode::Uninstall, true) => "Gỡ cài đặt",
-                (Mode::Uninstall, false) => "Uninstall",
-            }
-        };
-        set_text(self.action_btn, action_label);
-
-        let body = match self.mode {
-            Mode::Install => {
-                let uac_line = if self.elevated {
-                    if vi {
-                        "• Quyền quản trị (UAC): Đã cấp ✓"
-                    } else {
-                        "• Administrator (UAC): Granted ✓"
-                    }
-                } else if need_uac {
-                    if vi {
-                        "• Quyền quản trị (UAC): Sẽ hỏi khi bấm Cài đặt (ghi thư mục hệ thống / tạo Task)"
-                    } else {
-                        "• Administrator (UAC): Will prompt on Install (system folder / startup task)"
-                    }
-                } else if vi {
-                    "• Quyền quản trị (UAC): Không cần (cài trong thư mục người dùng)"
-                } else {
-                    "• Administrator (UAC): Not required (user folder install)"
-                };
-                let task_line = if opts.enable_startup_task {
-                    if vi {
-                        "• Tạo Scheduled Task \"PuwNotch\" chạy thẳng puw_notch.exe (HighestAvailable)"
-                    } else {
-                        "• Creates Scheduled Task \"PuwNotch\" launching puw_notch.exe directly (HighestAvailable)"
-                    }
-                } else if vi {
-                    "• Không tạo lịch tự khởi động cùng Windows"
-                } else {
-                    "• No Windows startup task will be created"
-                };
-                let dir_line = if vi {
-                    format!("• Ghi puw_notch.exe + puw_notch_uninstall.exe vào: {}", opts.install_dir.display())
-                } else {
-                    format!("• Writes puw_notch.exe + puw_notch_uninstall.exe to: {}", opts.install_dir.display())
-                };
-                let reg_line = if vi {
-                    "• Đăng ký mục Gỡ cài đặt trong Windows Settings → Apps"
-                } else {
-                    "• Registers Uninstall entry in Windows Settings → Apps"
-                };
-                format!("{uac_line}\r\n{dir_line}\r\n{task_line}\r\n{reg_line}")
-            }
-            Mode::Uninstall => {
-                let uac_line = if self.elevated {
-                    if vi {
-                        "• Quyền quản trị (UAC): Đã cấp ✓"
-                    } else {
-                        "• Administrator (UAC): Granted ✓"
-                    }
-                } else if vi {
-                    "• Quyền quản trị (UAC): Sẽ hỏi khi bấm Gỡ cài đặt để xoá Scheduled Task & thư mục cài"
-                } else {
-                    "• Administrator (UAC): Will prompt on Uninstall to remove Scheduled Task & folder"
-                };
-                let detail = if vi {
-                    format!(
-                        "• Tắt PUW Notch đang chạy, xoá Scheduled Task \"PuwNotch\"\r\n• Xoá lối tắt Start Menu, Desktop và mục trong Settings → Apps\r\n• Xoá tệp chương trình tại: {} (giữ nguyên dữ liệu trong %APPDATA%\\PuwNotch)",
-                        opts.install_dir.display()
-                    )
-                } else {
-                    format!(
-                        "• Stops running PUW Notch and removes Scheduled Task \"PuwNotch\"\r\n• Removes Start Menu / Desktop shortcuts and Settings → Apps entry\r\n• Removes program files at: {} (keeps user data in %APPDATA%\\PuwNotch)",
-                        opts.install_dir.display()
-                    )
-                };
-                format!("{uac_line}\r\n{detail}")
-            }
-        };
-        set_text(self.perm_body_lbl, &body);
-        set_text(self.status_lbl, &self.status_text);
-    }
-
-    fn run_action(&mut self) {
-        if self.done {
-            return;
-        }
+    fn run_primary_action(&mut self, ctx: &egui::Context) {
         let opts = self.current_options();
         let need_uac = match self.mode {
             Mode::Install => needs_elevation(&opts),
@@ -385,18 +194,15 @@ impl UiState {
                 ),
                 Mode::Uninstall => format!("--auto-uninstall {lang} --dir \"{dir_escaped}\""),
             };
-            match relaunch_elevated(self.hwnd, &args) {
-                Ok(()) => unsafe {
-                    PostQuitMessage(0);
-                },
-                Err(e) => {
-                    self.failed = true;
-                    self.status_text = if self.is_vi {
-                        format!("Đã huỷ xin quyền quản trị (UAC): {e}")
+            match relaunch_elevated(&args) {
+                Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                Err(err) => {
+                    self.status = Status::Failed;
+                    self.message = if self.is_vi {
+                        format!("Đã huỷ xin quyền quản trị (UAC): {err}")
                     } else {
-                        format!("UAC elevation cancelled: {e}")
+                        format!("UAC elevation cancelled: {err}")
                     };
-                    self.refresh_texts();
                 }
             }
             return;
@@ -405,383 +211,411 @@ impl UiState {
         match self.mode {
             Mode::Install => match perform_install(&opts) {
                 Ok(exe) => {
-                    self.done = true;
-                    self.failed = false;
-                    self.status_text = if self.is_vi {
-                        format!("Cài đặt thành công vào {}", opts.install_dir.display())
+                    self.installed_exe = Some(exe);
+                    self.status = Status::Done;
+                    self.message = if self.is_vi {
+                        format!("Đã cài đặt thành công {APP_NAME} v{APP_VERSION}!")
                     } else {
-                        format!("Installed successfully to {}", opts.install_dir.display())
+                        format!("{APP_NAME} v{APP_VERSION} installed successfully!")
                     };
-                    unsafe {
-                        let _ = EnableWindow(self.action_btn, false);
-                    }
-                    if opts.launch_after {
-                        launch_installed_app(&exe);
-                    }
                 }
-                Err(e) => {
-                    self.failed = true;
-                    self.status_text = if self.is_vi {
-                        format!("Lỗi cài đặt: {e}")
-                    } else {
-                        format!("Install failed: {e}")
-                    };
+                Err(err) => {
+                    self.status = Status::Failed;
+                    self.message = err;
                 }
             },
             Mode::Uninstall => match perform_uninstall(&opts.install_dir) {
                 Ok(()) => {
-                    self.done = true;
-                    self.failed = false;
-                    self.status_text = if self.is_vi {
-                        "Đã gỡ cài đặt PUW Notch thành công.".into()
+                    self.status = Status::Done;
+                    self.message = if self.is_vi {
+                        format!("Đã gỡ cài đặt {APP_NAME} khỏi máy.")
                     } else {
-                        "PUW Notch has been uninstalled.".into()
+                        format!("{APP_NAME} has been uninstalled.")
                     };
-                    unsafe {
-                        let _ = EnableWindow(self.action_btn, false);
-                    }
                 }
-                Err(e) => {
-                    self.failed = true;
-                    self.status_text = if self.is_vi {
-                        format!("Lỗi gỡ cài đặt: {e}")
-                    } else {
-                        format!("Uninstall failed: {e}")
-                    };
+                Err(err) => {
+                    self.status = Status::Failed;
+                    self.message = err;
                 }
             },
         }
-        self.refresh_texts();
     }
 }
 
-fn make_font(dpi: i32, pt: i32, bold: bool) -> HFONT {
-    let height = -((pt * dpi) / 72);
-    unsafe {
-        CreateFontW(
-            height,
-            0,
-            0,
-            0,
-            if bold { FW_SEMIBOLD.0 as i32 } else { FW_NORMAL.0 as i32 },
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            windows::Win32::Graphics::Gdi::CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            w!("Segoe UI"),
-        )
-    }
-}
-
-extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    match msg {
-        WM_COMMAND => {
-            let id = (wp.0 & 0xFFFF) as isize;
-            let code = ((wp.0 >> 16) & 0xFFFF) as u32;
-            STATE.with(|s| {
-                let mut g = s.borrow_mut();
-                let Some(st) = g.as_mut() else { return };
-                match id {
-                    ID_LANG if code == BN_CLICKED => {
-                        st.is_vi = !st.is_vi;
-                        st.refresh_texts();
-                    }
-                    ID_BROWSE if code == BN_CLICKED => {
-                        let cur = st.current_options().install_dir;
-                        let title = if st.is_vi {
-                            "Chọn thư mục cài đặt PUW Notch"
-                        } else {
-                            "Choose PUW Notch installation folder"
-                        };
-                        if let Some(chosen) = shortcut::pick_folder(hwnd, &cur, title) {
-                            let final_dir = if chosen
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .is_some_and(|n| n.eq_ignore_ascii_case(APP_NAME) || n.eq_ignore_ascii_case("PuwNotch"))
-                            {
-                                chosen
-                            } else {
-                                chosen.join(APP_NAME)
-                            };
-                            set_text(st.dir_edit, &final_dir.display().to_string());
-                            st.refresh_permissions();
-                        }
-                    }
-                    ID_DIR_EDIT if code == EN_CHANGE => st.refresh_permissions(),
-                    ID_CHK_STARTUP | ID_CHK_STARTMENU | ID_CHK_DESKTOP | ID_CHK_LAUNCH if code == BN_CLICKED => {
-                        st.refresh_permissions();
-                    }
-                    ID_ACTION if code == BN_CLICKED => st.run_action(),
-                    ID_CLOSE if code == BN_CLICKED => unsafe {
-                        PostQuitMessage(0);
-                    },
-                    _ => {}
-                }
-            });
-            LRESULT(0)
+impl eframe::App for InstallerApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.auto_run_pending {
+            self.auto_run_pending = false;
+            self.run_primary_action(ctx);
         }
-        WM_AUTO_RUN => {
-            STATE.with(|s| {
-                if let Some(st) = s.borrow_mut().as_mut() {
-                    st.run_action();
-                }
-            });
-            LRESULT(0)
-        }
-        WM_CTLCOLORSTATIC => {
-            let hdc = HDC(wp.0 as _);
-            let ctl = HWND(lp.0 as _);
-            STATE.with(|s| {
-                let g = s.borrow();
-                let Some(st) = g.as_ref() else {
-                    return unsafe { LRESULT(GetStockObject(WHITE_BRUSH).0 as isize) };
-                };
-                unsafe {
-                    SetBkMode(hdc, TRANSPARENT);
-                    if ctl == st.status_lbl {
-                        let c = if st.failed {
-                            COLORREF(0x002B2BD6) // red
-                        } else if st.done {
-                            COLORREF(0x001E7E34) // green
-                        } else {
-                            COLORREF(0x00606060)
-                        };
-                        SetTextColor(hdc, c);
-                        SetBkColor(hdc, COLORREF(0x00F5F5F5));
-                        LRESULT(st.bg_brush.0 as isize)
-                    } else if ctl == st.perm_title_lbl || ctl == st.perm_body_lbl {
-                        SetTextColor(hdc, COLORREF(0x00202020));
-                        SetBkColor(hdc, COLORREF(0x00FFFFFF));
-                        LRESULT(st.card_brush.0 as isize)
-                    } else if ctl == st.subtitle_lbl {
-                        SetTextColor(hdc, COLORREF(0x00606060));
-                        SetBkColor(hdc, COLORREF(0x00F5F5F5));
-                        LRESULT(st.bg_brush.0 as isize)
-                    } else {
-                        SetTextColor(hdc, COLORREF(0x00181818));
-                        SetBkColor(hdc, COLORREF(0x00F5F5F5));
-                        LRESULT(st.bg_brush.0 as isize)
-                    }
-                }
-            })
-        }
-        WM_DESTROY => {
-            STATE.with(|s| {
-                if let Some(st) = s.borrow_mut().take() {
-                    unsafe {
-                        let _ = DeleteObject(HGDIOBJ(st.font_title.0));
-                        let _ = DeleteObject(HGDIOBJ(st.font_bold.0));
-                        let _ = DeleteObject(HGDIOBJ(st.font_body.0));
-                        let _ = DeleteObject(HGDIOBJ(st.bg_brush.0));
-                        let _ = DeleteObject(HGDIOBJ(st.card_brush.0));
-                    }
-                }
-            });
-            unsafe { PostQuitMessage(0) };
-            LRESULT(0)
-        }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
-    }
-}
 
-fn main() {
-    let cli = CliArgs::parse();
-    unsafe {
-        let icc = INITCOMMONCONTROLSEX {
-            dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_STANDARD_CLASSES,
-        };
-        let _ = InitCommonControlsEx(&icc);
-
-        let hinst = GetModuleHandleW(None).unwrap_or_default();
-        let bg_brush = CreateSolidBrush(COLORREF(0x00F5F5F5));
-        let card_brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
-        let class = w!("PuwNotchSetupWindow");
-        let wc = WNDCLASSEXW {
-            cbSize: size_of::<WNDCLASSEXW>() as u32,
-            lpfnWndProc: Some(wndproc),
-            hInstance: hinst.into(),
-            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            hIcon: LoadIconW(Some(hinst.into()), PCWSTR(1 as *const u16)).unwrap_or_default(),
-            hbrBackground: bg_brush,
-            lpszClassName: class,
-            ..Default::default()
-        };
-        RegisterClassExW(&wc);
-
-        let base_w = 540;
-        let base_h = if cli.mode == Mode::Install { 460 } else { 330 };
-        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            class,
-            w!("PUW Notch Setup"),
-            style,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            base_w,
-            base_h,
-            None,
-            None,
-            Some(hinst.into()),
-            None,
-        )
-        .expect("CreateWindowExW failed");
-
-        let dpi = GetDpiForWindow(hwnd).max(96) as i32;
-        let sc = |v: i32| (v * dpi + 48) / 96;
-        let mut wr = RECT {
-            left: 0,
-            top: 0,
-            right: sc(base_w),
-            bottom: sc(base_h),
-        };
-        let _ = AdjustWindowRectEx(&mut wr, style, false, WINDOW_EX_STYLE::default());
-        let ww = wr.right - wr.left;
-        let wh = wr.bottom - wr.top;
-        let sx = (GetSystemMetrics(SM_CXSCREEN) - ww) / 2;
-        let sy = (GetSystemMetrics(SM_CYSCREEN) - wh) / 2;
-        let _ = SetWindowPos(hwnd, None, sx.max(0), sy.max(0), ww, wh, SWP_NOZORDER);
-
-        let font_title = make_font(dpi, 15, true);
-        let font_bold = make_font(dpi, 10, true);
-        let font_body = make_font(dpi, 9, false);
-
-        let ctrl = |cls: PCWSTR, text: PCWSTR, st: WINDOW_STYLE, ex: WINDOW_EX_STYLE, x: i32, y: i32, w: i32, h: i32, id: isize| -> HWND {
-            CreateWindowExW(
-                ex,
-                cls,
-                text,
-                WS_CHILD | WS_VISIBLE | st,
-                sc(x),
-                sc(y),
-                sc(w),
-                sc(h),
-                Some(hwnd),
-                Some(HMENU(id as _)),
-                Some(hinst.into()),
-                None,
+        let (bg, card, border, text_pri, text_sec, accent, warn_col, ok_col) = if self.dark {
+            (
+                Color32::from_rgb(24, 24, 24),
+                Color32::from_rgb(35, 35, 35),
+                Color32::from_rgb(56, 56, 56),
+                Color32::from_rgb(243, 243, 243),
+                Color32::from_rgb(168, 168, 168),
+                Color32::from_rgb(76, 194, 255),
+                Color32::from_rgb(252, 200, 90),
+                Color32::from_rgb(108, 214, 134),
             )
-            .expect("create control")
-        };
-
-        let title_lbl = ctrl(w!("STATIC"), w!(""), WINDOW_STYLE(0), WINDOW_EX_STYLE(0), 22, 16, 420, 28, ID_TITLE);
-        let subtitle_lbl = ctrl(w!("STATIC"), w!(""), WINDOW_STYLE(0), WINDOW_EX_STYLE(0), 22, 46, 420, 20, ID_SUBTITLE);
-        let lang_btn = ctrl(w!("BUTTON"), w!("EN"), WINDOW_STYLE(BS_PUSHBUTTON as u32), WINDOW_EX_STYLE(0), 472, 18, 46, 26, ID_LANG);
-
-        let dir_lbl = ctrl(w!("STATIC"), w!(""), WINDOW_STYLE(0), WINDOW_EX_STYLE(0), 22, 78, 496, 20, ID_DIR_LABEL);
-        let edit_style = if cli.mode == Mode::Uninstall {
-            WINDOW_STYLE(ES_AUTOHSCROLL as u32 | ES_READONLY as u32)
         } else {
-            WINDOW_STYLE(ES_AUTOHSCROLL as u32)
+            (
+                Color32::from_rgb(243, 243, 243),
+                Color32::from_rgb(255, 255, 255),
+                Color32::from_rgb(224, 224, 224),
+                Color32::from_rgb(24, 24, 24),
+                Color32::from_rgb(96, 96, 96),
+                Color32::from_rgb(0, 103, 192),
+                Color32::from_rgb(176, 104, 0),
+                Color32::from_rgb(20, 130, 56),
+            )
         };
-        let dir_edit = ctrl(w!("EDIT"), w!(""), edit_style, WS_EX_CLIENTEDGE, 22, 100, if cli.mode == Mode::Install { 378 } else { 496 }, 26, ID_DIR_EDIT);
-        let browse_btn = ctrl(
-            w!("BUTTON"),
-            w!(""),
-            WINDOW_STYLE(BS_PUSHBUTTON as u32),
-            WINDOW_EX_STYLE(0),
-            408,
-            99,
-            110,
-            28,
-            ID_BROWSE,
-        );
-        if cli.mode == Mode::Uninstall {
-            let _ = ShowWindow(browse_btn, SW_HIDE);
-        }
 
-        let chk_startup = ctrl(w!("BUTTON"), w!(""), WINDOW_STYLE(BS_AUTOCHECKBOX as u32), WINDOW_EX_STYLE(0), 24, 138, 492, 22, ID_CHK_STARTUP);
-        let chk_startmenu = ctrl(w!("BUTTON"), w!(""), WINDOW_STYLE(BS_AUTOCHECKBOX as u32), WINDOW_EX_STYLE(0), 24, 164, 492, 22, ID_CHK_STARTMENU);
-        let chk_desktop = ctrl(w!("BUTTON"), w!(""), WINDOW_STYLE(BS_AUTOCHECKBOX as u32), WINDOW_EX_STYLE(0), 24, 190, 492, 22, ID_CHK_DESKTOP);
-        let chk_launch = ctrl(w!("BUTTON"), w!(""), WINDOW_STYLE(BS_AUTOCHECKBOX as u32), WINDOW_EX_STYLE(0), 24, 216, 492, 22, ID_CHK_LAUNCH);
-        if cli.mode == Mode::Uninstall {
-            for c in [chk_startup, chk_startmenu, chk_desktop, chk_launch] {
-                let _ = ShowWindow(c, SW_HIDE);
-            }
-        }
-
-        let perm_y = if cli.mode == Mode::Install { 250 } else { 142 };
-        let perm_title_lbl = ctrl(w!("STATIC"), w!(""), WINDOW_STYLE(0), WS_EX_STATICEDGE, 22, perm_y, 496, 22, ID_PERM_TITLE);
-        let perm_body_lbl = ctrl(w!("STATIC"), w!(""), WINDOW_STYLE(0), WS_EX_STATICEDGE, 22, perm_y + 22, 496, 100, ID_PERM_BODY);
-
-        let status_y = if cli.mode == Mode::Install { 382 } else { 270 };
-        let status_lbl = ctrl(w!("STATIC"), w!(""), WINDOW_STYLE(0), WINDOW_EX_STYLE(0), 22, status_y, 496, 22, ID_STATUS);
-
-        let btn_y = if cli.mode == Mode::Install { 412 } else { 292 };
-        let action_btn = ctrl(w!("BUTTON"), w!(""), WINDOW_STYLE(BS_DEFPUSHBUTTON as u32), WINDOW_EX_STYLE(0), 300, btn_y, 120, 32, ID_ACTION);
-        let close_btn = ctrl(w!("BUTTON"), w!(""), WINDOW_STYLE(BS_PUSHBUTTON as u32), WINDOW_EX_STYLE(0), 428, btn_y, 90, 32, ID_CLOSE);
-
-        set_font(title_lbl, font_title);
-        set_font(dir_lbl, font_bold);
-        set_font(perm_title_lbl, font_bold);
-        for c in [subtitle_lbl, lang_btn, dir_edit, browse_btn, chk_startup, chk_startmenu, chk_desktop, chk_launch, perm_body_lbl, status_lbl, action_btn, close_btn] {
-            set_font(c, font_body);
-        }
-
-        let initial_dir = cli.dir.unwrap_or_else(|| {
-            if cli.mode == Mode::Uninstall {
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                    .unwrap_or_else(default_install_dir)
-            } else {
-                default_install_dir()
-            }
-        });
-        set_text(dir_edit, &initial_dir.display().to_string());
-        set_checked(chk_startup, cli.startup);
-        set_checked(chk_startmenu, cli.start_menu);
-        set_checked(chk_desktop, cli.desktop);
-        set_checked(chk_launch, cli.launch);
-
-        let state = UiState {
-            hwnd,
-            mode: cli.mode,
-            is_vi: cli.is_vi,
-            elevated: is_elevated(),
-            done: false,
-            failed: false,
-            status_text: String::new(),
-            dir_edit,
-            browse_btn,
-            lang_btn,
-            chk_startup,
-            chk_startmenu,
-            chk_desktop,
-            chk_launch,
-            action_btn,
-            close_btn,
-            title_lbl,
-            subtitle_lbl,
-            dir_lbl,
-            perm_title_lbl,
-            perm_body_lbl,
-            status_lbl,
-            font_title,
-            font_bold,
-            font_body,
-            bg_brush,
-            card_brush,
+        let opts = self.current_options();
+        let need_uac = match self.mode {
+            Mode::Install => needs_elevation(&opts),
+            Mode::Uninstall => true,
         };
-        state.refresh_texts();
-        STATE.with(|s| *s.borrow_mut() = Some(state));
 
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        if cli.auto_run {
-            let _ = PostMessageW(Some(hwnd), WM_AUTO_RUN, WPARAM(0), LPARAM(0));
-        }
+        egui::CentralPanel::default()
+            .frame(Frame::new().fill(bg).inner_margin(Margin::same(22)))
+            .show(ctx, |ui| {
+                // Header
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(format!("{APP_NAME} v{APP_VERSION} Setup"))
+                                .size(20.0)
+                                .strong()
+                                .color(text_pri),
+                        );
+                        ui.label(
+                            RichText::new(match (self.mode, self.is_vi) {
+                                (Mode::Install, true) => "Trình cài đặt chiếc notch sống cho Windows",
+                                (Mode::Install, false) => "Installer for a living notch on Windows",
+                                (Mode::Uninstall, true) => "Gỡ cài đặt PUW Notch khỏi máy tính",
+                                (Mode::Uninstall, false) => "Uninstall PUW Notch from this computer",
+                            })
+                            .size(12.0)
+                            .color(text_sec),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                        let lang_btn = if self.is_vi { "EN" } else { "VI" };
+                        if ui.button(lang_btn).clicked() {
+                            self.is_vi = !self.is_vi;
+                        }
+                    });
+                });
 
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            if !IsDialogMessageW(hwnd, &msg).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
+                ui.add_space(12.0);
+
+                // Options card
+                Frame::new()
+                    .fill(card)
+                    .stroke(Stroke::new(1.0_f32, border))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::same(14))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        match self.mode {
+                            Mode::Install => {
+                                ui.label(
+                                    RichText::new(if self.is_vi {
+                                        "Thư mục cài đặt"
+                                    } else {
+                                        "Installation folder"
+                                    })
+                                    .size(12.5)
+                                    .strong()
+                                    .color(text_pri),
+                                );
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    let browse_w = 104.0;
+                                    let edit_w = (ui.available_width() - browse_w - 8.0).max(120.0);
+                                    ui.add_sized(
+                                        [edit_w, 28.0],
+                                        egui::TextEdit::singleline(&mut self.install_dir_text),
+                                    );
+                                    let browse_txt = if self.is_vi { "Chọn thư mục…" } else { "Browse…" };
+                                    if ui.add_sized([browse_w, 28.0], egui::Button::new(browse_txt)).clicked() {
+                                        let cur = PathBuf::from(self.install_dir_text.trim());
+                                        let title = if self.is_vi {
+                                            "Chọn thư mục cài đặt PUW Notch"
+                                        } else {
+                                            "Choose PUW Notch installation folder"
+                                        };
+                                        if let Some(chosen) = shortcut::pick_folder(None, &cur, title) {
+                                            let final_dir = if chosen
+                                                .file_name()
+                                                .and_then(|n| n.to_str())
+                                                .is_some_and(|n| {
+                                                    n.eq_ignore_ascii_case(APP_NAME)
+                                                        || n.eq_ignore_ascii_case("PuwNotch")
+                                                }) {
+                                                chosen
+                                            } else {
+                                                chosen.join(APP_NAME)
+                                            };
+                                            self.install_dir_text = final_dir.display().to_string();
+                                        }
+                                    }
+                                });
+                                ui.add_space(10.0);
+                                ui.checkbox(
+                                    &mut self.enable_startup_task,
+                                    if self.is_vi {
+                                        "Khởi động cùng Windows (Task Scheduler, không chớp cửa sổ)"
+                                    } else {
+                                        "Start with Windows (Task Scheduler, no console flash)"
+                                    },
+                                );
+                                ui.checkbox(
+                                    &mut self.create_start_menu,
+                                    if self.is_vi {
+                                        "Tạo lối tắt trong Start Menu"
+                                    } else {
+                                        "Create Start Menu shortcut"
+                                    },
+                                );
+                                ui.checkbox(
+                                    &mut self.create_desktop,
+                                    if self.is_vi {
+                                        "Tạo lối tắt ngoài Desktop"
+                                    } else {
+                                        "Create Desktop shortcut"
+                                    },
+                                );
+                                ui.checkbox(
+                                    &mut self.launch_after,
+                                    if self.is_vi {
+                                        "Mở PUW Notch sau khi cài xong"
+                                    } else {
+                                        "Launch PUW Notch after installation"
+                                    },
+                                );
+                            }
+                            Mode::Uninstall => {
+                                ui.label(
+                                    RichText::new(if self.is_vi {
+                                        "Gỡ cài đặt PUW Notch khỏi máy tính này"
+                                    } else {
+                                        "Uninstall PUW Notch from this computer"
+                                    })
+                                    .size(13.0)
+                                    .strong()
+                                    .color(text_pri),
+                                );
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}: {}",
+                                        if self.is_vi { "Thư mục" } else { "Folder" },
+                                        self.install_dir_text
+                                    ))
+                                    .size(12.0)
+                                    .color(text_sec),
+                                );
+                            }
+                        }
+                    });
+
+                ui.add_space(10.0);
+
+                // Permissions & system changes card (transparent UAC & actions)
+                Frame::new()
+                    .fill(card)
+                    .stroke(Stroke::new(1.0_f32, border))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            RichText::new(if self.is_vi {
+                                "Quyền & thay đổi trên máy"
+                            } else {
+                                "Permissions & system changes"
+                            })
+                            .size(12.0)
+                            .strong()
+                            .color(text_pri),
+                        );
+                        ui.add_space(4.0);
+                        let (uac_txt, uac_col) = if self.elevated {
+                            (
+                                if self.is_vi {
+                                    "• Quyền quản trị (UAC): Đã cấp"
+                                } else {
+                                    "• Administrator (UAC): Granted"
+                                },
+                                ok_col,
+                            )
+                        } else if need_uac {
+                            (
+                                if self.is_vi {
+                                    "• Quyền quản trị (UAC): Sẽ hỏi khi bấm để ghi thư mục hệ thống / tạo Task"
+                                } else {
+                                    "• Administrator (UAC): Will prompt to write system folder / startup task"
+                                },
+                                warn_col,
+                            )
+                        } else {
+                            (
+                                if self.is_vi {
+                                    "• Quyền quản trị (UAC): Không cần (cài trong thư mục người dùng)"
+                                } else {
+                                    "• Administrator (UAC): Not required (user folder install)"
+                                },
+                                ok_col,
+                            )
+                        };
+                        ui.label(RichText::new(uac_txt).size(11.5).color(uac_col));
+
+                        let details = match self.mode {
+                            Mode::Install => {
+                                let task = if self.enable_startup_task {
+                                    if self.is_vi {
+                                        "• Tạo Scheduled Task \"PuwNotch\" chạy thẳng puw_notch.exe (HighestAvailable)"
+                                    } else {
+                                        "• Creates Scheduled Task \"PuwNotch\" launching puw_notch.exe directly (HighestAvailable)"
+                                    }
+                                } else if self.is_vi {
+                                    "• Không tạo lịch tự khởi động cùng Windows"
+                                } else {
+                                    "• No Windows startup task will be created"
+                                };
+                                let reg = if self.is_vi {
+                                    "• Đăng ký gỡ cài đặt trong Windows Settings -> Apps"
+                                } else {
+                                    "• Registers uninstall entry in Windows Settings -> Apps"
+                                };
+                                format!("{task}\n{reg}")
+                            }
+                            Mode::Uninstall => {
+                                if self.is_vi {
+                                    "• Tắt PUW Notch, xoá Scheduled Task, lối tắt và mục Settings -> Apps (giữ %APPDATA%\\PuwNotch)".into()
+                                } else {
+                                    "• Stops PUW Notch, removes Scheduled Task, shortcuts and Settings -> Apps entry (keeps %APPDATA%\\PuwNotch)".into()
+                                }
+                            }
+                        };
+                        ui.label(RichText::new(details).size(11.5).color(text_sec));
+                    });
+
+                ui.add_space(8.0);
+
+                ui.label(
+                    RichText::new(if self.is_vi {
+                        "Bản cài đặt chưa có chữ ký số (Unsigned) · Chỉ tải từ github.com/erikpuw/puw_notch"
+                    } else {
+                        "Unsigned installer build · Download only from github.com/erikpuw/puw_notch"
+                    })
+                    .size(11.0)
+                    .color(text_sec),
+                );
+
+                if !self.message.is_empty() {
+                    ui.add_space(6.0);
+                    let msg_col = match self.status {
+                        Status::Done => accent,
+                        Status::Failed => Color32::from_rgb(255, 110, 110),
+                        Status::Ready => text_sec,
+                    };
+                    ui.label(RichText::new(&self.message).size(12.5).color(msg_col));
+                }
+
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
+                    ui.horizontal(|ui| {
+                        if self.status == Status::Done {
+                            let finish_txt = if self.is_vi { "Hoàn tất" } else { "Finish" };
+                            if ui
+                                .add_sized([110.0, 32.0], egui::Button::new(finish_txt))
+                                .clicked()
+                            {
+                                if self.mode == Mode::Install && self.launch_after {
+                                    if let Some(exe) = &self.installed_exe {
+                                        launch_installed_app(exe);
+                                    }
+                                }
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        } else {
+                            let primary_txt = match (self.mode, self.is_vi, need_uac && !self.elevated) {
+                                (Mode::Install, true, true) => "Cài đặt (UAC)",
+                                (Mode::Install, true, false) => "Cài đặt",
+                                (Mode::Install, false, true) => "Install (UAC)",
+                                (Mode::Install, false, false) => "Install",
+                                (Mode::Uninstall, true, true) => "Gỡ cài đặt (UAC)",
+                                (Mode::Uninstall, true, false) => "Gỡ cài đặt",
+                                (Mode::Uninstall, false, true) => "Uninstall (UAC)",
+                                (Mode::Uninstall, false, false) => "Uninstall",
+                            };
+                            if ui
+                                .add_sized([132.0, 32.0], egui::Button::new(primary_txt))
+                                .clicked()
+                            {
+                                self.run_primary_action(ctx);
+                            }
+
+                            let cancel_txt = if self.is_vi { "Đóng" } else { "Cancel" };
+                            if ui
+                                .add_sized([90.0, 32.0], egui::Button::new(cancel_txt))
+                                .clicked()
+                            {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
+                    });
+                });
+            });
     }
+}
+
+fn configure_fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
+        fonts
+            .font_data
+            .insert("segoeui".to_owned(), Arc::new(FontData::from_owned(bytes)));
+        fonts
+            .families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .insert(0, "segoeui".to_owned());
+        ctx.set_fonts(fonts);
+    }
+}
+
+fn apply_visuals(ctx: &egui::Context, dark: bool) {
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(6);
+    visuals.widgets.active.corner_radius = CornerRadius::same(6);
+    ctx.set_visuals(visuals);
+}
+
+fn main() -> eframe::Result<()> {
+    let cli = CliArgs::parse();
+    let height = if cli.mode == Mode::Install { 465.0 } else { 340.0 };
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title(format!("{APP_NAME} v{APP_VERSION} Setup"))
+            .with_inner_size(Vec2::new(540.0, height))
+            .with_resizable(false),
+        centered: true,
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "PUW Notch Setup",
+        options,
+        Box::new(move |cc| Ok(Box::new(InstallerApp::new(cc, cli)))),
+    )
 }

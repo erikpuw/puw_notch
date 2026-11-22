@@ -137,7 +137,7 @@ The tray menu (right-click the icon):
 
 ## Download and run
 
-Get `puw_notch_setup.exe` (~991 KB installer with folder picker, Windows startup task and Settings → Apps uninstall) or the standalone `puw_notch.exe` from [Releases](https://github.com/erikpuw/puw_notch/releases) (download only from here, see the note at the top). The app is not code-signed, so nothing but this source confirms a file is the author's, and Windows may block it:
+Get `puw-notch-setup-v1.0.44-x64.exe` (~3.6 MB installer with folder picker, Windows startup task and Settings → Apps uninstall) or the standalone `puw-notch-v1.0.44-portable-x64.exe` from [Releases](https://github.com/erikpuw/puw_notch/releases) (download only from here, see the note at the top). The app is not code-signed, so nothing but this source confirms a file is the author's, and Windows may block it:
 
 The exe already contains the Visual C++ C runtime (statically linked), so a fresh Windows install runs it as is, with no vcredist to install.
 

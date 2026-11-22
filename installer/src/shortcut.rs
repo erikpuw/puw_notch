@@ -65,7 +65,7 @@ pub fn create_shortcut(
     Ok(())
 }
 
-pub fn pick_folder(owner: HWND, current: &Path, title: &str) -> Option<PathBuf> {
+pub fn pick_folder(owner: Option<HWND>, current: &Path, title: &str) -> Option<PathBuf> {
     let _com = ComGuard::init();
     unsafe {
         let dialog: IFileOpenDialog =
@@ -82,7 +82,7 @@ pub fn pick_folder(owner: HWND, current: &Path, title: &str) -> Option<PathBuf> 
                 let _ = dialog.SetFolder(&item);
             }
         }
-        dialog.Show(Some(owner)).ok()?;
+        dialog.Show(owner).ok()?;
         let item = dialog.GetResult().ok()?;
         let pwstr = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
         let text = pwstr.to_string().ok();
