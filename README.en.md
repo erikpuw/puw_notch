@@ -11,7 +11,7 @@
   Written in Rust, ~1084 KB exe, no WebView, no Visual C++ Redistributable to install.
 </p>
 
-<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puw_notch/releases/tag/v1.0.44">Latest: v1.0.44</a></p>
+<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puw_notch/releases/latest"><img src="https://img.shields.io/github/v/release/erikpuw/puw_notch?label=Latest" alt="Latest release" valign="middle"></a></p>
 
 > **Download only from the author's source.** PUW Notch is published by its author (erikpuw) only at [github.com/erikpuw/puw_notch](https://github.com/erikpuw/puw_notch). A copy from anywhere else (file-sharing sites, other repositories, repackaged builds, files sent over the internet) is not controlled by the author and comes with no guarantee: it may have been modified or had code added. Use only the build in this repository's [Releases](https://github.com/erikpuw/puw_notch/releases).
 
@@ -137,7 +137,7 @@ The tray menu (right-click the icon):
 
 ## Download and run
 
-Get `puw-notch-setup-v1.0.44-x64.exe` (~998 KB, with folder picker, Windows startup task and Settings → Apps uninstall) from [Releases](https://github.com/erikpuw/puw_notch/releases) and run it to install (download only from here, see the note at the top). If PUW Notch is already running, close it before installing or updating (right-click the tray icon → **Quit**).
+Get the installer `puw-notch-setup-*-x64.exe` (~998 KB, with folder picker, Windows startup task and Settings → Apps uninstall) from [Latest Release](https://github.com/erikpuw/puw_notch/releases/latest) and run it to install (download only from here, see the note at the top). If PUW Notch is already running, close it before installing or updating (right-click the tray icon → **Quit**).
 
 The app is not code-signed, so nothing but this source confirms a file is the author's, and Windows may block it:
 

@@ -11,7 +11,7 @@
   Viết bằng Rust, exe ~1084 KB, không WebView, không cần cài Visual C++ Redistributable.
 </p>
 
-<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puw_notch/releases/tag/v1.0.44">Bản mới nhất: v1.0.44</a></p>
+<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puw_notch/releases/latest"><img src="https://img.shields.io/github/v/release/erikpuw/puw_notch?label=B%E1%BA%A3n%20m%E1%BB%9Bi%20nh%E1%BA%A5t" alt="Bản mới nhất" valign="middle"></a></p>
 
 > **Chỉ tải từ nguồn của tác giả.** PUW Notch do tác giả (erikpuw) phát hành duy nhất tại [github.com/erikpuw/puw_notch](https://github.com/erikpuw/puw_notch). Bản tải từ nơi khác (trang chia sẻ, kho khác, bản đóng gói lại, tệp gửi qua mạng) không do tác giả kiểm soát và không được đảm bảo: có thể đã bị sửa đổi hoặc chèn thêm mã. Hãy chỉ dùng bản ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) của kho này.
 
@@ -137,7 +137,7 @@ Menu ở khay hệ thống (chuột phải vào biểu tượng):
 
 ## Tải về và chạy
 
-Tải `puw-notch-setup-v1.0.44-x64.exe` (~998 KB, chọn thư mục, tự khởi động cùng Windows và gỡ trong Settings → Apps) ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) rồi chạy để cài (chỉ tải ở đây, xem lưu ý ở đầu trang). Nếu PUW Notch đang chạy, hãy tắt trước khi cài đặt hoặc cập nhật (chuột phải biểu tượng ở khay hệ thống → **Thoát**).
+Tải bản cài đặt `puw-notch-setup-*-x64.exe` (~998 KB, chọn thư mục, tự khởi động cùng Windows và gỡ trong Settings → Apps) ở [Releases (bản mới nhất)](https://github.com/erikpuw/puw_notch/releases/latest) rồi chạy để cài (chỉ tải ở đây, xem lưu ý ở đầu trang). Nếu PUW Notch đang chạy, hãy tắt trước khi cài đặt hoặc cập nhật (chuột phải biểu tượng ở khay hệ thống → **Thoát**).
 
 App chưa có chữ ký số, nên không có gì khác ngoài nguồn này để xác nhận file là của tác giả, và Windows có thể chặn:
 
