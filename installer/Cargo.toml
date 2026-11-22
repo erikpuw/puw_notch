@@ -1,6 +1,6 @@
 [package]
 name = "puw_notch_setup"
-version = "1.0.44"
+version = "1.0.45"
 edition = "2021"
 description = "PUW Notch Setup: installer & uninstaller for Windows"
 
