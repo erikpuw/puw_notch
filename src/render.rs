@@ -328,6 +328,13 @@ fn dots_y(h: f32) -> f32 {
     h - 12.0
 }
 
+fn window_over(canvas: (i32, i32, i32, i32), region: (i32, i32, i32, i32)) -> (i32, (i32, i32, i32, i32)) {
+    let shift = region.0.clamp(0, (canvas.2 - 1).max(0));
+    let width = (region.2.min(canvas.2) - shift).max(1);
+    let height = region.3.min(canvas.3).max(1);
+    (shift, (canvas.0 + shift, canvas.1, width, height))
+}
+
 fn dots_reached(notch_h: f32, h: f32) -> f32 {
     ((notch_h - (dots_y(h) + 6.0)) / 6.0).clamp(0.0, 1.0)
 }
@@ -1018,6 +1025,7 @@ pub struct Renderer {
     h: i32,
     placed: (i32, i32, i32, i32),
     region: (i32, i32, i32, i32),
+    shift: i32,
     moving: bool,
     pub usage: crate::usage::Snapshot,
     pub usage_tab: usize,
@@ -1087,9 +1095,9 @@ fn rounded(r: D2D_RECT_F, radius: f32) -> D2D1_ROUNDED_RECT {
 struct Surface {
     hwnd: HWND,
     swap: IDXGISwapChain1,
-    _dcomp: IDCompositionDevice,
+    dcomp: IDCompositionDevice,
     _target: IDCompositionTarget,
-    _visual: IDCompositionVisual,
+    visual: IDCompositionVisual,
 }
 
 const PIXELS: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED };
@@ -1126,7 +1134,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), moving: false, usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), shift: 0, moving: false, usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
                 owner: Owner::Pill,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_fade: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
@@ -1175,9 +1183,10 @@ impl Renderer {
                 let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
                 let visual = dcomp.CreateVisual()?;
                 visual.SetContent(&swap)?;
+                visual.SetOffsetX2(-(self.shift as f32))?;
                 target.SetRoot(&visual)?;
                 dcomp.Commit()?;
-                self.surface = Some(Surface { hwnd, swap, _dcomp: dcomp, _target: target, _visual: visual });
+                self.surface = Some(Surface { hwnd, swap, dcomp, _target: target, visual });
             }
             let buffer: IDXGISurface = self.surface.as_ref().unwrap().swap.GetBuffer(0)?;
             let props = D2D1_BITMAP_PROPERTIES1 {
@@ -1199,8 +1208,9 @@ impl Renderer {
         self.moving = moving;
     }
 
-    /// The window is as tall as its region, so a window capture ends at the notch's bottom shadow
-    /// instead of at the full transparent canvas. The swap chain keeps the full size.
+    /// The window covers only the region, so a window capture hugs the notch on every side
+    /// instead of the full transparent canvas. The swap chain keeps the full canvas size and the
+    /// visual is shifted left by the window's offset so the picture stays put on screen.
     fn place(&mut self, hwnd: HWND, at: (i32, i32, i32, i32), region: (i32, i32, i32, i32)) {
         unsafe {
             let target = if self.moving {
@@ -1212,16 +1222,25 @@ impl Renderer {
             } else {
                 region
             };
-            let at = (at.0, at.1, at.2, target.3.clamp(1, at.3));
-            if at != self.placed {
-                self.placed = at;
-                let _ = SetWindowPos(hwnd, None, at.0, at.1, at.2, at.3, SWP_NOZORDER | SWP_NOACTIVATE);
+            let (shift, window) = window_over(at, target);
+            self.region = target;
+            if shift != self.shift {
+                self.shift = shift;
+                if let Some(s) = &self.surface {
+                    let _ = s.visual.SetOffsetX2(-(shift as f32));
+                    let _ = s.dcomp.Commit();
+                }
             }
-            if target != self.region {
-                self.region = target;
-                SetWindowRgn(hwnd, Some(CreateRectRgn(target.0, target.1, target.2, target.3)), false);
+            if window != self.placed {
+                self.placed = window;
+                let _ = SetWindowPos(hwnd, None, window.0, window.1, window.2, window.3, SWP_NOZORDER | SWP_NOACTIVATE);
             }
         }
+    }
+
+    pub fn canvas_point(&self, lp: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LPARAM {
+        let x = (lp.0 & 0xffff) as i16 as i32 + self.shift;
+        windows::Win32::Foundation::LPARAM((lp.0 & !0xffff) | (x as u16 as isize))
     }
 
     #[cfg(test)]
@@ -3086,6 +3105,15 @@ mod tests {
         assert_eq!(first.bottom - first.top, 22.0);
         assert_eq!(ph - (dots_y(ph) + 5.0), 7.0);
         assert_eq!(ph + NAV_EXTRA - first.bottom, 5.0);
+    }
+
+    #[test]
+    fn the_window_covers_only_the_notch_region_and_shifts_the_picture_back() {
+        let canvas = (100, 0, 800, 300);
+        assert_eq!(window_over(canvas, (300, 0, 500, 40)), (300, (400, 0, 200, 40)), "pill: tight on both sides and the bottom");
+        assert_eq!(window_over(canvas, (0, 0, 800, 300)), (0, (100, 0, 800, 300)), "while moving: the whole canvas");
+        assert_eq!(window_over(canvas, (-5, 0, 900, 400)), (0, (100, 0, 800, 300)), "never outside the canvas");
+        assert_eq!(window_over((0, 0, 0, 0), (0, 0, 0, 0)), (0, (0, 0, 1, 1)), "never an empty window");
     }
 
     #[test]

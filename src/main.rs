@@ -1507,6 +1507,7 @@ impl App {
     }
 
     fn handle(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+        let lp = if (WM_MOUSEMOVE..=WM_MBUTTONDBLCLK).contains(&msg) { self.renderer.canvas_point(lp) } else { lp };
         match msg {
             WM_FRAME => {
                 FRAME_PENDING.store(false, Ordering::Relaxed);
