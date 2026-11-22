@@ -1195,12 +1195,10 @@ impl Renderer {
         self.moving = moving;
     }
 
+    /// The window is as tall as its region, so a window capture ends at the notch's bottom shadow
+    /// instead of at the full transparent canvas. The swap chain keeps the full size.
     fn place(&mut self, hwnd: HWND, at: (i32, i32, i32, i32), region: (i32, i32, i32, i32)) {
         unsafe {
-            if at != self.placed {
-                self.placed = at;
-                let _ = SetWindowPos(hwnd, None, at.0, at.1, at.2, at.3, SWP_NOZORDER | SWP_NOACTIVATE);
-            }
             let target = if self.moving {
                 if region.0 < self.region.0 || region.1 < self.region.1 || region.2 > self.region.2 || region.3 > self.region.3 {
                     (0, 0, at.2, at.3)
@@ -1210,6 +1208,11 @@ impl Renderer {
             } else {
                 region
             };
+            let at = (at.0, at.1, at.2, target.3.clamp(1, at.3));
+            if at != self.placed {
+                self.placed = at;
+                let _ = SetWindowPos(hwnd, None, at.0, at.1, at.2, at.3, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
             if target != self.region {
                 self.region = target;
                 SetWindowRgn(hwnd, Some(CreateRectRgn(target.0, target.1, target.2, target.3)), false);
