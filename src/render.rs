@@ -328,6 +328,10 @@ fn dots_y(h: f32) -> f32 {
     h - 12.0
 }
 
+fn dots_reached(notch_h: f32, h: f32) -> f32 {
+    ((notch_h - (dots_y(h) + 6.0)) / 6.0).clamp(0.0, 1.0)
+}
+
 pub fn panel_size(page: Page) -> [f32; 2] {
     let [w, h, _] = target(Mode::Expanded, false);
     match page {
@@ -3082,6 +3086,14 @@ mod tests {
         assert_eq!(first.bottom - first.top, 22.0);
         assert_eq!(ph - (dots_y(ph) + 5.0), 7.0);
         assert_eq!(ph + NAV_EXTRA - first.bottom, 5.0);
+    }
+
+    #[test]
+    fn the_dots_wait_until_the_opening_notch_has_covered_them() {
+        let ph = 186.0;
+        assert_eq!(dots_reached(160.0, ph), 0.0, "notch still above the dots");
+        assert_eq!(dots_reached(dots_y(ph) + 6.0, ph), 0.0, "notch only just past the dots");
+        assert_eq!(dots_reached(ph, ph), 1.0, "fully open");
     }
 
     #[test]

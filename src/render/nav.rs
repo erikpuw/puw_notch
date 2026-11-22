@@ -50,6 +50,7 @@ impl Renderer {
             let mut dx = cx - total / 2.0;
             let arriving = v.leaving.map_or(1.0, |(_, t, _)| ease_out(t));
             let nav_fade = ((nh - ph * s - 4.0 * s) / (8.0 * s)).clamp(0.0, 1.0);
+            let dots_a = a * dots_reached(nh / s, ph) * (1.0 - nav_fade);
             for p in PAGES.into_iter().filter(|p| page_shown(*p)) {
                 let weight = match v.leaving {
                     _ if p == v.page => arriving,
@@ -58,7 +59,7 @@ impl Renderer {
                 };
                 let dw = dot + (wide - dot) * weight;
                 let shade = 0.38 + 0.62 * weight;
-                rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(grey(shade, a * (1.0 - nav_fade)))?);
+                rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(grey(shade, dots_a))?);
                 dx += dw + gap;
             }
             if nav_fade > 0.01 {
