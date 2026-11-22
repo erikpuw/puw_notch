@@ -19,12 +19,10 @@ try {
     $dist = Join-Path $root 'dist'
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-    $portable = Join-Path $dist "puw-notch-v$ver-portable-x64.exe"
     $setup = Join-Path $dist "puw-notch-setup-v$ver-x64.exe"
-    Copy-Item -Force (Join-Path $root 'target\release\puw_notch.exe') $portable
     Copy-Item -Force (Join-Path $root 'target\release\puw_notch_setup.exe') $setup
 
-    Get-Item $portable, $setup | Select-Object Name, Length, @{Name='KB';Expression={[math]::Round($_.Length/1024,1)}} | Format-Table -AutoSize
+    Get-Item $setup | Select-Object Name, Length, @{Name='KB';Expression={[math]::Round($_.Length/1024,1)}} | Format-Table -AutoSize
 } finally {
     Pop-Location
 }

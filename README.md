@@ -137,7 +137,7 @@ Menu ở khay hệ thống (chuột phải vào biểu tượng):
 
 ## Tải về và chạy
 
-Tải `puw-notch-setup-v1.0.44-x64.exe` (~3,6 MB, chọn thư mục, tự khởi động cùng Windows và hỗ trợ gỡ trong Settings → Apps) ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) rồi chạy để cài (chỉ tải ở đây, xem lưu ý ở đầu trang). App chưa có chữ ký số, nên không có gì khác ngoài nguồn này để xác nhận file là của tác giả, và Windows có thể chặn:
+Tải `puw-notch-setup-v1.0.44-x64.exe` (~999 KB, chọn thư mục, tự khởi động cùng Windows và hỗ trợ gỡ trong Settings → Apps) ở mục [Releases](https://github.com/erikpuw/puw_notch/releases) rồi chạy để cài (chỉ tải ở đây, xem lưu ý ở đầu trang). App chưa có chữ ký số, nên không có gì khác ngoài nguồn này để xác nhận file là của tác giả, và Windows có thể chặn:
 
 Exe đã gồm sẵn thư viện C của Visual C++ (liên kết tĩnh), nên máy mới cài Windows chạy được ngay, không cần cài vcredist.
 
