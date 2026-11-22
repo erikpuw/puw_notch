@@ -638,7 +638,7 @@ impl App {
                     launch_installed_app(exe);
                 }
             }
-            unsafe { PostQuitMessage(0) };
+            unsafe { let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)); }
             return;
         }
         let opts = self.options();
@@ -660,7 +660,7 @@ impl App {
                 Mode::Uninstall => format!("--auto-uninstall {lang} --dir \"{dir_escaped}\""),
             };
             match relaunch_elevated(&args) {
-                Ok(()) => unsafe { PostQuitMessage(0) },
+                Ok(()) => unsafe { let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)); },
                 Err(err) => {
                     self.status = Status::Failed;
                     self.message = if self.is_vi {
@@ -738,7 +738,7 @@ impl App {
                 return;
             }
             Hit::Cancel => {
-                unsafe { PostQuitMessage(0) };
+                unsafe { let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)); }
                 return;
             }
         }
