@@ -11,7 +11,7 @@
   Written in Rust, ~1084 KB exe, no WebView, no Visual C++ Redistributable to install.
 </p>
 
-<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="docs/release-notes/v1.0.43.md">Latest: v1.0.43</a></p>
+<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="docs/release-notes/v1.0.44.md">Latest: v1.0.44</a></p>
 
 > **Download only from the author's source.** PUW Notch is published by its author (erikpuw) only at [github.com/erikpuw/puw_notch](https://github.com/erikpuw/puw_notch). A copy from anywhere else (file-sharing sites, other repositories, repackaged builds, files sent over the internet) is not controlled by the author and comes with no guarantee: it may have been modified or had code added. Use only the build in this repository's [Releases](https://github.com/erikpuw/puw_notch/releases).
 
@@ -137,7 +137,7 @@ The tray menu (right-click the icon):
 
 ## Download and run
 
-Get `puw_notch.exe` from [Releases](https://github.com/erikpuw/puw_notch/releases) and run it (download only from here, see the note at the top). The app is not code-signed, so nothing but this source confirms a file is the author's, and Windows may block it:
+Get `puw_notch_setup.exe` (~991 KB installer with folder picker, Windows startup task and Settings → Apps uninstall) or the standalone `puw_notch.exe` from [Releases](https://github.com/erikpuw/puw_notch/releases) (download only from here, see the note at the top). The app is not code-signed, so nothing but this source confirms a file is the author's, and Windows may block it:
 
 The exe already contains the Visual C++ C runtime (statically linked), so a fresh Windows install runs it as is, with no vcredist to install.
 
@@ -150,6 +150,10 @@ The exe already contains the Visual C++ C runtime (statically linked), so a fres
 ```bash
 cargo build --release
 target/release/puw_notch.exe
+
+# Build the single-file installer (~991 KB, embeds target/release/puw_notch.exe)
+cargo build --release -p puw_notch_setup
+target/release/puw_notch_setup.exe
 ```
 
 Tests: `cargo test`. Settings live in `%APPDATA%\PuwNotch\`, with a log in `notch.log` beside them.
