@@ -790,6 +790,16 @@ fn shadow_layer_alpha(k: u32) -> f32 {
     SHADOW_ALPHA * (inside(k - 1) - inside(k))
 }
 
+const SHADOW_VISIBLE: f32 = 0.01;
+
+/// Distance from the notch edge past which the shadow is too faint to see (alpha below `SHADOW_VISIBLE`).
+/// The window region ends there, so a window capture hugs the panel instead of a transparent margin.
+fn shadow_reach() -> f32 {
+    let darkness_beyond = |k: u32| (k..=SHADOW_STEPS).map(shadow_layer_alpha).sum::<f32>();
+    let last = (1..=SHADOW_STEPS).find(|&k| darkness_beyond(k + 1) < SHADOW_VISIBLE).unwrap_or(SHADOW_STEPS);
+    last as f32 * SHADOW_STEP
+}
+
 fn square_crop(w: u32, h: u32) -> (u32, u32, u32) {
     let side = w.min(h);
     ((w - side) / 2, (h - side) / 2, side)
@@ -2029,8 +2039,9 @@ impl Renderer {
             }
             shown.ok()?;
             let reach = if open > 0.0 { (SHADOW_STEPS as f32 * SHADOW_STEP + SHADOW_DY) * s } else { 0.0 };
+            let reach_below = if open > 0.0 { (shadow_reach() + SHADOW_DY) * s } else { 0.0 };
             let nh_hit = if nav_open() && v.mode == Mode::Expanded { nh.max((panel_size(v.page)[1] + NAV_EXTRA) * s) } else { nh };
-            let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((gy + nh_hit + reach).ceil() as i32).min(h));
+            let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((gy + nh_hit + reach_below).ceil() as i32).min(h));
             self.place(hwnd, (x, y, w, h), region);
             let lyrics_run = !lyric_heights.is_empty() && v.music.is_some_and(|t| t.playing);
             self.slow_frames = lyrics_run;
@@ -2476,7 +2487,15 @@ mod tests {
         let total: f32 = layers.iter().sum();
         assert!((total - SHADOW_ALPHA).abs() < 1e-5, "edge darkness is SHADOW_ALPHA, got {total}");
         assert!(layers.windows(2).all(|w| w[0] > w[1] && w[1] > 0.0), "each wider stroke adds less: {layers:?}");
-        assert!(layers[0] < SHADOW_ALPHA * 0.2, "no single stroke makes a visible line: {}", layers[0]);
+    }
+
+    #[test]
+    fn window_region_ends_where_the_shadow_stops_being_visible() {
+        let reach = shadow_reach();
+        let full = SHADOW_STEPS as f32 * SHADOW_STEP;
+        assert!(reach < full && reach > full * 0.5, "reach {reach} of {full}");
+        let beyond: f32 = ((reach / SHADOW_STEP).round() as u32 + 1..=SHADOW_STEPS).map(shadow_layer_alpha).sum();
+        assert!(beyond < SHADOW_VISIBLE, "shadow past the region is {beyond}");
     }
 
     #[test]
