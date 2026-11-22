@@ -151,9 +151,10 @@ The exe already contains the Visual C++ C runtime (statically linked), so a fres
 cargo build --release
 target/release/puw_notch.exe
 
-# Build the single-file installer (~991 KB, embeds target/release/puw_notch.exe)
-cargo build --release -p puw_notch_setup
-target/release/puw_notch_setup.exe
+# Build both the installer and portable exe into dist/
+powershell -ExecutionPolicy Bypass -File tools/build-dist.ps1
+# -> dist/puw-notch-setup-v<ver>-x64.exe
+# -> dist/puw-notch-v<ver>-portable-x64.exe
 ```
 
 Tests: `cargo test`. Settings live in `%APPDATA%\PuwNotch\`, with a log in `notch.log` beside them.

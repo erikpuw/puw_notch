@@ -151,9 +151,10 @@ Exe đã gồm sẵn thư viện C của Visual C++ (liên kết tĩnh), nên m�
 cargo build --release
 target/release/puw_notch.exe
 
-# Tạo trình cài đặt 1 file (~991 KB, nén sẵn puw_notch.exe ở trên)
-cargo build --release -p puw_notch_setup
-target/release/puw_notch_setup.exe
+# Tạo bản cài đặt + bản portable vào thư mục dist/
+powershell -ExecutionPolicy Bypass -File tools/build-dist.ps1
+# -> dist/puw-notch-setup-v<ver>-x64.exe
+# -> dist/puw-notch-v<ver>-portable-x64.exe
 ```
 
 Test: `cargo test`. Cài đặt lưu ở `%APPDATA%\PuwNotch\`, nhật ký ở `notch.log` cùng thư mục.
