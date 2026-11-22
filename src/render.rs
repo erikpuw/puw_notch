@@ -328,6 +328,8 @@ fn dots_y(h: f32) -> f32 {
     h - 12.0
 }
 
+const CLOSED_MARGIN_BELOW: f32 = 2.0;
+
 fn window_over(canvas: (i32, i32, i32, i32), region: (i32, i32, i32, i32)) -> (i32, (i32, i32, i32, i32)) {
     let shift = region.0.clamp(0, (canvas.2 - 1).max(0));
     let width = (region.2.min(canvas.2) - shift).max(1);
@@ -2065,7 +2067,7 @@ impl Renderer {
             }
             shown.ok()?;
             let reach = if open > 0.0 { (SHADOW_STEPS as f32 * SHADOW_STEP + SHADOW_DY) * s } else { 0.0 };
-            let reach_below = if open > 0.0 { (shadow_reach() + SHADOW_DY) * s } else { 0.0 };
+            let reach_below = if open > 0.0 { (shadow_reach() + SHADOW_DY) * s } else { CLOSED_MARGIN_BELOW * s };
             let nh_hit = if nav_open() && v.mode == Mode::Expanded { nh.max((panel_size(v.page)[1] + NAV_EXTRA) * s) } else { nh };
             let region = (((l - ear - reach).floor() as i32).max(0), 0, ((r + ear + reach).ceil() as i32).min(w), ((gy + nh_hit + reach_below).ceil() as i32).min(h));
             self.place(hwnd, (x, y, w, h), region);
