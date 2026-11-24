@@ -2185,6 +2185,42 @@ mod tests {
     }
 
     #[test]
+    fn the_window_follows_the_bottom_of_banners_as_they_grow_and_settle() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900i32, 330i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("Banner bottom"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
+            macro_rules! view { ($h:expr) => { View { mode: Mode::Alert, size: [420.0, $h, 24.0], time: "20:49", date: "T2, 26/10",
+                battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0, banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo,
+                leaving: None, todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C, sun_view: false, cal: Default::default(), task: Default::default(),
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None } } }; }
+            let panel_bottom = |r: &Renderer| (0..h as usize).rev().find(|&y| r.grabbed[(y * w as usize + w as usize / 2) * 4 + 3] >= 250).map_or(0, |y| y as i32 + 1);
+            let sizes = [notch::alert_size(0)[1], notch::alert_size(1)[1], notch::alert_size(2)[1], notch::alert_size(4)[1], notch::alert_size_choice(1)[1], notch::alert_size_choice(3)[1]];
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            for height in sizes {
+                renderer.set_moving(true);
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(height)).unwrap();
+                let drawn = panel_bottom(&renderer);
+                assert!(renderer.placed.3 >= drawn, "growing to {height}: window ends at {} but the panel reaches {drawn}", renderer.placed.3);
+                renderer.set_moving(false);
+                for _ in 0..2 {
+                    renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(height)).unwrap();
+                }
+                let drawn = panel_bottom(&renderer);
+                let (below, ends) = (renderer.placed.3 - drawn, renderer.placed.3);
+                assert!(below >= 0, "settled at {height}: window ends at {ends} but the panel reaches {drawn}");
+                assert!(below <= 16, "settled at {height}: {below} px of empty window below the panel");
+                assert_eq!(renderer.region.3, ends, "the window and its region end together");
+            }
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
     fn the_square_in_the_row_of_page_icons_glides_between_cells_while_the_page_changes() {
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
