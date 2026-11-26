@@ -44,9 +44,8 @@ impl Renderer {
                     rt.SetTransform(&base);
                 }
             }
-            let (dot, wide, gap) = (6.0 * s, 18.0 * s, 6.0 * s);
-            let kept = PAGES.iter().filter(|p| page_shown(**p)).count();
-            let total = wide + (kept as f32 - 1.0) * (dot + gap);
+            let (dot, wide, gap) = (DOT * s, DOT_WIDE * s, DOT_GAP * s);
+            let total = dots_width() * s;
             let mut dx = cx - total / 2.0;
             let arriving = v.leaving.map_or(1.0, |(_, t, _)| ease_out(t));
             let nav_fade = ((nh - ph * s - 4.0 * s) / (8.0 * s)).clamp(0.0, 1.0);

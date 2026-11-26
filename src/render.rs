@@ -329,6 +329,21 @@ fn dots_y(h: f32) -> f32 {
     h - 12.0
 }
 
+const DOT: f32 = 6.0;
+const DOT_WIDE: f32 = 18.0;
+const DOT_GAP: f32 = 6.0;
+const DOTS_HIT_PAD: f32 = 10.0;
+
+fn dots_width() -> f32 {
+    let kept = PAGES.iter().filter(|p| page_shown(**p)).count();
+    DOT_WIDE + (kept as f32 - 1.0).max(0.0) * (DOT + DOT_GAP)
+}
+
+fn dots_zone(cx: f32, scale: f32, ph: f32) -> D2D_RECT_F {
+    let half = (dots_width() / 2.0 + DOTS_HIT_PAD) * scale;
+    rect(cx - half, (dots_y(ph) - 2.0) * scale, cx + half, (dots_y(ph) + 12.0) * scale)
+}
+
 const CLOSED_MARGIN_BELOW: f32 = 2.0;
 
 fn window_over(canvas: (i32, i32, i32, i32), region: (i32, i32, i32, i32)) -> (i32, (i32, i32, i32, i32)) {
@@ -601,7 +616,7 @@ pub fn page_buttons(cx: f32, scale: f32, page: Page, rows: usize, scroll: usize,
     if nav_open() {
         out.extend(nav_cells(cx, scale, panel_h).into_iter().map(|(p, b)| (Button::GoPage(p), b)));
     } else {
-        out.push((Button::Dots, r(w / 2.0 - 40.0, dots_y(panel_h) - 2.0, 80.0, 14.0)));
+        out.push((Button::Dots, dots_zone(cx, scale, panel_h)));
     }
     out
 }
@@ -2290,6 +2305,16 @@ mod tests {
                 assert_eq!((px[0], px[1], px[2], px[3]), (0, 0, 0, 255), "classic fallback remains solid black");
             }
             DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_hover_zone_of_the_page_dots_reaches_the_outermost_dots() {
+        for scale in [1.0, 1.5] {
+            let (cx, ph) = (400.0, 200.0);
+            let zone = dots_zone(cx, scale, ph);
+            let half = dots_width() / 2.0 * scale;
+            assert!(zone.left <= cx - half && zone.right >= cx + half, "zone {}..{} must cover the dots {}..{}", zone.left, zone.right, cx - half, cx + half);
         }
     }
 
