@@ -7,7 +7,7 @@ use windows::Graphics::{IGeometrySource2D, IGeometrySource2D_Impl};
 use windows::System::DispatcherQueueController;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::{
-    CompositionEffectBrush, CompositionEffectSourceParameter, CompositionPath, CompositionStretch,
+    CompositionEffectBrush, CompositionEffectSourceParameter, CompositionGeometricClip, CompositionPath, CompositionStretch,
     Compositor, ContainerVisual, SpriteVisual,
 };
 use windows::Win32::Foundation::{E_INVALIDARG, HWND};
@@ -16,14 +16,13 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_COMPOSITE_MODE_SOURCE_OVER,
 };
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1ColorMatrix, CLSID_D2D1Composite, CLSID_D2D1GaussianBlur, CLSID_D2D1Saturation,
+    CLSID_D2D1ColorMatrix, CLSID_D2D1Composite, CLSID_D2D1GaussianBlur,
     D2D1_COLORMATRIX_PROP_ALPHA_MODE, D2D1_COLORMATRIX_PROP_CLAMP_OUTPUT,
     D2D1_COLORMATRIX_PROP_COLOR_MATRIX, D2D1_COMPOSITE_PROP_MODE,
     D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED, D2D1_GAUSSIANBLUR_PROP_BORDER_MODE,
     D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
-    D2D1_SATURATION_PROP_SATURATION, ID2D1Factory, ID2D1Geometry, ID2D1PathGeometry,
+    ID2D1Factory, ID2D1Geometry, ID2D1PathGeometry,
 };
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_HOSTBACKDROPBRUSH};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain1;
 use windows::Win32::System::WinRT::Composition::{ICompositorDesktopInterop, ICompositorInterop};
 use windows::Win32::System::WinRT::Graphics::Direct2D::{
@@ -39,17 +38,19 @@ use windows_numerics::{Vector2, Vector3};
 /// No fixed dark veil over the frosted backdrop (matches the puwbar Frosted taskbar pill, which is lit instead of smoked).
 pub(super) const PAGE_GLASS_ALPHA: f32 = 0.0;
 
-/// Direct Gaussian blur radius (no hidden DPI multiplier).
-const GLASS_BLUR: f32 = 5.0;
+/// Gaussian blur of the sharp desktop behind the window.
+const BLUR: f32 = 10.0;
 
-/// Subtle backdrop saturation boost so blurred colors stay vivid.
-const GLASS_SATURATION: f32 = 1.0;
+/// Auto-contrast: the veil is 0 below the threshold luma and deepens above it so white text stays crisp.
+const CONTRAST_SLOPE: f32 = 0.95;
+const CONTRAST_THRESHOLD: f32 = 0.30;
 
-/// Auto-contrast: 0 below 50% luma (keeps dark & rich colorful wallpapers vivid),
-/// deepens bright/white areas cleanly (~33% at 70% luma, ~82% on pure white) so white text stays crisp.
-const AUTO_CONTRAST_SLOPE: f32 = 1.5;
-const AUTO_CONTRAST_THRESHOLD: f32 = 0.6;
+/// One gradient stop: position along the line, white (1.0) or black (0.0), and alpha.
+pub(super) type Stop = (f32, f32, f32);
 
+pub(super) const SHEEN: [Stop; 6] = [(0.00, 1.0, 0.12), (0.07, 1.0, 0.03), (0.18, 1.0, 0.0), (0.55, 0.0, 0.039), (0.85, 0.0, 0.031), (1.00, 1.0, 0.078)];
+pub(super) const RIM: [Stop; 6] = [(0.00, 1.0, 0.25), (0.12, 1.0, 0.12), (0.40, 0.0, 0.141), (0.75, 0.0, 0.110), (0.92, 1.0, 0.10), (1.00, 1.0, 0.20)];
+pub(super) const RIM_WIDTH: f32 = 1.0;
 thread_local! {
     static DISPATCHER: RefCell<Option<DispatcherQueueController>> = const { RefCell::new(None) };
 }
@@ -164,75 +165,14 @@ impl IGraphicsEffectD2D1Interop_Impl for GaussianBlurEffect_Impl {
 }
 
 #[implement(IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectD2D1Interop)]
-struct SaturationEffect {
-    name: RefCell<HSTRING>,
-    saturation: f32,
-    source: IGraphicsEffectSource,
-}
-
-impl IGraphicsEffectSource_Impl for SaturationEffect_Impl {}
-
-impl IGraphicsEffect_Impl for SaturationEffect_Impl {
-    fn Name(&self) -> Result<HSTRING> {
-        Ok(self.name.borrow().clone())
-    }
-    fn SetName(&self, name: &HSTRING) -> Result<()> {
-        *self.name.borrow_mut() = name.clone();
-        Ok(())
-    }
-}
-
-impl IGraphicsEffectD2D1Interop_Impl for SaturationEffect_Impl {
-    fn GetEffectId(&self) -> Result<windows::core::GUID> {
-        Ok(CLSID_D2D1Saturation)
-    }
-
-    fn GetNamedPropertyMapping(
-        &self,
-        _name: &PCWSTR,
-        _index: *mut u32,
-        mapping: *mut GRAPHICS_EFFECT_PROPERTY_MAPPING,
-    ) -> Result<()> {
-        if !mapping.is_null() {
-            unsafe { *mapping = GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT };
-        }
-        Err(E_INVALIDARG.into())
-    }
-
-    fn GetPropertyCount(&self) -> Result<u32> {
-        Ok(1)
-    }
-
-    fn GetProperty(&self, index: u32) -> Result<IPropertyValue> {
-        if index == D2D1_SATURATION_PROP_SATURATION.0 as u32 {
-            PropertyValue::CreateSingle(self.saturation)?.cast()
-        } else {
-            Err(E_INVALIDARG.into())
-        }
-    }
-
-    fn GetSource(&self, index: u32) -> Result<IGraphicsEffectSource> {
-        if index == 0 {
-            Ok(self.source.clone())
-        } else {
-            Err(E_INVALIDARG.into())
-        }
-    }
-
-    fn GetSourceCount(&self) -> Result<u32> {
-        Ok(1)
-    }
-}
-
-#[implement(IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectD2D1Interop)]
-struct LumaDarkenEffect {
+struct ColorMatrixEffect {
     name: RefCell<HSTRING>,
     matrix: [f32; 20],
     source: IGraphicsEffectSource,
 }
 
-impl LumaDarkenEffect {
-    fn new(slope: f32, threshold: f32, source: IGraphicsEffectSource) -> Self {
+impl ColorMatrixEffect {
+    fn luma_veil(slope: f32, threshold: f32, source: IGraphicsEffectSource) -> Self {
         let mut matrix = [0.0f32; 20];
         matrix[3] = slope * 0.2126;
         matrix[7] = slope * 0.7152;
@@ -242,9 +182,9 @@ impl LumaDarkenEffect {
     }
 }
 
-impl IGraphicsEffectSource_Impl for LumaDarkenEffect_Impl {}
+impl IGraphicsEffectSource_Impl for ColorMatrixEffect_Impl {}
 
-impl IGraphicsEffect_Impl for LumaDarkenEffect_Impl {
+impl IGraphicsEffect_Impl for ColorMatrixEffect_Impl {
     fn Name(&self) -> Result<HSTRING> {
         Ok(self.name.borrow().clone())
     }
@@ -254,7 +194,7 @@ impl IGraphicsEffect_Impl for LumaDarkenEffect_Impl {
     }
 }
 
-impl IGraphicsEffectD2D1Interop_Impl for LumaDarkenEffect_Impl {
+impl IGraphicsEffectD2D1Interop_Impl for ColorMatrixEffect_Impl {
     fn GetEffectId(&self) -> Result<windows::core::GUID> {
         Ok(CLSID_D2D1ColorMatrix)
     }
@@ -392,15 +332,6 @@ pub(super) struct GlassSurface {
 impl GlassSurface {
     pub(super) fn new(hwnd: HWND, swap: &IDXGISwapChain1, w: i32, h: i32, shift: i32) -> Result<Self> {
         ensure_dispatcher()?;
-        let enable: u32 = 1;
-        let _ = unsafe {
-            DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_USE_HOSTBACKDROPBRUSH,
-                &enable as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
-            )
-        };
         let compositor = Compositor::new()?;
         let desktop: ICompositorDesktopInterop = compositor.cast()?;
         let target = unsafe { desktop.CreateDesktopWindowTarget(hwnd, true)? };
@@ -415,7 +346,7 @@ impl GlassSurface {
         let backdrop = compositor.CreateSpriteVisual()?;
         backdrop.SetSize(size)?;
         backdrop.SetOpacity(0.0)?;
-        let brush = Self::make_blur_brush(&compositor)?;
+        let brush = Self::make_backdrop_brush(&compositor)?;
         backdrop.SetBrush(&brush)?;
 
         let content = compositor.CreateSpriteVisual()?;
@@ -432,46 +363,46 @@ impl GlassSurface {
         Ok(Self { compositor, _target: target, root, backdrop, content, active: false })
     }
 
-    fn make_blur_brush(compositor: &Compositor) -> Result<CompositionEffectBrush> {
+    fn clip_for(&self, shape: &ID2D1PathGeometry, gy: f32) -> Result<CompositionGeometricClip> {
+        let source: IGeometrySource2D = PathSource(shape.clone()).into();
+        let path = CompositionPath::Create(&source)?;
+        let geom = self.compositor.CreatePathGeometryWithPath(&path)?;
+        let clip = self.compositor.CreateGeometricClipWithGeometry(&geom)?;
+        clip.SetOffset(Vector2 { X: 0.0, Y: gy })?;
+        Ok(clip)
+    }
+
+    fn make_backdrop_brush(compositor: &Compositor) -> Result<CompositionEffectBrush> {
         let backdrop_param = || -> Result<IGraphicsEffectSource> {
             CompositionEffectSourceParameter::Create(&HSTRING::from("Backdrop"))?.cast()
         };
         let blur: IGraphicsEffectSource = GaussianBlurEffect {
             name: RefCell::new(HSTRING::from("Blur")),
-            blur: GLASS_BLUR,
+            blur: BLUR,
             source: backdrop_param()?,
-        }
-        .into();
-        let vibrant: IGraphicsEffectSource = SaturationEffect {
-            name: RefCell::new(HSTRING::from("Saturation")),
-            saturation: GLASS_SATURATION,
-            source: blur.clone(),
         }
         .into();
         let luma_blur: IGraphicsEffectSource = GaussianBlurEffect {
             name: RefCell::new(HSTRING::from("LumaBlur")),
-            blur: GLASS_BLUR,
+            blur: BLUR,
             source: backdrop_param()?,
         }
         .into();
-        let luma: IGraphicsEffectSource =
-            LumaDarkenEffect::new(AUTO_CONTRAST_SLOPE, AUTO_CONTRAST_THRESHOLD, luma_blur).into();
+        let luma: IGraphicsEffectSource = ColorMatrixEffect::luma_veil(CONTRAST_SLOPE, CONTRAST_THRESHOLD, luma_blur).into();
         let adaptive: IGraphicsEffect = CompositeEffect {
             name: RefCell::new(HSTRING::from("Adaptive")),
-            src0: vibrant.clone(),
+            src0: blur.clone(),
             src1: luma,
         }
         .into();
         let factory = compositor
             .CreateEffectFactory(&adaptive)
-            .or_else(|_| compositor.CreateEffectFactory(&vibrant.cast::<IGraphicsEffect>()?))
             .or_else(|_| compositor.CreateEffectFactory(&blur.cast::<IGraphicsEffect>()?))?;
         let brush = factory.CreateBrush()?;
-        let host = compositor.CreateHostBackdropBrush()?;
-        brush.SetSourceParameter(&HSTRING::from("Backdrop"), &host)?;
+        let backdrop = compositor.CreateBackdropBrush()?;
+        brush.SetSourceParameter(&HSTRING::from("Backdrop"), &backdrop)?;
         Ok(brush)
     }
-
     pub(super) fn resize(&self, w: i32, h: i32) -> Result<()> {
         let size = Vector2 { X: w as f32, Y: h as f32 };
         self.root.SetSize(size)?;
@@ -493,18 +424,12 @@ impl GlassSurface {
             }
             return Ok(());
         }
-        let source: IGeometrySource2D = PathSource(shape.clone()).into();
-        let path = CompositionPath::Create(&source)?;
-        let geom = self.compositor.CreatePathGeometryWithPath(&path)?;
-        let clip = self.compositor.CreateGeometricClipWithGeometry(&geom)?;
-        clip.SetOffset(Vector2 { X: 0.0, Y: gy })?;
-        self.backdrop.SetClip(&clip)?;
+        self.backdrop.SetClip(&self.clip_for(shape, gy)?)?;
         self.backdrop.SetOpacity(opacity.clamp(0.0, 1.0))?;
         self.active = true;
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

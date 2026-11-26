@@ -2077,23 +2077,12 @@ impl Renderer {
                 self.ctx.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
                 if raised_glass {
                     let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
-                    let sheen_stops = rt.CreateGradientStopCollection(&[
-                        D2D1_GRADIENT_STOP { position: 0.00, color: grey(1.0, 0.12 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.07, color: grey(1.0, 0.03 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.18, color: grey(1.0, 0.0) },
-                        D2D1_GRADIENT_STOP { position: 0.55, color: grey(0.0, 0.039 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.85, color: grey(0.0, 0.031 * open) },
-                        D2D1_GRADIENT_STOP { position: 1.00, color: grey(1.0, 0.078 * open) },
-                    ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                    let stops = |list: &[glass::Stop]| -> Vec<D2D1_GRADIENT_STOP> {
+                        list.iter().map(|&(position, white, alpha)| D2D1_GRADIENT_STOP { position, color: grey(white, alpha * open) }).collect()
+                    };
+                    let sheen_stops = rt.CreateGradientStopCollection(&stops(&glass::SHEEN), D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                     rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &sheen_stops)?, None);
-                    let rim_stops = rt.CreateGradientStopCollection(&[
-                        D2D1_GRADIENT_STOP { position: 0.00, color: grey(1.0, 0.25 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.12, color: grey(1.0, 0.12 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.40, color: grey(0.0, 0.141 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.75, color: grey(0.0, 0.110 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.92, color: grey(1.0, 0.10 * open) },
-                        D2D1_GRADIENT_STOP { position: 1.00, color: grey(1.0, 0.20 * open) },
-                    ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                    let rim_stops = rt.CreateGradientStopCollection(&stops(&glass::RIM), D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                     let params = D2D1_LAYER_PARAMETERS {
                         contentBounds: rect(l - ear, 0.0, r + ear, nh),
                         geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
@@ -2105,7 +2094,7 @@ impl Renderer {
                     };
                     rt.PushLayer(&params, None);
                     let rim_shape = if self.style == notch::Style::Pill { shape.clone() } else { self.notch_shape(l, r, nh, nr, ear, false)? };
-                    rt.DrawGeometry(&rim_shape, &rt.CreateLinearGradientBrush(&line, None, &rim_stops)?, 1.0 * s, &self.round);
+                    rt.DrawGeometry(&rim_shape, &rt.CreateLinearGradientBrush(&line, None, &rim_stops)?, glass::RIM_WIDTH * s, &self.round);
                     rt.PopLayer();
                     drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
                 }
@@ -2306,6 +2295,87 @@ mod tests {
                 assert_eq!((px[0], px[1], px[2], px[3]), (0, 0, 0, 255), "classic fallback remains solid black");
             }
             DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: shows a 1 px stripe backdrop and a white backdrop through the glass, prints what a screen capture sees"]
+    fn glass_backdrop_probe() {
+        unsafe {
+            use windows::Win32::Graphics::Gdi::*;
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_SYSTEM_AWARE};
+            use windows::Win32::UI::WindowsAndMessaging::*;
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900i32, 300i32);
+            let mut stripe = [0u32; 64];
+            for (i, px) in stripe.iter_mut().enumerate() {
+                *px = if (i % 8) < 4 { 0xFF000000 } else { 0xFFFFFFFF };
+            }
+            let stripes = CreatePatternBrush(CreateBitmap(8, 8, 1, 32, Some(stripe.as_ptr() as *const _)));
+            unsafe extern "system" fn probe_proc(hwnd: HWND, msg: u32, wparam: windows::Win32::Foundation::WPARAM, lparam: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            let pump = |ms: u128| {
+                let t = Instant::now();
+                while t.elapsed().as_millis() < ms {
+                    let mut msg = MSG::default();
+                    while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(15));
+                }
+            };
+            let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
+            let ph = panel_size(Page::Todo)[1];
+            let view = View {
+                mode: Mode::Expanded, size: [480.0, ph, 28.0], time: "20:49", date: "T2, 26/10",
+                battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0,
+                banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo, leaving: None,
+                todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C,
+                sun_view: false, cal: Default::default(), task: Default::default(),
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None },
+            };
+            let capture = || -> Vec<u8> {
+                let screen = GetDC(None);
+                let mem = CreateCompatibleDC(Some(screen));
+                let shot = CreateCompatibleBitmap(screen, w, h);
+                let old = SelectObject(mem, shot.into());
+                let _ = BitBlt(mem, 0, 0, w, h, Some(screen), 0, 0, SRCCOPY | CAPTUREBLT);
+                let mut info = BITMAPINFO::default();
+                info.bmiHeader = BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: 0, ..Default::default() };
+                let mut buf = vec![0u8; (w * h * 4) as usize];
+                GetDIBits(mem, shot, 0, h as u32, Some(buf.as_mut_ptr() as *mut _), &mut info, DIB_RGB_COLORS);
+                SelectObject(mem, old);
+                let _ = DeleteObject(shot.into());
+                let _ = DeleteDC(mem);
+                ReleaseDC(None, screen);
+                buf
+            };
+            let row = ph as i32 - 14;
+            for (name, brush) in [("stripes", stripes), ("white", HBRUSH(GetStockObject(WHITE_BRUSH).0))] {
+                let class = if name == "stripes" { w!("GlassProbeStripes") } else { w!("GlassProbeWhite") };
+                RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(probe_proc), lpszClassName: class, hbrBackground: brush, ..Default::default() });
+                let back = CreateWindowExW(WS_EX_TOPMOST | WS_EX_NOACTIVATE, class, w!("back"), WS_POPUP | WS_VISIBLE, 0, 0, w, h, None, None, None, None).unwrap();
+                pump(400);
+                let glass = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_NOACTIVATE, w!("STATIC"), w!("GlassProbe"), WS_POPUP | WS_VISIBLE, 0, 0, w, h, None, None, None, None).unwrap();
+                let mut renderer = Renderer::new().unwrap();
+                for _ in 0..40 {
+                    renderer.present(glass, 0, 0, w, h, 1.0, &view).unwrap();
+                    pump(30);
+                }
+                let shot = capture();
+                let pick = |y: i32| -> Vec<i32> { (232..264).map(|x| shot[((y * w + x) * 4 + 1) as usize] as i32).collect() };
+                let (inside, outside) = (pick(row), pick(h - 10));
+                println!("PROBE {name} inside min/max={}/{} outside min/max={}/{}", inside.iter().min().unwrap(), inside.iter().max().unwrap(), outside.iter().min().unwrap(), outside.iter().max().unwrap());
+                let _ = DestroyWindow(glass);
+                pump(100);
+                let _ = DestroyWindow(back);
+                pump(100);
+            }
         }
     }
 
