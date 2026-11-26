@@ -8,7 +8,7 @@
 
 <p align="center">
   Nhạc, việc, thông báo, thời tiết, lịch và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
-  Viết bằng Rust, exe ~1106 KB, không WebView, không cần cài Visual C++ Redistributable.
+  Viết bằng Rust, exe ~1104 KB, không WebView, không cần cài Visual C++ Redistributable.
 </p>
 
 <p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puw_notch/releases/latest"><img src="https://img.shields.io/github/v/release/erikpuw/puw_notch?label=B%E1%BA%A3n%20m%E1%BB%9Bi%20nh%E1%BA%A5t" alt="Bản mới nhất" valign="middle"></a></p>
