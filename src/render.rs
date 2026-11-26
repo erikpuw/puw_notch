@@ -2078,20 +2078,21 @@ impl Renderer {
                 if raised_glass {
                     let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
                     let sheen_stops = rt.CreateGradientStopCollection(&[
-                        D2D1_GRADIENT_STOP { position: 0.00, color: grey(1.0, 0.22 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.22, color: grey(1.0, 0.078 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.00, color: grey(1.0, 0.12 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.07, color: grey(1.0, 0.03 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.18, color: grey(1.0, 0.0) },
                         D2D1_GRADIENT_STOP { position: 0.55, color: grey(0.0, 0.039 * open) },
                         D2D1_GRADIENT_STOP { position: 0.85, color: grey(0.0, 0.031 * open) },
                         D2D1_GRADIENT_STOP { position: 1.00, color: grey(1.0, 0.078 * open) },
                     ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                     rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &sheen_stops)?, None);
                     let rim_stops = rt.CreateGradientStopCollection(&[
-                        D2D1_GRADIENT_STOP { position: 0.00, color: grey(1.0, 0.588 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.12, color: grey(1.0, 0.180 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.00, color: grey(1.0, 0.25 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.12, color: grey(1.0, 0.12 * open) },
                         D2D1_GRADIENT_STOP { position: 0.40, color: grey(0.0, 0.141 * open) },
                         D2D1_GRADIENT_STOP { position: 0.75, color: grey(0.0, 0.110 * open) },
-                        D2D1_GRADIENT_STOP { position: 0.92, color: grey(1.0, 0.157 * open) },
-                        D2D1_GRADIENT_STOP { position: 1.00, color: grey(1.0, 0.353 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.92, color: grey(1.0, 0.10 * open) },
+                        D2D1_GRADIENT_STOP { position: 1.00, color: grey(1.0, 0.20 * open) },
                     ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
                     let params = D2D1_LAYER_PARAMETERS {
                         contentBounds: rect(l - ear, 0.0, r + ear, nh),
@@ -2104,7 +2105,7 @@ impl Renderer {
                     };
                     rt.PushLayer(&params, None);
                     let rim_shape = if self.style == notch::Style::Pill { shape.clone() } else { self.notch_shape(l, r, nh, nr, ear, false)? };
-                    rt.DrawGeometry(&rim_shape, &rt.CreateLinearGradientBrush(&line, None, &rim_stops)?, 1.8 * s, &self.round);
+                    rt.DrawGeometry(&rim_shape, &rt.CreateLinearGradientBrush(&line, None, &rim_stops)?, 1.0 * s, &self.round);
                     rt.PopLayer();
                     drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
                 }
