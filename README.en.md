@@ -27,7 +27,7 @@
 | **Approve on the notch** | Questions from Claude Code, Codex and Antigravity show as banners, click **Allow** / **Deny**. No auto-approve. Setup [below](#setting-up-claude-code-optional). |
 | **Robot** | After 30 s without input a robot face replaces the clock: it cheers when the battery is full and is sad when it is low. Toggle in the tray. |
 | **Light** | About 7 MB of RAM and 0 % CPU at rest, about 14 MB while music plays, about 22 MB with the Music page open ([Task Manager pictures](#light-and-the-tray-menu)). |
-| **Tray** | Minimal notch, Idle robot, Notch style, Pages shown, More features, Start with Windows, Language, About, Quit. |
+| **Tray** | Minimal notch, Idle robot, Frosted glass pages, Notch style, Pages shown, More features, Start with Windows, Language, About, Quit. |
 
 A page hidden in the tray stops completely.
 
@@ -102,6 +102,12 @@ Turn on in **tray → More features → Live tasks** (off by default). One task 
 | Claude (a multiple-choice question) | Antigravity (permission to use a tool) |
 |---|---|
 | ![](assets/screenshots/en/banner-approve-claude.png) | ![](assets/screenshots/en/banner-approve-antigravity.png) |
+
+**Frosted glass pages** (tray): expanded pages are see-through, with a lightly blurred backdrop and a light rim around the edge. The ears style leaves the top edge open, so no bright line sits against the screen edge.
+
+| Ears | Pill |
+|---|---|
+| ![](assets/screenshots/glass-ears.png) | ![](assets/screenshots/glass-pill.png) |
 
 **Pill style** (tray, Notch style): floats below the top edge of the screen with all four corners round. The ears remain the default.
 

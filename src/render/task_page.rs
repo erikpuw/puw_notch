@@ -193,7 +193,7 @@ impl Renderer {
             }
 
             let dx = cl + DIVIDER_X * s;
-            rt.FillRectangle(&rect(dx, HEAD_Y * s, dx + 1.0 * s, 158.0 * s), &self.brush(grey(0.1, a))?);
+            rt.FillRectangle(&rect(dx, HEAD_Y * s, dx + 1.0 * s, 158.0 * s), &self.brush(grey(1.0, a * 0.10))?);
 
             let x0 = cl + LIST_X * s;
             let n = tasks.items.len();
@@ -241,7 +241,7 @@ impl Renderer {
                     rt.FillRectangle(&rect(tb.left, my, tb.left + tw, my + 1.0 * s), &self.brush(grey(0.4, a))?);
                 }
                 if row + 1 < TASK_ROWS.min(order.len() - scroll) {
-                    rt.FillRectangle(&rect(x0, bottom - 0.5 * s, cr, bottom + 0.5 * s), &self.brush(grey(0.08, a))?);
+                    rt.FillRectangle(&rect(x0, bottom - 0.5 * s, cr, bottom + 0.5 * s), &self.brush(grey(1.0, a * 0.08))?);
                 }
             }
             scrollbar(n, TASK_ROWS, TASK_ROW_Y, TASK_ROW_H)?;
@@ -290,7 +290,7 @@ impl Renderer {
                 rt.FillRoundedRectangle(&rounded(rect(x, start, x + 3.0 * s, start + len), 1.5 * s), &self.brush(grey(0.5, a))?);
             }
             let dx = cl + EDIT_DIVIDER_X * s;
-            rt.FillRectangle(&rect(dx, NAME_Y * s, dx + 1.0 * s, 158.0 * s), &self.brush(grey(0.1, a))?);
+            rt.FillRectangle(&rect(dx, NAME_Y * s, dx + 1.0 * s, 158.0 * s), &self.brush(grey(1.0, a * 0.10))?);
 
             if let Some(bb) = rect_of(Button::TaskBack) {
                 let hot = hovered == Some(Button::TaskBack);

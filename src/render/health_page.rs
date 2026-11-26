@@ -111,14 +111,25 @@ impl Renderer {
                         else { format!("{} {} {}", tr("nhắc sau", "reminder in"), (h.sit_every_min as i64 - sat).max(0), tr("phút", "min")) };
                     (sat.to_string(), sat as f32 / h.sit_every_min.max(1) as f32, status)
                 };
-                rt.PushAxisAlignedClip(&cb, D2D1_ANTIALIAS_MODE_ALIASED);
+                let clip = self.factory.CreateRoundedRectangleGeometry(&rounded(cb, 14.0 * s))?;
+                let params = D2D1_LAYER_PARAMETERS {
+                    contentBounds: cb,
+                    geometricMask: std::mem::ManuallyDrop::new(Some(clip.into())),
+                    maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    maskTransform: Matrix3x2::identity(),
+                    opacity: 1.0,
+                    opacityBrush: std::mem::ManuallyDrop::new(None),
+                    layerOptions: D2D1_LAYER_OPTIONS_NONE,
+                };
+                rt.PushLayer(&params, None);
                 if card == Card::Water {
                     let g = self.water_drop(cb.right - 16.0 * s, cb.bottom - 10.0 * s, 96.0 * s)?;
-                    rt.FillGeometry(&g, &self.brush(solid(accent, a * 0.09))?, None);
+                    rt.FillGeometry(&g, &self.brush(solid(accent, a * if self.glass { 0.18 } else { 0.09 }))?, None);
                 } else {
-                    text(ICON_WALK, F_MARK, rect(cb.right - 84.0 * s, cb.bottom - 90.0 * s, cb.right + 30.0 * s, cb.bottom + 24.0 * s), center, solid(accent, a * 0.08))?;
+                    text(ICON_WALK, F_MARK, rect(cb.right - 84.0 * s, cb.bottom - 90.0 * s, cb.right + 30.0 * s, cb.bottom + 24.0 * s), center, solid(accent, a * if self.glass { 0.16 } else { 0.08 }))?;
                 }
-                rt.PopAxisAlignedClip();
+                rt.PopLayer();
+                drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
                 let (bx, by) = (x + 14.0 * s, (CARD_TOP + 30.0) * s);
                 let off = status.is_empty();
                 let (unit_inline, line1) = if card == Card::Water {

@@ -129,7 +129,7 @@ impl Renderer {
             let om = layout.GetOverhangMetrics()?;
             let ink_cx = (-om.left + (200.0 + om.right)) / 2.0;
             let ink_cy = (-om.top + (200.0 + om.bottom)) / 2.0;
-            self.rt.DrawTextLayout(Vector2 { X: mx - ink_cx, Y: my - ink_cy }, &layout, &self.brush(ink)?, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            self.rt.DrawTextLayout(Vector2 { X: mx - ink_cx, Y: my - ink_cy }, &layout, &self.brush(glass::vibrant_text(ink, self.glass))?, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         Ok(())
     }

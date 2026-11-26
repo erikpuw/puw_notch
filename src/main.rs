@@ -118,6 +118,7 @@ const MENU_STYLE_EARS: usize = 18;
 const MENU_STYLE_PILL: usize = 19;
 const MENU_APPROVE: usize = 20;
 const MENU_ACTIVITY: usize = 21;
+const MENU_GLASS: usize = 22;
 const MENU_PAGE: usize = 30;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
@@ -349,7 +350,7 @@ impl App {
     }
 
     fn settings(&self) -> system::Settings {
-        system::Settings { pages: render::pages_on(), minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), sun_view: self.sun_view, notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared), activity: self.activity.enabled }
+        system::Settings { pages: render::pages_on(), minimal: self.notch.minimal, english: i18n::english(), robot: self.robot_on, volume_keys: status::taking_volume_keys(), style: self.style, approve: self.approve.is_enabled(), place: self.wx.place.clone(), unit: self.unit_chosen.then_some(self.unit), sun_view: self.sun_view, notes_cleared: self.notifications.as_ref().map_or(0, |r| r.cleared), activity: self.activity.enabled, glass: self.renderer.glass }
     }
 
     fn refresh_robot(&mut self) {
@@ -1400,6 +1401,7 @@ impl App {
             let english = i18n::english();
             let _ = AppendMenuW(menu, MF_STRING | check(self.notch.minimal), MENU_MINIMAL, &text(tr("Notch tối giản", "Minimal notch")));
             let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
+            let _ = AppendMenuW(menu, MF_STRING | check(self.renderer.glass), MENU_GLASS, &text(tr("Kính mờ cho trang", "Frosted glass pages")));
             if let Ok(styles) = CreatePopupMenu() {
                 let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Ears), MENU_STYLE_EARS, &text(tr("Tai thỏ", "Ears")));
                 let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Pill), MENU_STYLE_PILL, &text(tr("Viên thuốc", "Pill")));
@@ -1468,6 +1470,11 @@ impl App {
                 }
                 MENU_ACTIVITY => {
                     self.activity.enabled = !self.activity.enabled;
+                    system::save_settings(self.settings());
+                    self.kick();
+                }
+                MENU_GLASS => {
+                    self.renderer.glass = !self.renderer.glass;
                     system::save_settings(self.settings());
                     self.kick();
                 }
@@ -2477,7 +2484,7 @@ fn run() -> windows::core::Result<()> {
         let mut app = App {
             hwnd,
             notch: Notch::new(settings.minimal),
-            renderer: { let mut r = Renderer::new()?; r.style = settings.style; r },
+            renderer: { let mut r = Renderer::new()?; r.style = settings.style; r.glass = settings.glass; r },
             scale: 1.0,
             monitor: RECT::default(),
             win: (0, 0, 1, 1),

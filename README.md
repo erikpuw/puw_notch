@@ -27,7 +27,7 @@
 | **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity hiện thành banner, bấm **Đồng ý** / **Không**. Không tự duyệt. [Cách thiết lập](#thiết-lập-cho-claude-code-tuỳ-chọn). |
 | **Robot** | 30 giây không đụng máy thì mặt robot thay đồng hồ: mừng khi pin đầy, buồn khi pin yếu. Bật / tắt ở tray. |
 | **Nhẹ** | Khi nghỉ chừng 7 MB RAM và 0% CPU, phát nhạc chừng 14 MB, mở trang Nhạc chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
-| **Tray** | Notch tối giản, Robot, Kiểu notch, Trang hiển thị, Tính năng khác, Khởi động cùng Windows, Ngôn ngữ, Giới thiệu, Thoát. |
+| **Tray** | Notch tối giản, Robot, Kính mờ cho trang, Kiểu notch, Trang hiển thị, Tính năng khác, Khởi động cùng Windows, Ngôn ngữ, Giới thiệu, Thoát. |
 
 Trang ẩn ở tray thì ngừng hẳn.
 
@@ -102,6 +102,12 @@ Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặ
 | Claude (câu hỏi chọn) | Antigravity (xin quyền dùng công cụ) |
 |---|---|
 | ![](assets/screenshots/banner-approve-claude.png) | ![](assets/screenshots/banner-approve-antigravity.png) |
+
+**Kính mờ cho trang** (tray): trang mở rộng trong suốt, nền phía sau mờ nhẹ và có viền sáng chạy quanh. Tai thỏ để hở cạnh trên nên không có vạch sáng sát mép màn hình.
+
+| Tai thỏ | Viên thuốc |
+|---|---|
+| ![](assets/screenshots/glass-ears.png) | ![](assets/screenshots/glass-pill.png) |
 
 **Kiểu viên thuốc** (tray, Kiểu notch): nổi cách mép trên màn hình, bo tròn đủ bốn góc. Mặc định vẫn là tai thỏ.
 

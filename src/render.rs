@@ -43,6 +43,7 @@ mod todo_page;
 mod music_page;
 mod pill;
 mod banner;
+mod glass;
 mod header;
 mod nav;
 mod pages;
@@ -1023,6 +1024,7 @@ pub struct Renderer {
     pub usage_tab: usize,
     pub close_hot: bool,
     pub style: notch::Style,
+    pub glass: bool,
     #[cfg(test)]
     grab: bool,
     #[cfg(test)]
@@ -1084,12 +1086,49 @@ fn rounded(r: D2D_RECT_F, radius: f32) -> D2D1_ROUNDED_RECT {
     D2D1_ROUNDED_RECT { rect: r, radiusX: radius, radiusY: radius }
 }
 
+enum CompTarget {
+    Glass(glass::GlassSurface),
+    Classic {
+        dcomp: IDCompositionDevice,
+        _target: IDCompositionTarget,
+        visual: IDCompositionVisual,
+    },
+}
+
 struct Surface {
     hwnd: HWND,
     swap: IDXGISwapChain1,
-    dcomp: IDCompositionDevice,
-    _target: IDCompositionTarget,
-    visual: IDCompositionVisual,
+    comp: CompTarget,
+}
+
+impl Surface {
+    fn has_glass(&self) -> bool {
+        matches!(self.comp, CompTarget::Glass(_))
+    }
+
+    fn set_shift(&self, shift: i32) {
+        match &self.comp {
+            CompTarget::Glass(g) => { let _ = g.set_shift(shift); }
+            CompTarget::Classic { dcomp, visual, .. } => unsafe {
+                let _ = visual.SetOffsetX2(-(shift as f32));
+                let _ = dcomp.Commit();
+            },
+        }
+    }
+
+    fn resize(&self, w: i32, h: i32) {
+        if let CompTarget::Glass(g) = &self.comp {
+            let _ = g.resize(w, h);
+        }
+    }
+
+    fn sync_glass(&mut self, shape: &ID2D1PathGeometry, gy: f32, opacity: f32) {
+        if let CompTarget::Glass(g) = &mut self.comp {
+            if let Err(e) = g.sync(shape, gy, opacity) {
+                crate::system::log(&format!("glass sync failed: {e}"));
+            }
+        }
+    }
 }
 
 const PIXELS: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED };
@@ -1126,7 +1165,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), shift: 0, moving: false, usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears,
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), shift: 0, moving: false, usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears, glass: true,
                 owner: Owner::Pill,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_fade: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
@@ -1152,7 +1191,9 @@ impl Renderer {
         unsafe {
             self.ctx.SetTarget(None);
             if same_window {
-                self.surface.as_ref().unwrap().swap.ResizeBuffers(0, w as u32, h as u32, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))?;
+                let s = self.surface.as_ref().unwrap();
+                s.swap.ResizeBuffers(0, w as u32, h as u32, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))?;
+                s.resize(w, h);
             } else {
                 self.surface = None;
                 let dxgi: IDXGIDevice = self.d3d.cast()?;
@@ -1171,14 +1212,21 @@ impl Renderer {
                     ..Default::default()
                 };
                 let swap = factory.CreateSwapChainForComposition(&self.d3d, &desc, None)?;
-                let dcomp: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
-                let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
-                let visual = dcomp.CreateVisual()?;
-                visual.SetContent(&swap)?;
-                visual.SetOffsetX2(-(self.shift as f32))?;
-                target.SetRoot(&visual)?;
-                dcomp.Commit()?;
-                self.surface = Some(Surface { hwnd, swap, dcomp, _target: target, visual });
+                let comp = match glass::GlassSurface::new(hwnd, &swap, w, h, self.shift) {
+                    Ok(g) => CompTarget::Glass(g),
+                    Err(e) => {
+                        crate::system::log(&format!("glass init failed: {e}"));
+                        let dcomp: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
+                        let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
+                        let visual = dcomp.CreateVisual()?;
+                        visual.SetContent(&swap)?;
+                        visual.SetOffsetX2(-(self.shift as f32))?;
+                        target.SetRoot(&visual)?;
+                        dcomp.Commit()?;
+                        CompTarget::Classic { dcomp, _target: target, visual }
+                    }
+                };
+                self.surface = Some(Surface { hwnd, swap, comp });
             }
             let buffer: IDXGISurface = self.surface.as_ref().unwrap().swap.GetBuffer(0)?;
             let props = D2D1_BITMAP_PROPERTIES1 {
@@ -1219,8 +1267,7 @@ impl Renderer {
             if shift != self.shift {
                 self.shift = shift;
                 if let Some(s) = &self.surface {
-                    let _ = s.visual.SetOffsetX2(-(shift as f32));
-                    let _ = s.dcomp.Commit();
+                    s.set_shift(shift);
                 }
             }
             if window != self.placed {
@@ -1491,7 +1538,7 @@ impl Renderer {
         unsafe { self.rt.CreateSolidColorBrush(&c, None) }
     }
 
-    fn notch_shape(&self, l: f32, r: f32, h: f32, radius: f32, ear: f32) -> Result<ID2D1PathGeometry> {
+    fn notch_shape(&self, l: f32, r: f32, h: f32, radius: f32, ear: f32, closed: bool) -> Result<ID2D1PathGeometry> {
         if self.style == notch::Style::Pill {
             return self.pill_shape(l, r, h, radius);
         }
@@ -1515,7 +1562,7 @@ impl Renderer {
             sink.AddArc(&arc(p(r, h - rad), rad, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE));
             sink.AddLine(p(r, ear));
             sink.AddArc(&arc(p(r + ear, 0.0), ear, D2D1_SWEEP_DIRECTION_CLOCKWISE));
-            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink.EndFigure(if closed { D2D1_FIGURE_END_CLOSED } else { D2D1_FIGURE_END_OPEN });
             sink.Close()?;
             Ok(geo)
         }
@@ -1882,11 +1929,14 @@ impl Renderer {
         let [nw, nh, nr] = v.size.map(|d| d * s);
         let cx = w as f32 / 2.0;
         let (l, r) = (cx - nw / 2.0, cx + nw / 2.0);
+        let glass_active = self.glass && self.surface.as_ref().is_some_and(|s| s.has_glass());
+        let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
+        let on_glass = panel_ok && glass_active && open > 0.0;
         unsafe {
             let text = |t: &str, f: usize, b: D2D_RECT_F, align: DWRITE_TEXT_ALIGNMENT, c: D2D1_COLOR_F| -> Result<()> {
                 let t: Vec<u16> = t.encode_utf16().collect();
                 fonts[f].SetTextAlignment(align)?;
-                rt.DrawText(&t, &fonts[f], &b, &self.brush(c)?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                rt.DrawText(&t, &fonts[f], &b, &self.brush(glass::vibrant_text(c, on_glass))?, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
                 Ok(())
             };
             let draw_cover = |box_: D2D_RECT_F, radius: f32, a: f32| -> Result<()> {
@@ -1990,20 +2040,62 @@ impl Renderer {
             let gy = (self.style.gap_at(v.size[1]) * s).round();
             rt.SetTransform(&Matrix3x2::translation(0.0, gy));
             let ear = if self.style == notch::Style::Pill { 0.0 } else { notch::ear(v.size[1]) * s };
-            let shape = self.notch_shape(l, r, nh, nr, ear)?;
+            let shape = self.notch_shape(l, r, nh, nr, ear, true)?;
             let prep = Prep { weather_line: &weather_line, weather_empty: &weather_empty, hour_lines: &hour_lines, focus_icons: &focus_icons, figure_icons: &figure_icons, player_icons: &player_icons,
                 note_icons: &note_icons, lyric_heights: &lyric_heights, lyric_tops: &lyric_tops, moon_line: &moon_line, tint, level, fonts: &fonts };
             let ctx = Ctx { v, s, l, r, cx, nh, gy, shape: &shape, text: &text, width: &width, micon: &micon, wx_icon: &draw_wx_icon, cover: &draw_cover };
-            let open = ((nh - 39.0 * s) / (20.0 * s)).clamp(0.0, 1.0);
+            let glass_opacity = if panel_ok && self.glass { open } else { 0.0 };
+            let bg_alpha = glass::page_bg_alpha(panel_ok, open, glass_active);
+            let raised_glass = bg_alpha < 0.999;
             if open > 0.0 {
+                let shadow_k = if raised_glass { 0.55 } else if bg_alpha < 0.999 { 0.35 } else { 1.0 };
                 let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
                 rt.SetTransform(&(Matrix3x2::translation(0.0, SHADOW_DY * s) * base));
                 for k in (1..=SHADOW_STEPS).rev() {
-                    rt.DrawGeometry(&shape, &self.brush(color(0.0, 0.0, 0.0, shadow_layer_alpha(k) * open))?, 2.0 * SHADOW_STEP * k as f32 * s, &self.round);
+                    rt.DrawGeometry(&shape, &self.brush(color(0.0, 0.0, 0.0, shadow_layer_alpha(k) * open * shadow_k))?, 2.0 * SHADOW_STEP * k as f32 * s, &self.round);
                 }
                 rt.SetTransform(&base);
             }
-            rt.FillGeometry(&shape, &self.brush(grey(0.0, 1.0))?, None);
+            if bg_alpha < 0.999 {
+                self.ctx.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
+                rt.FillGeometry(&shape, &self.brush(grey(0.0, bg_alpha))?, None);
+                self.ctx.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+                if raised_glass {
+                    let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: 0.0 }, endPoint: Vector2 { X: 0.0, Y: nh } };
+                    let sheen_stops = rt.CreateGradientStopCollection(&[
+                        D2D1_GRADIENT_STOP { position: 0.00, color: grey(1.0, 0.22 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.22, color: grey(1.0, 0.078 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.55, color: grey(0.0, 0.039 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.85, color: grey(0.0, 0.031 * open) },
+                        D2D1_GRADIENT_STOP { position: 1.00, color: grey(1.0, 0.078 * open) },
+                    ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                    rt.FillGeometry(&shape, &rt.CreateLinearGradientBrush(&line, None, &sheen_stops)?, None);
+                    let rim_stops = rt.CreateGradientStopCollection(&[
+                        D2D1_GRADIENT_STOP { position: 0.00, color: grey(1.0, 0.588 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.12, color: grey(1.0, 0.180 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.40, color: grey(0.0, 0.141 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.75, color: grey(0.0, 0.110 * open) },
+                        D2D1_GRADIENT_STOP { position: 0.92, color: grey(1.0, 0.157 * open) },
+                        D2D1_GRADIENT_STOP { position: 1.00, color: grey(1.0, 0.353 * open) },
+                    ], D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                    let params = D2D1_LAYER_PARAMETERS {
+                        contentBounds: rect(l - ear, 0.0, r + ear, nh),
+                        geometricMask: std::mem::ManuallyDrop::new(Some(shape.clone().into())),
+                        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                        maskTransform: Matrix3x2::identity(),
+                        opacity: 1.0,
+                        opacityBrush: std::mem::ManuallyDrop::new(None),
+                        layerOptions: D2D1_LAYER_OPTIONS_NONE,
+                    };
+                    rt.PushLayer(&params, None);
+                    let rim_shape = if self.style == notch::Style::Pill { shape.clone() } else { self.notch_shape(l, r, nh, nr, ear, false)? };
+                    rt.DrawGeometry(&rim_shape, &rt.CreateLinearGradientBrush(&line, None, &rim_stops)?, 1.8 * s, &self.round);
+                    rt.PopLayer();
+                    drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
+                }
+            } else {
+                rt.FillGeometry(&shape, &self.brush(grey(0.0, 1.0))?, None);
+            }
             let gate = match v.leaving {
                 Some((_, t, _)) if v.page == Page::Music => page_fades(t).1,
                 Some((Page::Music, t, _)) => page_fades(t).0,
@@ -2049,6 +2141,9 @@ impl Renderer {
             #[cfg(test)]
             if self.grab {
                 self.grab_frame()?;
+            }
+            if let Some(surface) = self.surface.as_mut() {
+                surface.sync_glass(&shape, gy, glass_opacity);
             }
             let shown = self.surface.as_ref().unwrap().swap.Present(0, DXGI_PRESENT(0));
             if shown == DXGI_ERROR_DEVICE_REMOVED || shown == DXGI_ERROR_DEVICE_RESET {
@@ -2151,6 +2246,49 @@ mod tests {
                 renderer.present(hwnd, 0, 0, w, h, 1.0, &view!(Mode::Expanded, None)).unwrap();
             }
             assert!(lit(&renderer) > 0);
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    fn expanded_page_uses_lit_frosted_glass_with_only_a_faint_bottom_bounce_inside() {
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let (w, h) = (900i32, 300i32);
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, w!("STATIC"), w!("PageGlass"), WS_POPUP, 0, 0, w, h, None, None, None, None).unwrap();
+            let mut renderer = Renderer::new().unwrap();
+            renderer.grab = true;
+            let (wx, health, idle_focus) = (weather::State::default(), Health::default(), Focus::default());
+            let ph = panel_size(Page::Todo)[1];
+            let view = View {
+                mode: Mode::Expanded, size: [480.0, ph, 28.0], time: "20:49", date: "T2, 26/10",
+                battery: None, banner: None, music: None, live: false, robot: None, phase: 0.0,
+                banner_age: 0.0, lyrics: false, hovered: None, page: Page::Todo, leaving: None,
+                todos: &[], notes: &[], weather: &wx, page_age: 9.0, unit: weather::Unit::C,
+                sun_view: false, cal: Default::default(), task: Default::default(),
+                list: ListView { counts: (0, 0), remind_before: 15, now: 0, draft: "", editing: false, edit_item: None, caret: false, scroll: 0, note_pos: 0.0 },
+                focus: &idle_focus, health: HealthView { h: &health, now: 0, minute_of_day: 0, settings: None },
+            };
+            for _ in 0..3 {
+                renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+            }
+            // Sample an empty background pixel near the left-bottom interior of the page panel (no text/card).
+            let (sx, sy) = ((w / 2 - 220) as usize, (ph as usize).saturating_sub(14));
+            let px = &renderer.grabbed[(sy * w as usize + sx) * 4..][..4];
+            if renderer.surface.as_ref().is_some_and(|s| s.has_glass()) {
+                assert!(px[0] <= 12 && px[1] <= 12 && px[2] <= 12, "keeps dark neutral glass base, got {px:?}");
+                let expected = (glass::PAGE_GLASS_ALPHA * 255.0).round() as i32;
+                assert!((px[3] as i32 - expected).abs() <= 24, "page interior alpha should be ~{expected} plus the lit bottom bounce, got {}", px[3]);
+                renderer.glass = false;
+                for _ in 0..3 {
+                    renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                }
+                let solid_px = &renderer.grabbed[(sy * w as usize + sx) * 4..][..4];
+                assert_eq!((solid_px[0], solid_px[1], solid_px[2], solid_px[3]), (0, 0, 0, 255), "turning glass off restores solid black");
+            } else {
+                assert_eq!((px[0], px[1], px[2], px[3]), (0, 0, 0, 255), "classic fallback remains solid black");
+            }
             DestroyWindow(hwnd).unwrap();
         }
     }

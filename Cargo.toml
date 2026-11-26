@@ -4,7 +4,7 @@ default-members = ["."]
 
 [package]
 name = "puw_notch"
-version = "1.0.45"
+version = "1.0.47"
 edition = "2021"
 description = "PUW Notch: a living notch for Windows"
 
@@ -48,9 +48,15 @@ features = [
     "Win32_System_Variant",
     "Win32_System_Ole",
     "Win32_System_WinRT",
+    "Win32_System_WinRT_Composition",
+    "Win32_System_WinRT_Graphics_Direct2D",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     "Foundation",
+    "Graphics_Effects",
+    "System",
+    "UI_Composition",
+    "UI_Composition_Desktop",
     "Devices_Radios",
     "Devices_Bluetooth",
     "Devices_Enumeration",

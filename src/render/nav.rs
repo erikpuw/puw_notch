@@ -58,8 +58,12 @@ impl Renderer {
                     _ => 0.0,
                 };
                 let dw = dot + (wide - dot) * weight;
-                let shade = 0.38 + 0.62 * weight;
-                rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(grey(shade, dots_a))?);
+                let dot_color = if self.glass {
+                    grey(1.0, dots_a * (0.48 + 0.52 * weight))
+                } else {
+                    grey(0.38 + 0.62 * weight, dots_a)
+                };
+                rt.FillRoundedRectangle(&rounded(rect(dx, dots_y(ph) * s, dx + dw, dots_y(ph) * s + dot), dot / 2.0), &self.brush(dot_color)?);
                 dx += dw + gap;
             }
             if nav_fade > 0.01 {
@@ -83,9 +87,9 @@ impl Renderer {
                     match (weather_empty, p) {
                         (Some((ic, geoms)), Page::Weather) => {
                             let (mx, my) = ((cell.left + cell.right) / 2.0, (cell.top + cell.bottom) / 2.0);
-                            let g = if hot { 1.0 } else { 0.6 + 0.4 * weight };
-                            let tint = (g, g, g);
-                            wx_icon(ic, geoms, mx - 8.0 * s, my - 8.0 * s, 16.0 * s, Some((tint, tint)), a * nav_fade, 9.0)?;
+                            let c = glass::vibrant_text(ink, self.glass);
+                            let tint = (c.r, c.g, c.b);
+                            wx_icon(ic, geoms, mx - 8.0 * s, my - 8.0 * s, 16.0 * s, Some((tint, tint)), c.a, 9.0)?;
                         }
                         _ => text(nav_icon(p), F_ICON, cell, center, ink)?,
                     }

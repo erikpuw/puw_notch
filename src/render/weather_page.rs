@@ -137,7 +137,11 @@ impl Renderer {
                             text(&format!("{}h", h.hour), F_LABEL, rect(x, HOURS_Y * s, x + sw, (HOURS_Y + 14.0) * s), center, grey(if now_column == Some(i) { 1.0 } else { 0.55 }, a * fade))?;
                             text(&format!("{}°", v.unit.number(h.temp)), F_LABEL, rect(x, py - 19.0 * s + 3.0 * s * (1.0 - rise), x + sw, py - 5.0 * s + 3.0 * s * (1.0 - rise)), center, grey(1.0, a * fade * rise))?;
                             wx_icon(ic, geoms, px - HOUR_ICON / 2.0 * s, HOUR_ICON_Y * s, HOUR_ICON * s, Some(weather::tints(h.sky, h.day)), a * fade, 9.0)?;
-                            let rain_ink = if h.rain >= 20 { solid(BLUE, a * fade) } else { grey(0.4, a * fade) };
+                            let rain_ink = if h.rain >= 20 {
+                                if self.glass { color(0.68, 0.90, 1.0, a * fade) } else { solid(BLUE, a * fade) }
+                            } else {
+                                grey(0.4, a * fade)
+                            };
                             text(&format!("{}%", h.rain), F_LABEL, rect(x, RAIN_Y * s, x + sw, (RAIN_Y + 13.0) * s), center, rain_ink)?;
                         }
                     }

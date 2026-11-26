@@ -54,9 +54,6 @@ impl Renderer {
                 if hovered == Some(Button::NoteOpen(row)) {
                     rt.FillRoundedRectangle(&rounded(rect(x0 - 6.0 * s, y - 1.0 * s, xr + 2.0 * s, y + (NOTE_H - 3.0) * s), 8.0 * s), &self.brush(grey(0.08, a))?);
                 }
-                if row + 1 < v.notes.len() {
-                    rt.FillRectangle(&rect(x0, y + (NOTE_H - 2.0) * s, xr, y + (NOTE_H - 1.0) * s), &self.brush(grey(0.11, a))?);
-                }
                 let day = (n.at / 10_000) as u32;
                 let when = if day == today { format!("{:02}:{:02}", n.at / 100 % 100, n.at % 100) }
                     else if todo::next_day(day) == today { tr("Hôm qua", "Yesterday").to_string() }

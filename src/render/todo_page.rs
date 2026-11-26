@@ -83,7 +83,7 @@ impl Renderer {
                         rt.FillRoundedRectangle(&rounded(rect(br.left - 6.0 * s, br.top + 1.0 * s, xr + 2.0 * s, br.bottom - 1.0 * s), 8.0 * s), &self.brush(grey(0.08, a))?);
                     }
                     if n + 1 < rows_on.len() {
-                        rt.FillRectangle(&rect(br.left, br.bottom - 1.0 * s, xr, br.bottom), &self.brush(grey(0.12, a))?);
+                        rt.FillRectangle(&rect(br.left, br.bottom - 1.0 * s, xr, br.bottom), &self.brush(grey(1.0, a * 0.12))?);
                     }
                     let d = 13.0 * s;
                     let (ccx, ccy) = (br.left + d / 2.0, (br.top + br.bottom) / 2.0);

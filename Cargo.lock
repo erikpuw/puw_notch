@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "puw_notch"
-version = "1.0.45"
+version = "1.0.47"
 dependencies = [
  "windows",
  "windows-collections",
@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "puw_notch_setup"
-version = "1.0.45"
+version = "1.0.47"
 dependencies = [
  "flate2",
  "windows",
