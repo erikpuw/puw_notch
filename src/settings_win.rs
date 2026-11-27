@@ -38,7 +38,6 @@ const HERO_H: f32 = 112.0;
 const STAT_H: f32 = 51.0;
 const GAP: f32 = 10.0;
 const ABOUT_H: f32 = 230.0;
-const FEATURES: usize = 3;
 const WHEEL_STEP: f32 = 48.0;
 const FLIP: Duration = Duration::from_millis(250);
 const PANE: Duration = Duration::from_millis(300);
@@ -289,10 +288,6 @@ pub fn section_items(section: Section, m: &Model) -> Vec<Item> {
         Section::System => system(m),
         Section::About => vec![Item::About { version: env!("CARGO_PKG_VERSION").into() }],
     }
-}
-
-pub fn features_on(m: &Model) -> usize {
-    [m.approve, m.volume_keys, m.activity].iter().filter(|on| **on).count().min(FEATURES)
 }
 
 fn height(item: &Item) -> f32 {
@@ -613,11 +608,6 @@ mod tests {
         assert_eq!(toggled_pages(Page::Music.bit(), Page::Music), Page::Music.bit());
         assert_eq!(toggled_pages(Page::Music.bit() | Page::Todo.bit(), Page::Todo), Page::Music.bit());
         assert_eq!(toggled_pages(Page::Music.bit(), Page::Todo), Page::Music.bit() | Page::Todo.bit());
-    }
-
-    #[test]
-    fn features_on_counts_the_three_switches() {
-        assert_eq!(features_on(&model()), 1);
     }
 
     #[test]
