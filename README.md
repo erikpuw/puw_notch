@@ -103,7 +103,7 @@ Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặ
 |---|---|
 | ![](assets/screenshots/banner-approve-claude.png) | ![](assets/screenshots/banner-approve-antigravity.png) |
 
-**Kính mờ cho trang** (tray): trang mở rộng trong suốt, nền phía sau mờ nhẹ và có viền sáng chạy quanh. Tai thỏ để hở cạnh trên nên không có vạch sáng sát mép màn hình.
+**Kính mờ cho trang** (tray): trang mở rộng trong suốt, nền phía sau mờ nhẹ và có viền sáng chạy quanh. Tai thỏ để hở cạnh trên nên không có vạch sáng sát mép màn hình. Trong **Kiểu kính** (tray) chọn **Kính nổi** (mặc định, có viền và ánh sáng ở mép) hoặc **Kính phẳng** (không viền, chỉ có nền mờ).
 
 | Tai thỏ | Viên thuốc |
 |---|---|

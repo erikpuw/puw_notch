@@ -201,11 +201,12 @@ pub struct Settings {
     pub sun_view: bool,
     pub activity: bool,
     pub glass: bool,
+    pub flat_glass: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: ALL_PAGES, sun_view: false, activity: false, glass: true }
+        Settings { minimal: false, english: false, robot: true, volume_keys: false, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: ALL_PAGES, sun_view: false, activity: false, glass: true, flat_glass: false }
     }
 }
 
@@ -224,6 +225,7 @@ fn parse_settings(text: &str) -> Settings {
             "approve=0" => s.approve = false,
             "activity=1" => s.activity = true,
             "glass=0" => s.glass = false,
+            "flatglass=1" => s.flat_glass = true,
             "pages9=1" => knows_task_page = true,
             other => {
                 if let Some(style) = other.strip_prefix("style=") {
@@ -262,7 +264,7 @@ pub fn save_settings(s: Settings) {
         let unit = s.unit.map_or(String::new(), |u| format!("unit={}\n", u.tag()));
         let sun = if s.sun_view { "sunview=1\n" } else { "" };
         let act = if s.activity { "activity=1\n" } else { "" };
-        let glass = if s.glass { "" } else { "glass=0\n" };
+        let glass = format!("{}{}", if s.glass { "" } else { "glass=0\n" }, if s.flat_glass { "flatglass=1\n" } else { "" });
         let cleared = if s.notes_cleared > 0 { format!("notes_cleared={}\n", s.notes_cleared) } else { String::new() };
         let _ = std::fs::write(p, format!("minimal={}\nlang={}\nrobot={}\nvolkeys={}\nstyle={}\napprove={}\npages={}\npages9=1\n{city}{unit}{sun}{act}{glass}{cleared}", s.minimal as u8, if s.english { "en" } else { "vi" }, s.robot as u8, s.volume_keys as u8, s.style.tag(), s.approve as u8, s.pages));
     }
@@ -474,8 +476,9 @@ mod tests {
 
     #[test]
     fn settings_file() {
-        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0x1FF, sun_view: false, activity: false, glass: true });
+        assert_eq!(parse_settings("minimal=1\nlang=en\nrobot=0\nvolkeys=1\n"), Settings { minimal: true, english: true, robot: false, volume_keys: true, style: crate::notch::Style::Ears, approve: true, place: None, unit: None, notes_cleared: 0, pages: 0x1FF, sun_view: false, activity: false, glass: true, flat_glass: false });
         assert!(!parse_settings("glass=0\n").glass && parse_settings("minimal=0\n").glass, "glass on unless turned off");
+        assert!(parse_settings("flatglass=1\n").flat_glass && !parse_settings("minimal=0\n").flat_glass, "raised glass unless flat is chosen");
         assert_eq!(parse_settings("pages=5\n").pages, 5 | 1 << 8, "an old file shows the new Task page");
         assert_eq!(parse_settings("pages=0\n").pages, 0x1FF, "never none");
         assert_eq!(parse_settings("pages=63\n").pages, 0x1FF, "a mask saved before the Focus page gets it too");

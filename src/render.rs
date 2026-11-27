@@ -1040,6 +1040,7 @@ pub struct Renderer {
     pub close_hot: bool,
     pub style: notch::Style,
     pub glass: bool,
+    pub flat_glass: bool,
     #[cfg(test)]
     grab: bool,
     #[cfg(test)]
@@ -1180,7 +1181,7 @@ impl Renderer {
                 startCap: D2D1_CAP_STYLE_ROUND, endCap: D2D1_CAP_STYLE_ROUND, dashCap: D2D1_CAP_STYLE_ROUND,
                 lineJoin: D2D1_LINE_JOIN_ROUND, miterLimit: 1.0, dashStyle: D2D1_DASH_STYLE_SOLID, dashOffset: 0.0,
             }, None)?;
-            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), shift: 0, moving: false, usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears, glass: true,
+            Ok(Renderer { factory, d3d, ctx, rt, dw, wic, surface: None, w: 0, h: 0, placed: (0, 0, 0, 0), region: (0, 0, 0, 0), shift: 0, moving: false, usage: Default::default(), usage_tab: 0, close_hot: false, style: notch::Style::Ears, glass: true, flat_glass: false,
                 owner: Owner::Pill,
                 #[cfg(test)] grab: false, #[cfg(test)] grabbed: Vec::new(),
                 fonts: None, cover: None, cover_fade: None, cover_shadow: None, aurora_rts: RefCell::new(None), glow: (GLOW_NEUTRAL, 0.0, Instant::now()), bars: 0.0, slow_frames: false, line_geoms: HashMap::new(), lyric_heights: None, lyric_motion: lyrics::Motion::default(), app_icons: HashMap::new(), icon_loader: IconLoader::start(), morphs: RefCell::new(HashMap::new()), sun_seen: std::cell::Cell::new(None), round })
@@ -2061,7 +2062,7 @@ impl Renderer {
             let ctx = Ctx { v, s, l, r, cx, nh, gy, shape: &shape, text: &text, width: &width, micon: &micon, wx_icon: &draw_wx_icon, cover: &draw_cover };
             let glass_opacity = if panel_ok && self.glass { open } else { 0.0 };
             let bg_alpha = glass::page_bg_alpha(panel_ok, open, glass_active);
-            let raised_glass = bg_alpha < 0.999;
+            let raised_glass = bg_alpha < 0.999 && !self.flat_glass;
             if open > 0.0 {
                 let shadow_k = if raised_glass { 0.55 } else if bg_alpha < 0.999 { 0.35 } else { 1.0 };
                 let base = { let mut m = Matrix3x2::default(); rt.GetTransform(&mut m); m };
@@ -2285,6 +2286,13 @@ mod tests {
                 assert!(px[0] <= 12 && px[1] <= 12 && px[2] <= 12, "keeps dark neutral glass base, got {px:?}");
                 let expected = (glass::PAGE_GLASS_ALPHA * 255.0).round() as i32;
                 assert!((px[3] as i32 - expected).abs() <= 24, "page interior alpha should be ~{expected} plus the lit bottom bounce, got {}", px[3]);
+                renderer.flat_glass = true;
+                for _ in 0..3 {
+                    renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();
+                }
+                let flat_px = &renderer.grabbed[(sy * w as usize + sx) * 4..][..4];
+                assert!((flat_px[3] as i32 - expected).abs() <= 2, "flat glass has no lit bottom bounce, got {flat_px:?}");
+                renderer.flat_glass = false;
                 renderer.glass = false;
                 for _ in 0..3 {
                     renderer.present(hwnd, 0, 0, w, h, 1.0, &view).unwrap();

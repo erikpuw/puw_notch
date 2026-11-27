@@ -103,7 +103,7 @@ Turn on in **tray → More features → Live tasks** (off by default). One task 
 |---|---|
 | ![](assets/screenshots/en/banner-approve-claude.png) | ![](assets/screenshots/en/banner-approve-antigravity.png) |
 
-**Frosted glass pages** (tray): expanded pages are see-through, with a lightly blurred backdrop and a light rim around the edge. The ears style leaves the top edge open, so no bright line sits against the screen edge.
+**Frosted glass pages** (tray): expanded pages are see-through, with a lightly blurred backdrop and a light rim around the edge. The ears style leaves the top edge open, so no bright line sits against the screen edge. Under **Glass style** (tray) pick **Raised** (the default, with a rim and edge light) or **Flat** (no rim, just the blurred backdrop).
 
 | Ears | Pill |
 |---|---|
