@@ -971,6 +971,16 @@ unsafe fn image_pixels(wic: &IWICImagingFactory, path: &str) -> Option<(u32, u32
     bgra_pixels(wic, &scaler.into())
 }
 
+unsafe fn logo_pixels(wic: &IWICImagingFactory) -> Option<(u32, u32, Vec<u8>)> {
+    let stream = wic.CreateStream().ok()?;
+    stream.InitializeFromMemory(include_bytes!("../assets/puw_1024.png")).ok()?;
+    let decoder = wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand).ok()?;
+    let frame = decoder.GetFrame(0).ok()?;
+    let scaler = wic.CreateBitmapScaler().ok()?;
+    scaler.Initialize(&frame, 192, 192, WICBitmapInterpolationModeFant).ok()?;
+    bgra_pixels(wic, &scaler.into())
+}
+
 unsafe fn bgra_pixels(wic: &IWICImagingFactory, src: &IWICBitmapSource) -> Option<(u32, u32, Vec<u8>)> {
     let conv = wic.CreateFormatConverter().ok()?;
     conv.Initialize(src, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
@@ -1527,6 +1537,18 @@ impl Renderer {
             let _ = self.icon_loader.ask.send(key.clone());
         }
         self.app_icons.get(&key).cloned().flatten()
+    }
+
+    fn logo(&mut self) -> Option<ID2D1Bitmap> {
+        const KEY: &str = "puw:logo";
+        if !self.app_icons.contains_key(KEY) {
+            let bitmap = self.wic.as_ref().and_then(|wic| unsafe { logo_pixels(wic) }).and_then(|(w, h, px)| unsafe {
+                let props = D2D1_BITMAP_PROPERTIES { pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED }, dpiX: 96.0, dpiY: 96.0 };
+                self.rt.CreateBitmap(D2D_SIZE_U { width: w, height: h }, Some(px.as_ptr() as *const _), w * 4, &props).ok()
+            });
+            self.app_icons.insert(KEY.to_string(), bitmap);
+        }
+        self.app_icons.get(KEY).cloned().flatten()
     }
 
     pub fn set_page_open(&self, open: bool) {

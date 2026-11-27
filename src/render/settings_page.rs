@@ -49,6 +49,7 @@ impl Renderer {
             surface.sync_glass(&shape, 0.0, 1.0);
         }
         let fonts = self.fonts(s)?;
+        let logo = self.logo();
         let rt = self.rt.clone();
         let (center, lead, trail) = (DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING);
         unsafe {
@@ -107,10 +108,9 @@ impl Renderer {
             line(NAV_W * s, NAV_W * s + 1.0, 0.0, grey(0.0, 0.0))?;
             rt.FillRectangle(&rect(NAV_W * s, 1.0, NAV_W * s + 1.0, h as f32 - 1.0), &self.brush(grey(1.0, 0.08))?);
 
-            let mark = rect(18.0 * s, 20.0 * s, 48.0 * s, 50.0 * s);
-            fill(mark, 9.0 * s, grey(0.0, 1.0))?;
-            outline(mark, 9.0 * s, 1.0, grey(1.0, 0.14))?;
-            fill(rect(25.0 * s, 25.0 * s, 41.0 * s, 31.0 * s), 3.0 * s, green(1.0))?;
+            if let Some(logo) = &logo {
+                rt.DrawBitmap(logo, Some(&rect(18.0 * s, 20.0 * s, 48.0 * s, 50.0 * s)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+            }
             text("PUW Notch", F_TITLE, rect(58.0 * s, 20.0 * s, (NAV_W - 10.0) * s, 37.0 * s), lead, grey(1.0, 1.0))?;
             text(&format!("{} {}", crate::i18n::tr("Phiên bản", "Version"), v.version), F_LABEL, rect(58.0 * s, 36.0 * s, (NAV_W - 10.0) * s, 52.0 * s), lead, grey(0.45, 1.0))?;
             for (section, q) in nav_rects() {
@@ -289,10 +289,9 @@ impl Renderer {
                     }
                     Item::About { version } => {
                         let cx = (q.left + q.right) / 2.0;
-                        let mark = rect(cx - 34.0 * s, q.top + 14.0 * s, cx + 34.0 * s, q.top + 82.0 * s);
-                        fill(mark, 19.0 * s, grey(0.0, 1.0))?;
-                        outline(mark, 19.0 * s, 1.0, grey(1.0, 0.14))?;
-                        fill(rect(cx - 17.0 * s, q.top + 25.0 * s, cx + 17.0 * s, q.top + 37.0 * s), 6.0 * s, green(1.0))?;
+                        if let Some(logo) = &logo {
+                            rt.DrawBitmap(logo, Some(&rect(cx - 34.0 * s, q.top + 14.0 * s, cx + 34.0 * s, q.top + 82.0 * s)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                        }
                         text("PUW Notch", F_BIG, rect(q.left, q.top + 92.0 * s, q.right, q.top + 126.0 * s), center, grey(1.0, 1.0))?;
                         text(&format!("{} {version}", crate::i18n::tr("Phiên bản", "Version")), F_BODY, rect(q.left, q.top + 126.0 * s, q.right, q.top + 148.0 * s), center, grey(0.6, 1.0))?;
                         for (i, (b, action)) in p.targets.iter().enumerate() {
