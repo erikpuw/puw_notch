@@ -137,7 +137,7 @@ Task Manager in three states (measured on one PC, the figures vary by PC):
 
 Right-click the tray icon for three items: **Settings…**, **About** and **Quit**. Every option lives in the settings window, split into six sections: Overview (summary cards and three quick switches), Look, Pages, Features, System and About. Changes apply right away and are saved.
 
-![](assets/screenshots/settings.png)
+![](assets/screenshots/en/settings.png)
 
 ## Download and run
 

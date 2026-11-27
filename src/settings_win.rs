@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
-use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, KillTimer, SetForegroundWindow, SetTimer, ShowWindow, SW_SHOW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP};
+use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, KillTimer, SetForegroundWindow, SetTimer, ShowWindow, SW_SHOW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_POPUP};
 
 use crate::i18n::{english, tr};
 use crate::notch::Style;
@@ -419,7 +419,7 @@ impl SettingsWin {
         let x = monitor.left + (monitor.right - monitor.left - size.0) / 2;
         let y = monitor.top + (monitor.bottom - monitor.top - size.1) / 2;
         unsafe {
-            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW, CLASS, w!("PUW Notch settings"), WS_POPUP, x, y, size.0, size.1, None, None, None, None).ok()?;
+            let hwnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW, CLASS, w!("PUW Notch settings"), WS_POPUP, x, y, size.0, size.1, None, None, None, None).ok()?;
             let renderer = match Renderer::new() {
                 Ok(r) => r,
                 Err(_) => {
