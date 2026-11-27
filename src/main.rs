@@ -1532,11 +1532,15 @@ impl App {
             }
             settings_win::Action::Go(section) => {
                 if let Some(win) = &mut self.settings_win {
-                    win.section = section;
-                    win.hovered = None;
+                    win.go(section);
                 }
             }
-            other => self.apply_setting(other),
+            other => {
+                self.apply_setting(other);
+                if let Some(win) = &mut self.settings_win {
+                    win.flipped(other);
+                }
+            }
         }
         let model = self.settings_model();
         if let Some(win) = &mut self.settings_win {
@@ -1574,6 +1578,17 @@ impl App {
                 win.left();
                 win.draw();
             }
+            WM_MOUSEWHEEL => {
+                win.wheel(((wp.0 >> 16) & 0xffff) as i16 as f32 / 120.0);
+                let at = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
+                let mut local = at;
+                unsafe {
+                    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(win.hwnd, &mut local);
+                }
+                win.hovered = win.hit(local.x as f32, local.y as f32);
+                win.draw();
+            }
+            WM_TIMER if win.is_timer(wp.0) => win.draw(),
             WM_LBUTTONUP => {
                 let (x, y) = point(lp);
                 if let Some(action) = win.hit(x, y) {
