@@ -8,7 +8,7 @@
 
 <p align="center">
   Nhạc, việc, thông báo, thời tiết, lịch và một chú robot nhỏ, gói gọn ở mép trên màn hình theo kiểu Dynamic Island.<br>
-  Viết bằng Rust, exe ~1138 KB, không WebView, không cần cài Visual C++ Redistributable.
+  Viết bằng Rust, exe ~1148 KB, không WebView, không cần cài Visual C++ Redistributable.
 </p>
 
 <p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puw_notch/releases/latest"><img src="https://img.shields.io/github/v/release/erikpuw/puw_notch?label=B%E1%BA%A3n%20m%E1%BB%9Bi%20nh%E1%BA%A5t" alt="Bản mới nhất" valign="middle"></a></p>
@@ -141,7 +141,7 @@ Chuột phải vào biểu tượng ở khay hệ thống có ba mục: **Cài �
 
 ## Tải về và chạy
 
-Tải bản cài đặt `puw-notch-setup-*-x64.exe` (~1024 KB, chọn thư mục, tự khởi động cùng Windows và gỡ trong Settings → Apps) ở [Releases (bản mới nhất)](https://github.com/erikpuw/puw_notch/releases/latest) rồi chạy để cài (chỉ tải ở đây, xem lưu ý ở đầu trang). Nếu PUW Notch đang chạy, hãy tắt trước khi cài đặt hoặc cập nhật (chuột phải biểu tượng ở khay hệ thống → **Thoát**).
+Tải bản cài đặt `puw-notch-setup-*-x64.exe` (~1029 KB, chọn thư mục, tự khởi động cùng Windows và gỡ trong Settings → Apps) ở [Releases (bản mới nhất)](https://github.com/erikpuw/puw_notch/releases/latest) rồi chạy để cài (chỉ tải ở đây, xem lưu ý ở đầu trang). Nếu PUW Notch đang chạy, hãy tắt trước khi cài đặt hoặc cập nhật (chuột phải biểu tượng ở khay hệ thống → **Thoát**).
 
 App chưa có chữ ký số, nên không có gì khác ngoài nguồn này để xác nhận file là của tác giả, và Windows có thể chặn:
 

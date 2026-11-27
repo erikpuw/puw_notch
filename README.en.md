@@ -8,7 +8,7 @@
 
 <p align="center">
   Music, tasks, notifications, weather, a calendar and a tiny robot, tucked into the top edge of your screen, Dynamic Island style.<br>
-  Written in Rust, ~1138 KB exe, no WebView, no Visual C++ Redistributable to install.
+  Written in Rust, ~1148 KB exe, no WebView, no Visual C++ Redistributable to install.
 </p>
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puw_notch/releases/latest"><img src="https://img.shields.io/github/v/release/erikpuw/puw_notch?label=Latest" alt="Latest release" valign="middle"></a></p>
@@ -141,7 +141,7 @@ Right-click the tray icon for three items: **Settings…**, **About** and **Quit
 
 ## Download and run
 
-Get the installer `puw-notch-setup-*-x64.exe` (~1024 KB, with folder picker, Windows startup task and Settings → Apps uninstall) from [Latest Release](https://github.com/erikpuw/puw_notch/releases/latest) and run it to install (download only from here, see the note at the top). If PUW Notch is already running, close it before installing or updating (right-click the tray icon → **Quit**).
+Get the installer `puw-notch-setup-*-x64.exe` (~1029 KB, with folder picker, Windows startup task and Settings → Apps uninstall) from [Latest Release](https://github.com/erikpuw/puw_notch/releases/latest) and run it to install (download only from here, see the note at the top). If PUW Notch is already running, close it before installing or updating (right-click the tray icon → **Quit**).
 
 The app is not code-signed, so nothing but this source confirms a file is the author's, and Windows may block it:
 
