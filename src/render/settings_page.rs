@@ -1,5 +1,5 @@
 use super::*;
-use crate::settings_win::{nav_rects, Action, Item, Placed, Rect, Section, CLOSE, CW, CX, HEIGHT, NAV_W, WIDTH};
+use crate::settings_win::{nav_rects, Action, Item, Placed, Rect, Section, CLOSE, CW, CX, HEIGHT, NAV_W};
 
 const ICON_CLOSE: &str = "\u{E711}";
 
@@ -161,7 +161,7 @@ impl Renderer {
 mod tests {
     use super::*;
     use crate::notch::Style;
-    use crate::settings_win::{place, section_items, Model, SECTIONS};
+    use crate::settings_win::{place, section_items, Model, SECTIONS, WIDTH};
 
     #[test]
     #[ignore = "writes target/settings-<n>.bmp: every section of the settings window"]
