@@ -27,7 +27,7 @@
 | **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity hiện thành banner, bấm **Đồng ý** / **Không**. Không tự duyệt. [Cách thiết lập](#thiết-lập-cho-claude-code-tuỳ-chọn). |
 | **Robot** | 30 giây không đụng máy thì mặt robot thay đồng hồ: mừng khi pin đầy, buồn khi pin yếu. Bật / tắt ở tray. |
 | **Nhẹ** | Khi nghỉ chừng 7 MB RAM và 0% CPU, phát nhạc chừng 14 MB, mở trang Nhạc chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
-| **Tray** | Notch tối giản, Robot, Kính mờ cho trang, Kiểu notch, Trang hiển thị, Tính năng khác, Khởi động cùng Windows, Ngôn ngữ, Giới thiệu, Thoát. |
+| **Tray** | Notch tối giản, Robot, Kính mờ cho trang, Kiểu kính, Kiểu notch, Trang hiển thị, Tính năng khác, Khởi động cùng Windows, Ngôn ngữ, Giới thiệu, Thoát. |
 
 Trang ẩn ở tray thì ngừng hẳn.
 
