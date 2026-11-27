@@ -44,9 +44,9 @@ impl Renderer {
             rt.BeginDraw();
             rt.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
             let window = rect(0.0, 0.0, w as f32, h as f32);
-            fill(window, 14.0 * s, grey(0.0, 1.0))?;
-            outline(window, 14.0 * s, grey(1.0, 0.10))?;
-            rt.FillRectangle(&rect(NAV_W * s, 14.0 * s, NAV_W * s + 1.0, (HEIGHT - 14.0) * s), &self.brush(grey(1.0, 0.07))?);
+            fill(window, 14.0 * s, grey(0.043, 1.0))?;
+            outline(window, 14.0 * s, grey(0.2, 1.0))?;
+            rt.FillRectangle(&rect(NAV_W * s, 1.0 * s, NAV_W * s + 1.0, (HEIGHT - 1.0) * s), &self.brush(grey(0.12, 1.0))?);
 
             text(crate::i18n::tr("Cài đặt", "Settings"), F_TITLE, rect(24.0 * s, 14.0 * s, (NAV_W - 8.0) * s, 40.0 * s), lead, grey(1.0, 1.0))?;
             for (section, q) in nav_rects() {
@@ -80,7 +80,7 @@ impl Renderer {
                     Item::Card { title, value, note, go } => {
                         let over = hot(Action::Go(*go));
                         fill(q, 12.0 * s, grey(if over { 0.11 } else { 0.08 }, 1.0))?;
-                        outline(q, 12.0 * s, grey(1.0, if over { 0.16 } else { 0.09 }))?;
+                        outline(q, 12.0 * s, grey(if over { 0.26 } else { 0.135 }, 1.0))?;
                         let x = q.left + 14.0 * s;
                         text(title, F_LABEL, rect(x, q.top + 9.0 * s, q.right - 10.0 * s, q.top + 25.0 * s), lead, grey(0.55, 1.0))?;
                         text(value, F_TITLE, rect(x, q.top + 25.0 * s, q.right - 10.0 * s, q.top + 46.0 * s), lead, grey(1.0, 1.0))?;
@@ -90,7 +90,7 @@ impl Renderer {
                         if hot(*action) {
                             fill(q, 8.0 * s, grey(0.08, 1.0))?;
                         }
-                        rt.FillRectangle(&rect(q.left, q.bottom - 1.0, q.right, q.bottom), &self.brush(grey(1.0, 0.06))?);
+                        rt.FillRectangle(&rect(q.left, q.bottom - 1.0, q.right, q.bottom), &self.brush(grey(0.11, 1.0))?);
                         let track = rect(q.right - 12.0 * s - 34.0 * s, (q.top + q.bottom) / 2.0 - 10.0 * s, q.right - 12.0 * s, (q.top + q.bottom) / 2.0 + 10.0 * s);
                         let text_right = track.left - 12.0 * s;
                         match note {
@@ -105,7 +105,7 @@ impl Renderer {
                         rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: knob_x, Y: (track.top + track.bottom) / 2.0 }, radiusX: 8.0 * s, radiusY: 8.0 * s }, &self.brush(grey(1.0, 1.0))?);
                     }
                     Item::Choice { label, options } => {
-                        rt.FillRectangle(&rect(q.left, q.bottom - 1.0, q.right, q.bottom), &self.brush(grey(1.0, 0.06))?);
+                        rt.FillRectangle(&rect(q.left, q.bottom - 1.0, q.right, q.bottom), &self.brush(grey(0.11, 1.0))?);
                         let (first, last) = (scaled(p.targets[0].0, s), scaled(p.targets[p.targets.len() - 1].0, s));
                         let holder = rect(first.left - 2.0 * s, first.top - 2.0 * s, last.right + 2.0 * s, last.bottom + 2.0 * s);
                         text(label, F_BODY, rect(q.left + 2.0 * s, q.top, holder.left - 12.0 * s, q.bottom), lead, grey(1.0, 1.0))?;
@@ -134,7 +134,7 @@ impl Renderer {
                         text(label, F_LABEL, q, center, if *on { grey(1.0, 1.0) } else if over { grey(0.85, 1.0) } else { grey(0.6, 1.0) })?;
                     }
                     Item::Button { label, button, action } => {
-                        rt.FillRectangle(&rect(q.left, q.bottom - 1.0, q.right, q.bottom), &self.brush(grey(1.0, 0.06))?);
+                        rt.FillRectangle(&rect(q.left, q.bottom - 1.0, q.right, q.bottom), &self.brush(grey(0.11, 1.0))?);
                         let b = scaled(p.targets[0].0, s);
                         text(label, F_BODY, rect(q.left + 2.0 * s, q.top, b.left - 12.0 * s, q.bottom), lead, grey(1.0, 1.0))?;
                         let radius = (b.bottom - b.top) / 2.0;
