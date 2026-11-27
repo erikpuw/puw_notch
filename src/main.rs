@@ -19,6 +19,7 @@ mod notify;
 mod render;
 mod robot;
 mod screen;
+mod settings_win;
 mod status;
 mod system;
 mod task;
@@ -106,22 +107,9 @@ fn watchdog() {
         }
     });
 }
-const MENU_MINIMAL: usize = 10;
-const MENU_AUTOSTART: usize = 11;
+const MENU_SETTINGS: usize = 10;
 const MENU_QUIT: usize = 12;
-const MENU_LANG_VI: usize = 13;
-const MENU_LANG_EN: usize = 14;
-const MENU_ROBOT: usize = 15;
 const MENU_ABOUT: usize = 16;
-const MENU_VOLUME_KEYS: usize = 17;
-const MENU_STYLE_EARS: usize = 18;
-const MENU_STYLE_PILL: usize = 19;
-const MENU_APPROVE: usize = 20;
-const MENU_ACTIVITY: usize = 21;
-const MENU_GLASS: usize = 22;
-const MENU_GLASS_RAISED: usize = 23;
-const MENU_GLASS_FLAT: usize = 24;
-const MENU_PAGE: usize = 30;
 const REPO_URL: &str = "https://github.com/erikpuw/puw_notch";
 
 struct SeekDrag {
@@ -204,6 +192,7 @@ struct App {
     task_sel: Option<usize>,
     task_pick: (i32, u32),
     task_alert: Option<task_alert::Alert>,
+    settings_win: Option<settings_win::SettingsWin>,
     task_pending: Vec<usize>,
     task_minute: u64,
     task_scroll: usize,
@@ -1398,42 +1387,8 @@ impl App {
     fn menu(&mut self) {
         unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
-            let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
             let text = |s: &str| windows::core::HSTRING::from(s);
-            let english = i18n::english();
-            let _ = AppendMenuW(menu, MF_STRING | check(self.notch.minimal), MENU_MINIMAL, &text(tr("Notch tối giản", "Minimal notch")));
-            let _ = AppendMenuW(menu, MF_STRING | check(self.robot_on), MENU_ROBOT, &text(tr("Robot khi để yên", "Idle robot")));
-            let _ = AppendMenuW(menu, MF_STRING | check(self.renderer.glass), MENU_GLASS, &text(tr("Kính mờ cho trang", "Frosted glass pages")));
-            if let Ok(looks) = CreatePopupMenu() {
-                let _ = AppendMenuW(looks, MF_STRING | check(!self.renderer.flat_glass), MENU_GLASS_RAISED, &text(tr("Kính nổi", "Raised")));
-                let _ = AppendMenuW(looks, MF_STRING | check(self.renderer.flat_glass), MENU_GLASS_FLAT, &text(tr("Kính phẳng", "Flat")));
-                let _ = AppendMenuW(menu, MF_POPUP, looks.0 as usize, &text(tr("Kiểu kính", "Glass style")));
-            }
-            if let Ok(styles) = CreatePopupMenu() {
-                let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Ears), MENU_STYLE_EARS, &text(tr("Tai thỏ", "Ears")));
-                let _ = AppendMenuW(styles, MF_STRING | check(self.style == notch::Style::Pill), MENU_STYLE_PILL, &text(tr("Viên thuốc", "Pill")));
-                let _ = AppendMenuW(menu, MF_POPUP, styles.0 as usize, &text(tr("Kiểu notch", "Notch style")));
-            }
-            if let Ok(pages) = CreatePopupMenu() {
-                let mask = render::pages_on();
-                for (i, p) in PAGES.iter().enumerate() {
-                    let last = mask == p.bit();
-                    let _ = AppendMenuW(pages, MF_STRING | check(mask & p.bit() != 0) | if last { MF_GRAYED } else { MF_ENABLED }, MENU_PAGE + i, &text(p.name()));
-                }
-                let _ = AppendMenuW(menu, MF_POPUP, pages.0 as usize, &text(tr("Trang hiển thị", "Pages shown")));
-            }
-            if let Ok(more) = CreatePopupMenu() {
-                let _ = AppendMenuW(more, MF_STRING | check(self.approve.is_enabled()), MENU_APPROVE, &text(tr("Duyệt ngay trên notch", "Approve on the notch")));
-                let _ = AppendMenuW(more, MF_STRING | check(status::taking_volume_keys()), MENU_VOLUME_KEYS, &text(tr("Ẩn bảng âm lượng của Windows", "Hide Windows volume popup")));
-                let _ = AppendMenuW(more, MF_STRING | check(self.activity.enabled), MENU_ACTIVITY, &text(tr("Tác vụ nền trực tiếp", "Live activities")));
-                let _ = AppendMenuW(menu, MF_POPUP, more.0 as usize, &text(tr("Tính năng khác", "More features")));
-            }
-            let _ = AppendMenuW(menu, MF_STRING | check(system::autostart_enabled()), MENU_AUTOSTART, &text(tr("Khởi động cùng Windows", "Start with Windows")));
-            if let Ok(langs) = CreatePopupMenu() {
-                let _ = AppendMenuW(langs, MF_STRING | check(!english), MENU_LANG_VI, w!("Tiếng Việt"));
-                let _ = AppendMenuW(langs, MF_STRING | check(english), MENU_LANG_EN, w!("English"));
-                let _ = AppendMenuW(menu, MF_POPUP, langs.0 as usize, &text(tr("Ngôn ngữ", "Language")));
-            }
+            let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, &text(tr("Cài đặt…", "Settings…")));
             let _ = AppendMenuW(menu, MF_STRING, MENU_ABOUT, &text(tr("Giới thiệu PUW Notch", "About PUW Notch")));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, &text(tr("Thoát", "Quit")));
@@ -1443,80 +1398,12 @@ impl App {
             let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, None, self.hwnd, None).0 as usize;
             let _ = DestroyMenu(menu);
             match cmd {
-                MENU_MINIMAL => {
-                    let on = !self.notch.minimal;
-                    self.notch.set_minimal(on);
-                    system::save_settings(self.settings());
-                    self.kick();
-                }
-                MENU_STYLE_EARS | MENU_STYLE_PILL => {
-                    self.style = if cmd == MENU_STYLE_PILL { notch::Style::Pill } else { notch::Style::Ears };
-                    self.renderer.style = self.style;
-                    system::save_settings(self.settings());
-                    self.kick();
-                }
-                c if (MENU_PAGE..MENU_PAGE + PAGES.len()).contains(&c) => {
-                    render::set_pages_on(render::pages_on() ^ PAGES[c - MENU_PAGE].bit());
-                    if !render::page_shown(self.page) {
-                        self.page = PAGES.into_iter().find(|p| render::page_shown(*p)).unwrap_or(Page::Music);
-                        self.page_since = Instant::now();
-                        self.settings_open = None;
-                    }
-                    if !render::page_shown(Page::Focus) {
-                        self.focus = Focus::default();
-                    }
-                    if !render::page_shown(Page::Usage) {
-                        self.usage_alerts.clear();
-                    }
-                    if render::page_shown(Page::Weather) {
-                        self.weather.refresh();
-                    }
-                    self.refresh_music();
-                    system::save_settings(self.settings());
-                    self.kick();
-                }
-                MENU_ACTIVITY => {
-                    self.activity.enabled = !self.activity.enabled;
-                    system::save_settings(self.settings());
-                    self.kick();
-                }
-                MENU_GLASS => {
-                    self.renderer.glass = !self.renderer.glass;
-                    system::save_settings(self.settings());
-                    self.kick();
-                }
-                MENU_GLASS_RAISED | MENU_GLASS_FLAT => {
-                    self.renderer.flat_glass = cmd == MENU_GLASS_FLAT;
-                    system::save_settings(self.settings());
-                    self.kick();
-                }
-                MENU_APPROVE => {
-                    self.approve.set_enabled(!self.approve.is_enabled());
-                    system::save_settings(self.settings());
-                    self.finish_approval(approve::Answer::Ask);
-                }
-                MENU_AUTOSTART => system::set_autostart(!system::autostart_enabled()),
-                MENU_ROBOT => {
-                    self.robot_on = !self.robot_on;
-                    system::save_settings(self.settings());
-                    self.refresh_robot();
-                }
-                MENU_VOLUME_KEYS => {
-                    status::take_volume_keys(!status::taking_volume_keys());
-                    system::save_settings(self.settings());
-                }
-                MENU_LANG_VI | MENU_LANG_EN => {
-                    i18n::set_english(cmd == MENU_LANG_EN);
-                    system::save_settings(self.settings());
-                    (self.time, self.date) = system::clock();
-                    self.redraw();
-                }
+                MENU_SETTINGS => self.open_settings(),
                 MENU_ABOUT => {
                     let body = windows::core::HSTRING::from(format!("{}\n\n{}", about_text(env!("CARGO_PKG_VERSION")), tr("Mở trang GitHub?", "Open the GitHub page?")));
                     let title = windows::core::HSTRING::from(tr("Giới thiệu PUW Notch", "About PUW Notch"));
                     if MessageBoxW(Some(self.hwnd), &body, &title, MB_YESNO | MB_ICONINFORMATION) == IDYES {
-                        let url = windows::core::HSTRING::from(REPO_URL);
-                        ShellExecuteW(None, w!("open"), &url, None, None, SW_SHOWNORMAL);
+                        self.apply_setting(settings_win::Action::OpenRepo);
                     }
                 }
                 MENU_QUIT => { let _ = DestroyWindow(self.hwnd); }
@@ -1525,6 +1412,179 @@ impl App {
         }
     }
 
+    fn apply_setting(&mut self, action: settings_win::Action) {
+        use settings_win::Action;
+        match action {
+            Action::Minimal => {
+                let on = !self.notch.minimal;
+                self.notch.set_minimal(on);
+                system::save_settings(self.settings());
+                self.kick();
+            }
+            Action::NotchStyle(style) => {
+                self.style = style;
+                self.renderer.style = style;
+                system::save_settings(self.settings());
+                self.kick();
+            }
+            Action::Page(page) => {
+                let mask = settings_win::toggled_pages(render::pages_on(), page);
+                if mask == render::pages_on() {
+                    return;
+                }
+                render::set_pages_on(mask);
+                if !render::page_shown(self.page) {
+                    self.page = PAGES.into_iter().find(|p| render::page_shown(*p)).unwrap_or(Page::Music);
+                    self.page_since = Instant::now();
+                    self.settings_open = None;
+                }
+                if !render::page_shown(Page::Focus) {
+                    self.focus = Focus::default();
+                }
+                if !render::page_shown(Page::Usage) {
+                    self.usage_alerts.clear();
+                }
+                if render::page_shown(Page::Weather) {
+                    self.weather.refresh();
+                }
+                self.refresh_music();
+                system::save_settings(self.settings());
+                self.kick();
+            }
+            Action::Activity => {
+                self.activity.enabled = !self.activity.enabled;
+                system::save_settings(self.settings());
+                self.kick();
+            }
+            Action::Glass => {
+                self.renderer.glass = !self.renderer.glass;
+                system::save_settings(self.settings());
+                self.kick();
+            }
+            Action::GlassFlat(flat) => {
+                self.renderer.flat_glass = flat;
+                system::save_settings(self.settings());
+                self.kick();
+            }
+            Action::Approve => {
+                self.approve.set_enabled(!self.approve.is_enabled());
+                system::save_settings(self.settings());
+                self.finish_approval(approve::Answer::Ask);
+            }
+            Action::Autostart => system::set_autostart(!system::autostart_enabled()),
+            Action::Robot => {
+                self.robot_on = !self.robot_on;
+                system::save_settings(self.settings());
+                self.refresh_robot();
+            }
+            Action::VolumeKeys => {
+                status::take_volume_keys(!status::taking_volume_keys());
+                system::save_settings(self.settings());
+            }
+            Action::English(on) => {
+                i18n::set_english(on);
+                system::save_settings(self.settings());
+                (self.time, self.date) = system::clock();
+                self.redraw();
+            }
+            Action::OpenRepo => unsafe {
+                let url = windows::core::HSTRING::from(REPO_URL);
+                ShellExecuteW(None, w!("open"), &url, None, None, SW_SHOWNORMAL);
+            },
+            Action::Quit => unsafe {
+                let _ = DestroyWindow(self.hwnd);
+            },
+            Action::Go(_) | Action::Close => {}
+        }
+    }
+
+    fn settings_model(&self) -> settings_win::Model {
+        settings_win::Model {
+            minimal: self.notch.minimal,
+            robot: self.robot_on,
+            glass: self.renderer.glass,
+            flat_glass: self.renderer.flat_glass,
+            style: self.style,
+            pages: render::pages_on(),
+            approve: self.approve.is_enabled(),
+            volume_keys: status::taking_volume_keys(),
+            activity: self.activity.enabled,
+            autostart: system::autostart_enabled(),
+            english: i18n::english(),
+        }
+    }
+
+    fn open_settings(&mut self) {
+        if let Some(win) = &self.settings_win {
+            unsafe {
+                let _ = SetForegroundWindow(win.hwnd);
+            }
+            return;
+        }
+        self.settings_win = settings_win::SettingsWin::open(self.monitor, self.scale, self.settings_model());
+    }
+
+    fn settings_action(&mut self, action: settings_win::Action) {
+        match action {
+            settings_win::Action::Close => {
+                self.settings_win = None;
+                return;
+            }
+            settings_win::Action::Go(section) => {
+                if let Some(win) = &mut self.settings_win {
+                    win.section = section;
+                    win.hovered = None;
+                }
+            }
+            other => self.apply_setting(other),
+        }
+        let model = self.settings_model();
+        if let Some(win) = &mut self.settings_win {
+            win.model = model;
+            win.draw();
+        }
+    }
+
+    fn handle_settings(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+        let win = self.settings_win.as_mut()?;
+        let point = |lp: LPARAM| ((lp.0 & 0xffff) as i16 as f32, ((lp.0 >> 16) & 0xffff) as i16 as f32);
+        match msg {
+            WM_NCHITTEST => {
+                use windows::Win32::Graphics::Gdi::ScreenToClient;
+                let mut at = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
+                unsafe {
+                    let _ = ScreenToClient(win.hwnd, &mut at);
+                }
+                return Some(LRESULT(if win.caption(at.x as f32, at.y as f32) { HTCAPTION } else { HTCLIENT } as isize));
+            }
+            WM_SETCURSOR if win.hovered.is_some() => {
+                unsafe { let _ = SetCursor(LoadCursorW(None, IDC_HAND).ok()); }
+                return Some(LRESULT(1));
+            }
+            WM_MOUSEMOVE => {
+                win.track_leave();
+                let (x, y) = point(lp);
+                let hit = win.hit(x, y);
+                if hit != win.hovered {
+                    win.hovered = hit;
+                    win.draw();
+                }
+            }
+            WM_MOUSELEAVE => {
+                win.left();
+                win.draw();
+            }
+            WM_LBUTTONUP => {
+                let (x, y) = point(lp);
+                if let Some(action) = win.hit(x, y) {
+                    self.settings_action(action);
+                }
+            }
+            WM_KEYDOWN if wp.0 == 0x1B => self.settings_win = None,
+            _ => return None,
+        }
+        Some(LRESULT(0))
+    }
     fn handle(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         let lp = if (WM_MOUSEMOVE..=WM_MBUTTONDBLCLK).contains(&msg) { self.renderer.canvas_point(lp) } else { lp };
         match msg {
@@ -2433,6 +2493,11 @@ extern "system" fn alert_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
+extern "system" fn settings_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let handled = APP.with(|a| a.try_borrow_mut().ok().and_then(|mut g| g.as_mut().and_then(|app| app.handle_settings(msg, wp, lp))));
+    handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
+}
+
 fn main() -> windows::core::Result<()> {
     watchdog();
     std::panic::set_hook(Box::new(|info| system::log(&format!("panic: {info}"))));
@@ -2474,6 +2539,7 @@ fn run() -> windows::core::Result<()> {
         };
         RegisterClassExW(&wc);
         RegisterClassExW(&WNDCLASSEXW { lpfnWndProc: Some(alert_wndproc), lpszClassName: task_alert::CLASS, ..wc });
+        RegisterClassExW(&WNDCLASSEXW { lpfnWndProc: Some(settings_wndproc), lpszClassName: settings_win::CLASS, ..wc });
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class,
@@ -2559,6 +2625,7 @@ fn run() -> windows::core::Result<()> {
             task_sel: None,
             task_pick: (2026, 1),
             task_alert: None,
+            settings_win: None,
             task_pending: Vec::new(),
             task_minute: 0,
             task_scroll: 0,

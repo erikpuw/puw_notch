@@ -50,8 +50,10 @@ mod pages;
 mod sun_path;
 mod task_page;
 mod usage_page;
+mod settings_page;
 pub use task_page::picked;
 pub use alert::{alert_buttons, AlertView};
+pub use settings_page::SettingsView;
 
 pub const WM_ICONS: u32 = WM_APP + 10;
 

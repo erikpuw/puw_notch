@@ -19,17 +19,17 @@
 
 | Tính năng | Làm gì |
 |---|---|
-| **Notch** | Giờ, vòng pin và sóng nhạc. Rê chuột để mở bảng. Hai kiểu, chọn ở tray: tai thỏ hoặc viên thuốc nổi. |
+| **Notch** | Giờ, vòng pin và sóng nhạc. Rê chuột để mở bảng. Hai kiểu, chọn trong Cài đặt: tai thỏ hoặc viên thuốc nổi. |
 | **Tự né** | Thu mini khi đè lên chữ bên dưới, ẩn khi chơi game hoặc xem phim toàn màn hình. Vẫn hiện khi quay hoặc chia sẻ màn hình. |
 | **Banner** | Thông báo Windows, âm lượng, độ sáng, mic, Caps/Num Lock, pin, USB, Wi-Fi, Bluetooth, máy bay. Nhiều thông báo đến cùng lúc thì hiện lần lượt. |
 | **Banner mạng** | Wi-Fi, Bluetooth và máy bay mỗi thứ một banner. Wi-Fi bật hoặc máy bay tắt thì banner liệt kê từng bước (kết nối mạng, VPN, thiết bị Bluetooth), tích xanh khi xong. Bật tắt nhanh chỉ giữ trạng thái cuối. |
 | **Tác vụ trực tiếp** | Tiến trình sao chép, xóa tệp, tải file và build hiện thành banner. Mặc định tắt, [chi tiết](#tác-vụ-nền-trực-tiếp). |
 | **Duyệt trên notch** | Câu hỏi của Claude Code, Codex và Antigravity hiện thành banner, bấm **Đồng ý** / **Không**. Không tự duyệt. [Cách thiết lập](#thiết-lập-cho-claude-code-tuỳ-chọn). |
-| **Robot** | 30 giây không đụng máy thì mặt robot thay đồng hồ: mừng khi pin đầy, buồn khi pin yếu. Bật / tắt ở tray. |
+| **Robot** | 30 giây không đụng máy thì mặt robot thay đồng hồ: mừng khi pin đầy, buồn khi pin yếu. Bật / tắt trong Cài đặt. |
 | **Nhẹ** | Khi nghỉ chừng 7 MB RAM và 0% CPU, phát nhạc chừng 14 MB, mở trang Nhạc chừng 22 MB ([ảnh Task Manager](#nhẹ-và-menu-tray)). |
-| **Tray** | Notch tối giản, Robot, Kính mờ cho trang, Kiểu kính, Kiểu notch, Trang hiển thị, Tính năng khác, Khởi động cùng Windows, Ngôn ngữ, Giới thiệu, Thoát. |
+| **Tray** | Cài đặt…, Giới thiệu, Thoát. Cài đặt mở một cửa sổ riêng gồm Tổng quan, Giao diện, Trang hiển thị, Tính năng, Hệ thống và Giới thiệu. |
 
-Trang ẩn ở tray thì ngừng hẳn.
+Trang đã ẩn trong Cài đặt thì ngừng hẳn.
 
 **Khởi động cùng Windows** hỏi quyền quản trị khi bật. Task mở notch qua Windows Shell sau khi đăng nhập 15 giây, hỗ trợ cả bản ký số có `uiAccess`. Nếu task được tạo bằng bản cũ, tắt rồi bật lại tùy chọn sau khi cập nhật. Bỏ tick thì tắt.
 
@@ -53,7 +53,7 @@ Ghi công: dữ liệu thời tiết [Open-Meteo](https://open-meteo.com) (CC BY
 
 ## Tác vụ nền trực tiếp
 
-Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặc định tắt). Mỗi lần hiện một tác vụ, ưu tiên Explorer, rồi tải file, rồi build; còn tác vụ khác thì tiêu đề có thêm **+N**.
+Bật ở **Cài đặt → Tính năng → Tác vụ nền trực tiếp** (mặc định tắt). Mỗi lần hiện một tác vụ, ưu tiên Explorer, rồi tải file, rồi build; còn tác vụ khác thì tiêu đề có thêm **+N**.
 
 - **Explorer:** sao chép, di chuyển, xóa và giải nén, kèm phần trăm và thanh tiến trình. Không bắt được thao tác quá nhanh hoặc không có cửa sổ tiến trình.
 - **Tải file:** thư mục Downloads của Windows và thư mục tải của Edge, Chrome, Brave. Hiện tên file, MB đã tải và MB/s; tải xong bấm banner để mở thư mục. Không có phần trăm, chưa hỗ trợ Firefox.
@@ -103,13 +103,13 @@ Bật ở **tray → Tính năng khác → Tác vụ nền trực tiếp** (mặ
 |---|---|
 | ![](assets/screenshots/banner-approve-claude.png) | ![](assets/screenshots/banner-approve-antigravity.png) |
 
-**Kính mờ cho trang** (tray): trang mở rộng trong suốt, nền phía sau mờ nhẹ và có viền sáng chạy quanh. Tai thỏ để hở cạnh trên nên không có vạch sáng sát mép màn hình. Trong **Kiểu kính** (tray) chọn **Kính nổi** (mặc định, có viền và ánh sáng ở mép) hoặc **Kính phẳng** (không viền, chỉ có nền mờ).
+**Kính mờ cho trang** (Cài đặt, Giao diện): trang mở rộng trong suốt, nền phía sau mờ nhẹ và có viền sáng chạy quanh. Tai thỏ để hở cạnh trên nên không có vạch sáng sát mép màn hình. Mục **Kiểu kính** chọn **Kính nổi** (mặc định, có viền và ánh sáng ở mép) hoặc **Kính phẳng** (không viền, chỉ có nền mờ).
 
 | Tai thỏ | Viên thuốc |
 |---|---|
 | ![](assets/screenshots/glass-ears.png) | ![](assets/screenshots/glass-pill.png) |
 
-**Kiểu viên thuốc** (tray, Kiểu notch): nổi cách mép trên màn hình, bo tròn đủ bốn góc. Mặc định vẫn là tai thỏ.
+**Kiểu viên thuốc** (Cài đặt, Giao diện, Kiểu notch): nổi cách mép trên màn hình, bo tròn đủ bốn góc. Mặc định vẫn là tai thỏ.
 
 | Thu gọn | Đang phát nhạc | Trang mở rộng |
 |---|---|---|
@@ -135,11 +135,9 @@ Task Manager ở ba trạng thái (đo trên một máy, số thay đổi theo m
 |---|---|---|
 | ![](assets/screenshots/task-manager.png)<br>0% CPU, 7,3 MB RAM | ![](assets/screenshots/task-manager-music-pill.png)<br>0,4% CPU, 14,5 MB RAM | ![](assets/screenshots/task-manager-music-page.png)<br>0,5% CPU, 21,6 MB RAM |
 
-Menu ở khay hệ thống (chuột phải vào biểu tượng):
+Chuột phải vào biểu tượng ở khay hệ thống có ba mục: **Cài đặt…**, **Giới thiệu** và **Thoát**. Mọi tùy chọn nằm trong cửa sổ cài đặt, chia sáu mục: Tổng quan (thẻ tóm tắt và ba công tắc hay dùng), Giao diện, Trang hiển thị, Tính năng, Hệ thống và Giới thiệu. Thay đổi có hiệu lực ngay và tự lưu.
 
-| Tiếng Việt | English |
-|---|---|
-| ![](assets/screenshots/tray-vi.png) | ![](assets/screenshots/tray-en.png) |
+![](assets/screenshots/settings.png)
 
 ## Tải về và chạy
 

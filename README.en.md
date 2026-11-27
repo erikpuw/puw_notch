@@ -19,17 +19,17 @@
 
 | Feature | What it does |
 |---|---|
-| **Notch** | Clock, battery ring and music waves. Hover to open the panel. Two looks, chosen in the tray: ears or a floating pill. |
+| **Notch** | Clock, battery ring and music waves. Hover to open the panel. Two looks, chosen in Settings: ears or a floating pill. |
 | **Stays clear** | Shrinks when it would cover text underneath, hides during fullscreen games and videos. It still shows in recordings and screen shares. |
 | **Banners** | Windows notifications, volume, brightness, mic, Caps/Num Lock, battery, USB, Wi-Fi, Bluetooth, airplane mode. Notifications that arrive together show one after another. |
 | **Network banners** | Wi-Fi, Bluetooth and airplane mode each have their own banner. When Wi-Fi comes on or airplane mode goes off, the banner lists each step (the connection, the VPN, Bluetooth devices) with a green tick when done. Switching off and on quickly keeps only the last state. |
 | **Live tasks** | Progress of copying, deleting files, downloads and builds shows as a banner. Off by default, [details](#live-tasks). |
 | **Approve on the notch** | Questions from Claude Code, Codex and Antigravity show as banners, click **Allow** / **Deny**. No auto-approve. Setup [below](#setting-up-claude-code-optional). |
-| **Robot** | After 30 s without input a robot face replaces the clock: it cheers when the battery is full and is sad when it is low. Toggle in the tray. |
+| **Robot** | After 30 s without input a robot face replaces the clock: it cheers when the battery is full and is sad when it is low. Toggle in Settings. |
 | **Light** | About 7 MB of RAM and 0 % CPU at rest, about 14 MB while music plays, about 22 MB with the Music page open ([Task Manager pictures](#light-and-the-tray-menu)). |
-| **Tray** | Minimal notch, Idle robot, Frosted glass pages, Glass style, Notch style, Pages shown, More features, Start with Windows, Language, About, Quit. |
+| **Tray** | Settings…, About, Quit. Settings opens its own window: Overview, Look, Pages, Features, System and About. |
 
-A page hidden in the tray stops completely.
+A page hidden in Settings stops completely.
 
 **Start with Windows** asks for administrator permission once. From then on the notch starts after you sign in, administrator windows included. Untick it to turn it off.
 
@@ -53,7 +53,7 @@ Credits: weather data [Open-Meteo](https://open-meteo.com) (CC BY 4.0), weather 
 
 ## Live tasks
 
-Turn on in **tray → More features → Live tasks** (off by default). One task shows at a time, Explorer first, then downloads, then builds; with more running, the title gets a **+N**.
+Turn on in **Settings → Features → Live activities** (off by default). One task shows at a time, Explorer first, then downloads, then builds; with more running, the title gets a **+N**.
 
 - **Explorer:** copying, moving, deleting and extracting, with the percent and a progress bar. It cannot catch an operation that is too quick or has no progress window.
 - **Downloads:** the Downloads folder Windows is set to and the download folders of Edge, Chrome and Brave. Shows the file name, MB downloaded and MB/s; when it finishes, click the banner to open the folder. No percent, and Firefox is not supported yet.
@@ -103,13 +103,13 @@ Turn on in **tray → More features → Live tasks** (off by default). One task 
 |---|---|
 | ![](assets/screenshots/en/banner-approve-claude.png) | ![](assets/screenshots/en/banner-approve-antigravity.png) |
 
-**Frosted glass pages** (tray): expanded pages are see-through, with a lightly blurred backdrop and a light rim around the edge. The ears style leaves the top edge open, so no bright line sits against the screen edge. Under **Glass style** (tray) pick **Raised** (the default, with a rim and edge light) or **Flat** (no rim, just the blurred backdrop).
+**Frosted glass pages** (Settings, Look): expanded pages are see-through, with a lightly blurred backdrop and a light rim around the edge. The ears style leaves the top edge open, so no bright line sits against the screen edge. Under **Glass style** pick **Raised** (the default, with a rim and edge light) or **Flat** (no rim, just the blurred backdrop).
 
 | Ears | Pill |
 |---|---|
 | ![](assets/screenshots/glass-ears.png) | ![](assets/screenshots/glass-pill.png) |
 
-**Pill style** (tray, Notch style): floats below the top edge of the screen with all four corners round. The ears remain the default.
+**Pill style** (Settings, Look, Notch style): floats below the top edge of the screen with all four corners round. The ears remain the default.
 
 | Resting | Playing music | Open page |
 |---|---|---|
@@ -135,11 +135,9 @@ Task Manager in three states (measured on one PC, the figures vary by PC):
 |---|---|---|
 | ![](assets/screenshots/task-manager.png)<br>0 % CPU, 7.3 MB of RAM | ![](assets/screenshots/task-manager-music-pill.png)<br>0.4 % CPU, 14.5 MB of RAM | ![](assets/screenshots/task-manager-music-page.png)<br>0.5 % CPU, 21.6 MB of RAM |
 
-The tray menu (right-click the icon):
+Right-click the tray icon for three items: **Settings…**, **About** and **Quit**. Every option lives in the settings window, split into six sections: Overview (summary cards and three quick switches), Look, Pages, Features, System and About. Changes apply right away and are saved.
 
-| Tiếng Việt | English |
-|---|---|
-| ![](assets/screenshots/tray-vi.png) | ![](assets/screenshots/tray-en.png) |
+![](assets/screenshots/settings.png)
 
 ## Download and run
 
